@@ -27,4 +27,5 @@ npm run dev
 ```
 
 No package installation is required. Build the dependency-free production bundle
-with `npm run build`.
+with `npm run build`. The bundle includes a lightweight Sites worker entrypoint
+and the static client under `dist/client`.
