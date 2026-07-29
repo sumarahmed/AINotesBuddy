@@ -36,6 +36,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body,
 #root {
@@ -2487,7 +2491,7 @@ kbd {
   border-bottom: 1px solid var(--line-soft);
 }
 
-.transcript-document__rail > button {
+.transcript-document__rail > .playback-toggle {
   display: grid;
   width: 30px;
   height: 30px;
@@ -2499,15 +2503,61 @@ kbd {
   border-radius: 50%;
 }
 
+.transcript-document__rail > .playback-toggle:hover:not(:disabled) {
+  background: var(--teal-deep);
+  transform: scale(1.04);
+}
+
+.transcript-document__rail > .playback-toggle:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+  background: var(--line);
+}
+
+.transcript-document__rail > .playback-toggle.playback-toggle--playing {
+  background: var(--coral);
+}
+
 .transcript-document__rail > span {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 8px;
   color: var(--ink-faint);
 }
 
-.transcript-document__rail .waveform {
+.playback-track {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 2px 0;
+  overflow: hidden;
+  color: var(--teal);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.playback-track:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.playback-track .waveform {
   height: 28px;
   color: var(--teal);
+}
+
+.playback-track > i {
+  position: absolute;
+  right: auto;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  height: 2px;
+  pointer-events: none;
+  background: var(--coral);
+  border-radius: 999px;
+  transition: width 120ms linear;
 }
 
 .transcript-row--document {

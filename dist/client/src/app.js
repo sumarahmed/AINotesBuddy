@@ -82,6 +82,7 @@ const state = {
   settingsOpen: false,
   mobileNavOpen: false,
   moreOpen: false,
+  showAllMeetings: false,
   regenerating: false,
   toasts: [],
   capture: {
@@ -163,6 +164,30 @@ function formatTimer(totalSeconds) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function recordingDownloadName(meeting) {
+  if (meeting.audioFileName) {
+    return meeting.audioFileName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-");
+  }
+  const type = (meeting.audioType || "").toLowerCase();
+  const extension = type.includes("wav")
+    ? "wav"
+    : type.includes("mpeg") || type.includes("mp3")
+      ? "mp3"
+      : type.includes("mp4") || type.includes("m4a")
+        ? "m4a"
+        : type.includes("ogg")
+          ? "ogg"
+          : type.includes("flac")
+            ? "flac"
+            : "webm";
+  const baseName =
+    meeting.title
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase() || "recording";
+  return `${baseName}.${extension}`;
 }
 
 function meetingDate(iso) {
@@ -321,10 +346,10 @@ function homeView(meetings) {
       <div class="insight-strip__privacy">${icon("lock", 15)}<span>Recordings stay on this device</span></div>
     </section>
     <section class="recent-section">
-      <div class="section-title-row"><div><span class="eyebrow">Your memory</span><h2>Recent meetings</h2></div><button type="button" class="text-button">View all ${icon("chevronRight", 15)}</button></div>
+      <div class="section-title-row"><div><span class="eyebrow">Your memory</span><h2>${state.showAllMeetings ? "All meetings" : "Recent meetings"}</h2></div><button type="button" class="text-button" data-action="view-all">${state.showAllMeetings ? "Show recent" : "View all"} ${icon("chevronRight", 15)}</button></div>
       <div class="meeting-cards">
         ${meetings
-          .slice(0, 4)
+          .slice(0, state.showAllMeetings ? meetings.length : 4)
           .map(
             (meeting) => `<button type="button" class="meeting-card" data-action="meeting" data-id="${meeting.id}">
               <div class="meeting-card__top"><span>${meetingDate(meeting.dateISO)}</span><span class="meeting-card__duration">${icon("audio", 13)}${escapeHtml(meeting.duration)}</span></div>
@@ -354,7 +379,7 @@ function captureView() {
     <header class="capture-header">
       <button type="button" class="back-button" data-action="cancel-capture">${icon("arrowLeft", 17)} Back</button>
       <div class="capture-header__privacy">${icon("shield", 15)} Local audio <span>·</span> ${state.settings.browserTranscription ? "Browser speech" : "Audio only"}</div>
-      ${iconButton("noop", "Capture options", "more")}
+      ${iconButton("settings", "Open capture settings", "more")}
     </header>
     <section class="capture-workspace">
       <div class="capture-title-block">
@@ -435,10 +460,15 @@ function updateCaptureRuntimeUI({ transcript = false } = {}) {
   }
 }
 
-function transcriptRow(segment, documentMode = false) {
+function transcriptRow(segment, documentMode = false, hasRecording = false) {
+  const timestamp = escapeHtml(segment.timestamp);
+  const timestampControl =
+    documentMode && hasRecording
+      ? `<button type="button" data-action="seek-recording-time" data-time="${timestamp}" aria-label="Seek recording to ${timestamp}">${timestamp}</button>`
+      : `<span>${timestamp}</span>`;
   return `<div class="transcript-row ${documentMode ? "transcript-row--document" : ""}">
     ${avatar(segment.initials, segment.color)}
-    <div><div class="transcript-row__meta"><strong>${escapeHtml(segment.speaker)}</strong>${documentMode ? `<button type="button">${escapeHtml(segment.timestamp)}</button>` : `<span>${escapeHtml(segment.timestamp)}</span>`}</div><p>${escapeHtml(segment.text)}</p></div>
+    <div><div class="transcript-row__meta"><strong>${escapeHtml(segment.speaker)}</strong>${timestampControl}</div><p>${escapeHtml(segment.text)}</p></div>
   </div>`;
 }
 
@@ -472,19 +502,50 @@ function summaryView(meeting) {
 
 function transcriptView(meeting) {
   const query = state.transcriptQuery || "";
+  const hasRecording = Boolean(meeting.audioId);
+  return `<div class="transcript-view">
+    <div class="transcript-toolbar"><div class="transcript-search">${icon("search", 15)}<input data-input="transcript-search" value="${escapeHtml(query)}" placeholder="Find in transcript" aria-label="Find in transcript"></div><span>${meeting.transcript.length} segments</span></div>
+    <div class="transcript-document">
+      <div class="transcript-document__rail">
+        <button type="button" class="playback-toggle" ${hasRecording ? 'data-action="toggle-recording-playback" data-playback-toggle' : "disabled"} aria-label="${hasRecording ? "Play recording" : "No recording available"}" aria-pressed="false">${icon("play", 15)}</button>
+        <span data-playback-current>00:00</span>
+        <button type="button" class="playback-track" ${hasRecording ? 'data-action="seek-recording" data-playback-track' : "disabled"} aria-label="${hasRecording ? "Seek in recording" : "No recording available"}">
+          ${waveform(false, true)}
+          <i data-playback-progress aria-hidden="true"></i>
+        </button>
+        <span data-playback-duration data-playback-fallback="${escapeHtml(meeting.duration)}">${escapeHtml(meeting.duration)}</span>
+      </div>
+      ${transcriptResultsMarkup(meeting, query)}
+    </div>
+  </div>`;
+}
+
+function transcriptResultsMarkup(meeting, query = "") {
   const filtered = meeting.transcript.filter(
     (segment) =>
       segment.text.toLowerCase().includes(query.toLowerCase()) ||
       segment.speaker.toLowerCase().includes(query.toLowerCase()),
   );
-  return `<div class="transcript-view">
-    <div class="transcript-toolbar"><div class="transcript-search">${icon("search", 15)}<input data-input="transcript-search" value="${escapeHtml(query)}" placeholder="Find in transcript" aria-label="Find in transcript"></div><span>${meeting.transcript.length} segments</span></div>
-    <div class="transcript-document">
-      <div class="transcript-document__rail"><button type="button">${icon("play", 15)}</button><span>00:00</span><div>${waveform(false, true)}</div><span>${escapeHtml(meeting.duration)}</span></div>
-      ${filtered.map((segment) => transcriptRow(segment, true)).join("")}
-      ${filtered.length ? "" : `<div class="empty-search">${icon(query ? "search" : "audio", 24)}<h3>${query ? "No matching transcript" : "No speech transcript available"}</h3><p>${query ? "Try a different word or speaker name." : "The original audio is still available above for playback."}</p></div>`}
-    </div>
-  </div>`;
+  return `${filtered
+    .map((segment) => transcriptRow(segment, true, Boolean(meeting.audioId)))
+    .join("")}${
+    filtered.length
+      ? ""
+      : `<div class="empty-search">${icon(query ? "search" : "audio", 24)}<h3>${query ? "No matching transcript" : "No speech transcript available"}</h3><p>${query ? "Try a different word or speaker name." : "The original audio is still available above for playback."}</p></div>`
+  }`;
+}
+
+function updateTranscriptResults() {
+  const meeting = selectedMeeting();
+  const document = app.querySelector(".transcript-document");
+  if (!meeting || !document) return;
+  document
+    .querySelectorAll(".transcript-row--document, .empty-search")
+    .forEach((element) => element.remove());
+  document.insertAdjacentHTML(
+    "beforeend",
+    transcriptResultsMarkup(meeting, state.transcriptQuery || ""),
+  );
 }
 
 function notesView(meeting) {
@@ -498,6 +559,7 @@ function notesView(meeting) {
 function meetingView(meeting) {
   const tabButton = (id, label, iconName) =>
     `<button type="button" data-action="tab" data-id="${id}" class="${state.tab === id ? "detail-tab--active" : ""}" role="tab" aria-selected="${state.tab === id}">${icon(iconName, 15)}${label}</button>`;
+  const audioDownloadName = recordingDownloadName(meeting);
   return `<main class="main-view detail-view">
     <header class="detail-header">
       <div class="detail-header__top">
@@ -516,7 +578,7 @@ function meetingView(meeting) {
               <span class="detail-audio__icon">${icon("audio", 18)}</span>
               <div><strong>Original recording</strong><small>Stored locally on this device</small></div>
               <audio controls preload="metadata" data-audio-id="${escapeHtml(meeting.audioId)}"></audio>
-              <a class="audio-download" data-audio-download="${escapeHtml(meeting.audioId)}" download="${escapeHtml(meeting.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase())}.webm" aria-label="Download recording">${icon("download", 16)}</a>
+              <a class="audio-download" data-audio-download="${escapeHtml(meeting.audioId)}" download="${escapeHtml(audioDownloadName)}" aria-label="Download recording">${icon("download", 16)}</a>
             </div>`
           : ""
       }
@@ -549,6 +611,15 @@ function toastRegion() {
 }
 
 function render(focusTarget = "") {
+  const currentPlayer = app.querySelector("audio[data-audio-id]");
+  const playbackSnapshot =
+    currentPlayer?.src && (currentPlayer.currentTime > 0 || !currentPlayer.paused)
+      ? {
+          audioId: currentPlayer.dataset.audioId,
+          currentTime: currentPlayer.currentTime,
+          playing: !currentPlayer.paused && !currentPlayer.ended,
+        }
+      : null;
   const meetings = filteredMeetings();
   const selectedMeeting = state.meetings.find(
     (meeting) => meeting.id === state.selectedMeetingId,
@@ -576,7 +647,38 @@ function render(focusTarget = "") {
     if (transcript) transcript.scrollTop = transcript.scrollHeight;
   }
   if (state.view === "meeting") {
-    hydrateMeetingAudio();
+    hydrateMeetingAudio().then((player) => {
+      if (
+        !player ||
+        !playbackSnapshot ||
+        player.dataset.audioId !== playbackSnapshot.audioId
+      ) {
+        return;
+      }
+      const restorePosition = () => {
+        try {
+          player.currentTime = playbackSnapshot.currentTime;
+          syncPlaybackUI(player);
+        } catch {
+          // Metadata may not be available until the next media event.
+        }
+      };
+      if (player.readyState >= 1) {
+        restorePosition();
+      } else {
+        player.addEventListener("loadedmetadata", restorePosition, {
+          once: true,
+        });
+      }
+      if (playbackSnapshot.playing) {
+        player
+          .play()
+          .then(() => syncPlaybackUI(player))
+          .catch(() => {
+            // Browser autoplay policy may require the user to press play again.
+          });
+      }
+    });
   }
   if (focusTarget) {
     requestAnimationFrame(() => {
@@ -592,23 +694,185 @@ function render(focusTarget = "") {
   }
 }
 
-async function hydrateMeetingAudio() {
-  const player = app.querySelector("audio[data-audio-id]");
+function syncPlaybackUI(player) {
   if (!player) return;
-  try {
-    const blob = await getAudio(player.dataset.audioId);
-    if (!blob || !player.isConnected) return;
-    if (activeAudioUrl) URL.revokeObjectURL(activeAudioUrl);
-    activeAudioUrl = URL.createObjectURL(blob);
-    player.src = activeAudioUrl;
-    const download = app.querySelector(
-      `[data-audio-download="${CSS.escape(player.dataset.audioId)}"]`,
+  const isPlaying = !player.paused && !player.ended;
+  const currentTime = Number.isFinite(player.currentTime)
+    ? Math.max(0, player.currentTime)
+    : 0;
+  const duration =
+    Number.isFinite(player.duration) && player.duration > 0
+      ? player.duration
+      : 0;
+
+  app.querySelectorAll("[data-playback-toggle]").forEach((control) => {
+    control.innerHTML = icon(isPlaying ? "pause" : "play", 15);
+    control.classList.toggle("playback-toggle--playing", isPlaying);
+    control.setAttribute("aria-pressed", String(isPlaying));
+    control.setAttribute(
+      "aria-label",
+      isPlaying ? "Pause recording" : "Play recording",
     );
-    if (download) download.href = activeAudioUrl;
-  } catch {
+  });
+  app.querySelectorAll("[data-playback-current]").forEach((label) => {
+    label.textContent = formatTimer(Math.floor(currentTime));
+  });
+  app.querySelectorAll("[data-playback-duration]").forEach((label) => {
+    label.textContent = duration
+      ? formatTimer(Math.max(1, Math.ceil(duration)))
+      : label.dataset.playbackFallback || "00:00";
+  });
+  app.querySelectorAll("[data-playback-track]").forEach((track) => {
+    track.setAttribute(
+      "aria-valuetext",
+      duration
+        ? `${formatTimer(Math.floor(currentTime))} of ${formatTimer(Math.ceil(duration))}`
+        : formatTimer(Math.floor(currentTime)),
+    );
+  });
+  app.querySelectorAll("[data-playback-progress]").forEach((progress) => {
+    progress.style.width = duration
+      ? `${Math.min(100, (currentTime / duration) * 100)}%`
+      : "0%";
+  });
+}
+
+function markPlaybackUnavailable(player) {
+  app.querySelectorAll("[data-playback-toggle], [data-playback-track]").forEach(
+    (control) => {
+      control.disabled = true;
+      control.removeAttribute("data-action");
+      control.setAttribute("aria-label", "Recording unavailable");
+    },
+  );
+  const download = app.querySelector("[data-audio-download]");
+  if (download) download.hidden = true;
+  if (player?.isConnected) {
     player.outerHTML =
       '<span class="audio-unavailable">Recording could not be loaded.</span>';
   }
+}
+
+function connectPlaybackEvents(player) {
+  if (player.dataset.playbackEvents === "connected") return;
+  player.dataset.playbackEvents = "connected";
+  [
+    "loadedmetadata",
+    "durationchange",
+    "timeupdate",
+    "play",
+    "pause",
+    "ended",
+    "seeking",
+    "seeked",
+  ].forEach((eventName) => {
+    player.addEventListener(eventName, () => syncPlaybackUI(player));
+  });
+}
+
+async function hydrateMeetingAudio() {
+  const player = app.querySelector("audio[data-audio-id]");
+  if (!player) return null;
+  connectPlaybackEvents(player);
+  if (player.src) return player;
+  if (player._notesBuddyHydration) return player._notesBuddyHydration;
+
+  player._notesBuddyHydration = (async () => {
+    try {
+      const blob = await getAudio(player.dataset.audioId);
+      if (!blob || !player.isConnected) {
+        if (player.isConnected) markPlaybackUnavailable(player);
+        return null;
+      }
+      if (activeAudioUrl) URL.revokeObjectURL(activeAudioUrl);
+      activeAudioUrl = URL.createObjectURL(blob);
+      player.src = activeAudioUrl;
+      const download = app.querySelector(
+        `[data-audio-download="${CSS.escape(player.dataset.audioId)}"]`,
+      );
+      if (download) download.href = activeAudioUrl;
+      syncPlaybackUI(player);
+      return player;
+    } catch {
+      if (player.isConnected) {
+        markPlaybackUnavailable(player);
+      }
+      return null;
+    }
+  })();
+  return player._notesBuddyHydration;
+}
+
+async function toggleRecordingPlayback() {
+  const player = await hydrateMeetingAudio();
+  if (!player?.src) {
+    showToast(
+      "Recording unavailable",
+      "This meeting does not have playable audio stored on this device.",
+    );
+    return;
+  }
+  try {
+    if (player.paused || player.ended) {
+      if (player.ended) player.currentTime = 0;
+      await player.play();
+    } else {
+      player.pause();
+    }
+    syncPlaybackUI(player);
+  } catch {
+    showToast(
+      "Playback could not start",
+      "Check your browser audio permissions and try the recording again.",
+    );
+  }
+}
+
+async function seekRecording(control, event) {
+  const player = await hydrateMeetingAudio();
+  if (!player?.src) {
+    showToast(
+      "Recording unavailable",
+      "This meeting does not have playable audio stored on this device.",
+    );
+    return;
+  }
+  if (!Number.isFinite(player.duration) || player.duration <= 0) {
+    try {
+      await player.play();
+      player.pause();
+    } catch {
+      // Some recorded WebM files expose duration only after playback begins.
+    }
+  }
+  if (!Number.isFinite(player.duration) || player.duration <= 0) return;
+  const bounds = control.getBoundingClientRect();
+  const ratio = Math.min(
+    1,
+    Math.max(0, (event.clientX - bounds.left) / bounds.width),
+  );
+  player.currentTime = player.duration * ratio;
+  syncPlaybackUI(player);
+}
+
+async function seekRecordingTime(timestamp) {
+  const player = await hydrateMeetingAudio();
+  if (!player?.src) {
+    showToast(
+      "Recording unavailable",
+      "This meeting does not have playable audio stored on this device.",
+    );
+    return;
+  }
+  const parts = String(timestamp)
+    .split(":")
+    .map((part) => Number(part));
+  const seconds =
+    parts.length === 3
+      ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+      : (parts[0] || 0) * 60 + (parts[1] || 0);
+  player.currentTime = Math.max(0, seconds);
+  syncPlaybackUI(player);
 }
 
 function showToast(title, description = "") {
@@ -623,11 +887,11 @@ function showToast(title, description = "") {
 
 function refreshToastRegion() {
   const current = app.querySelector(".toast-region");
-  const captureIsActive =
-    state.view === "capture" &&
-    (state.capture.status === "recording" ||
-      state.capture.status === "paused");
-  if (current && captureIsActive) {
+  const renderedViewMatchesState =
+    (state.view === "home" && Boolean(app.querySelector(".home-view"))) ||
+    (state.view === "capture" && Boolean(app.querySelector(".capture-view"))) ||
+    (state.view === "meeting" && Boolean(app.querySelector(".detail-view")));
+  if (current && renderedViewMatchesState) {
     current.outerHTML = toastRegion();
   } else {
     render();
@@ -981,6 +1245,7 @@ async function importAudio(file) {
     id,
     audioId: audioSaved ? id : null,
     audioType: file.type || null,
+    audioFileName: file.name,
     title: file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "),
     dateISO: new Date().toISOString(),
     duration: "Imported",
@@ -1019,7 +1284,7 @@ async function importAudio(file) {
   );
 }
 
-app.addEventListener("click", (event) => {
+app.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const action = button.dataset.action;
@@ -1036,6 +1301,8 @@ app.addEventListener("click", (event) => {
     state.tab = "summary";
     state.view = "meeting";
     state.mobileNavOpen = false;
+  } else if (action === "view-all") {
+    state.showAllMeetings = !state.showAllMeetings;
   } else if (action === "settings") {
     state.settingsOpen = true;
   } else if (action === "close-settings") {
@@ -1069,6 +1336,15 @@ app.addEventListener("click", (event) => {
       startSpeechRecognition();
       startCaptureTimer();
     }
+  } else if (action === "toggle-recording-playback") {
+    await toggleRecordingPlayback();
+    return;
+  } else if (action === "seek-recording") {
+    await seekRecording(button, event);
+    return;
+  } else if (action === "seek-recording-time") {
+    await seekRecordingTime(button.dataset.time);
+    return;
   } else if (action === "finish-capture") {
     finishCapture();
     return;
@@ -1110,6 +1386,7 @@ app.addEventListener("click", (event) => {
     render();
     window.setTimeout(() => {
       state.regenerating = false;
+      render();
       showToast(
         "Summary refreshed",
         "Local structure and action items are up to date.",
@@ -1145,7 +1422,7 @@ app.addEventListener("input", (event) => {
     }
   } else if (type === "transcript-search") {
     state.transcriptQuery = input.value;
-    render("transcript-search");
+    updateTranscriptResults();
   }
 });
 
