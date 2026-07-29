@@ -2,7 +2,7 @@
 
 NotesBuddy is a dependency-free single-page browser application. Application
 state, rendering, media capture, and persistence are implemented in
-`src/app.js`; static seed data and the visual system are separate source files.
+`src/app.js`; the visual system is maintained in a separate stylesheet.
 
 ## Design goals
 
@@ -35,15 +35,8 @@ flowchart LR
 
 ### `index.html`
 
-The direct-launch entry point. It loads `src/data.js`, `src/app.js`, and
-`src/styles.css` with relative paths so the app works through both `file://` and
-an HTTP server.
-
-### `src/data.js`
-
-Contains seed meetings used to demonstrate summaries, transcripts, action
-items, and library search. Seed meetings do not pretend to have locally stored
-audio.
+The direct-launch entry point. It loads `src/app.js` and `src/styles.css` with
+relative paths so the app works through both `file://` and an HTTP server.
 
 ### `src/app.js`
 
@@ -91,6 +84,7 @@ Delegates static requests to the deployment asset binding and supplies an
 | --- | --- |
 | `notesbuddy-meetings` | Meeting metadata, transcript segments, summaries, actions, and notes |
 | `notesbuddy-settings` | Capture, transcription, summary, and audio-retention preferences |
+| `notesbuddy-profile` | Local profile ID, display name, initials, and timestamps |
 
 ### IndexedDB
 
@@ -102,6 +96,10 @@ Delegates static requests to the deployment asset binding and supplies an
 
 A meeting stores an `audioId` only when its Blob was successfully written.
 Deleting a meeting also removes its associated IndexedDB object.
+
+New profile, meeting, import, and speech-segment identifiers use
+`crypto.randomUUID()` when available. The profile is a local browser identity,
+not an authenticated account or server session.
 
 ## Recording lifecycle
 

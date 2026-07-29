@@ -8,6 +8,7 @@ prototype, not a guarantee provided by the operating system or browser vendor.
 
 | Data | Storage or processor | Retention |
 | --- | --- | --- |
+| Local profile name, initials, and ID | Browser `localStorage` | Until site data is cleared |
 | Meeting titles and timestamps | Browser `localStorage` | Until the meeting/site data is deleted |
 | Summaries, highlights, decisions, and actions | Browser `localStorage` | Until the meeting/site data is deleted |
 | Transcript segments | Browser `localStorage` | Until the meeting/site data is deleted |
@@ -23,6 +24,10 @@ MediaRecorder audio chunks are combined and stored in IndexedDB. Meeting
 metadata and notes are stored in `localStorage`. NotesBuddy has no application
 server, account system, telemetry endpoint, analytics integration, or cloud
 sync.
+
+The first-run profile personalises the greeting and transcript attribution. It
+does not authenticate a person, create a server account, or isolate multiple
+people sharing the same browser profile.
 
 The app creates temporary `blob:` URLs to play and download locally stored
 recordings. These URLs exist only within the browser session and origin.

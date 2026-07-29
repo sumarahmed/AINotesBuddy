@@ -8,7 +8,6 @@ await mkdir(resolve(output, "server"), { recursive: true });
 await mkdir(resolve(output, ".openai"), { recursive: true });
 await cp(resolve("index.html"), resolve(output, "client", "index.html"));
 await cp(resolve("src", "app.js"), resolve(output, "client", "src", "app.js"));
-await cp(resolve("src", "data.js"), resolve(output, "client", "src", "data.js"));
 await cp(resolve("src", "styles.css"), resolve(output, "client", "src", "styles.css"));
 await cp(resolve("site-worker.mjs"), resolve(output, "server", "index.js"));
 await cp(

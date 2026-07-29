@@ -475,19 +475,6 @@ kbd {
   width: 100%;
   height: 100%;
   overflow: auto;
-  animation: view-in 300ms ease both;
-}
-
-@keyframes view-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .home-view {
@@ -800,68 +787,40 @@ kbd {
   box-shadow: 0 12px 35px rgba(32, 53, 49, 0.05);
 }
 
-.card-heading {
-  display: flex;
-  gap: 18px;
-  align-items: flex-start;
-  justify-content: space-between;
+.workspace-card__icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 20px;
+  color: var(--teal);
+  place-items: center;
+  background: var(--teal-soft);
+  border-radius: 13px;
 }
 
-.card-heading h3 {
-  max-width: 210px;
-  margin: 7px 0 0;
+.workspace-card h3 {
+  margin: 7px 0 10px;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 21px;
   line-height: 1.16;
   letter-spacing: -0.35px;
 }
 
-.calendar-chip {
-  display: grid;
-  width: 46px;
-  height: 52px;
-  padding: 7px 0 5px;
-  text-align: center;
-  background: var(--coral-soft);
-  border: 1px solid #eed7cf;
-  border-radius: 11px;
+.workspace-card > p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--ink-soft);
 }
 
-.calendar-chip span {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 21px;
+.workspace-card__status {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 15px;
+  font-size: 9px;
   font-weight: 700;
-  line-height: 1;
-}
-
-.calendar-chip small {
-  align-self: end;
-  font-size: 8px;
-  font-weight: 850;
-  color: var(--coral-deep);
-  letter-spacing: 0.11em;
-}
-
-.upcoming-time {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  margin-top: 28px;
-  font-size: 11px;
-  color: var(--ink-soft);
-}
-
-.dot-separator {
-  color: #a9b0ad;
-}
-
-.participant-row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-top: 19px;
-  font-size: 11px;
-  color: var(--ink-soft);
+  color: var(--teal);
 }
 
 .avatar-stack {
@@ -1005,6 +964,45 @@ kbd {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 13px;
+}
+
+.meeting-cards__empty {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 16px;
+  align-items: center;
+  min-height: 132px;
+  padding: 24px;
+  color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px dashed #cfd6d2;
+  border-radius: 14px;
+}
+
+.meeting-cards__empty > svg {
+  flex: 0 0 auto;
+  color: var(--teal);
+}
+
+.meeting-cards__empty h3,
+.meeting-cards__empty p {
+  margin: 0;
+}
+
+.meeting-cards__empty h3 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 17px;
+  color: var(--ink);
+}
+
+.meeting-cards__empty p {
+  margin-top: 5px;
+  font-size: 10px;
+}
+
+.meeting-cards__empty .button {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .meeting-card {
@@ -2663,6 +2661,101 @@ kbd {
   border-radius: 8px;
 }
 
+.profile-setup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  padding: 20px;
+  overflow-y: auto;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 15%, rgba(70, 148, 132, 0.2), transparent 35%),
+    rgba(22, 37, 34, 0.7);
+  backdrop-filter: blur(12px);
+}
+
+.profile-setup-card {
+  width: min(470px, 100%);
+  padding: 36px;
+  background: var(--paper);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 22px;
+  box-shadow: 0 30px 90px rgba(12, 30, 26, 0.3);
+}
+
+.profile-setup-card .brand {
+  margin-bottom: 34px;
+}
+
+.profile-setup-card h1 {
+  margin: 7px 0 10px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.6px;
+}
+
+.profile-setup-card > p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+}
+
+.profile-setup-card form {
+  margin-top: 25px;
+}
+
+.profile-setup-card label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.profile-setup-card input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.profile-setup-card input[aria-invalid="true"] {
+  border-color: var(--coral);
+}
+
+.profile-setup-error {
+  display: block;
+  margin-top: 7px;
+  font-size: 9px;
+  color: var(--coral-deep);
+}
+
+.profile-setup-card form .button {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 14px;
+}
+
+.profile-setup-card > small {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 18px;
+  font-size: 8px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+.profile-setup-card > small svg {
+  flex: 0 0 auto;
+}
+
 .drawer-backdrop {
   z-index: 100;
   justify-items: end;
@@ -2745,7 +2838,8 @@ kbd {
   font-weight: 700;
 }
 
-.settings-section select {
+.settings-section select,
+.settings-section input {
   width: 100%;
   min-height: 42px;
   padding: 0 12px;
@@ -2759,6 +2853,13 @@ kbd {
 .settings-section select:disabled {
   cursor: default;
   opacity: 0.7;
+}
+
+.settings-help {
+  margin: 8px 0 0;
+  font-size: 8px;
+  line-height: 1.5;
+  color: var(--ink-faint);
 }
 
 .setting-toggle {
@@ -3102,6 +3203,16 @@ kbd {
     grid-template-columns: 1fr;
   }
 
+  .meeting-cards__empty {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .meeting-cards__empty .button {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .capture-header {
     grid-template-columns: auto 1fr auto;
     padding: 0 12px;
@@ -3271,6 +3382,18 @@ kbd {
 
   .settings-drawer {
     padding: 23px 20px;
+  }
+
+  .profile-setup-backdrop {
+    padding: 12px;
+  }
+
+  .profile-setup-card {
+    padding: 28px 22px;
+  }
+
+  .profile-setup-card h1 {
+    font-size: 28px;
   }
 }
 

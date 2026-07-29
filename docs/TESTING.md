@@ -25,6 +25,11 @@ Use synthetic or non-confidential speech.
 
 ### Launch paths
 
+- Clear site data and confirm first launch asks for a name.
+- Submit an empty name and confirm validation remains in the setup dialog.
+- Create a profile and confirm the greeting, initials, and current date are
+  personalised.
+- Edit the name in Settings and reload to confirm it persists.
 - Open `index.html` directly and confirm the home screen loads and is styled.
 - Run `npm run dev` and open <http://127.0.0.1:4173>.
 - Run `npm run build`, then `npm run preview`, and open the preview.
@@ -58,7 +63,8 @@ Use synthetic or non-confidential speech.
 
 - With browser recognition disabled or unavailable, confirm no sample
   transcript is inserted.
-- With recognition available, confirm only returned recognition text is saved.
+- With recognition available, confirm only returned recognition text is saved
+  and the configured profile name and initials are used.
 - Search for a speaker or phrase and confirm the segment list filters.
 - Click a transcript timestamp for a meeting with audio and confirm the player
   seeks.
@@ -68,6 +74,9 @@ Use synthetic or non-confidential speech.
 
 - Rename a meeting, add notes, toggle an action, and reload.
 - Confirm all three changes persist.
+- Confirm new meeting and import IDs contain UUIDs rather than timestamps alone.
+- Confirm a recording shorter than one minute displays its elapsed seconds
+  rather than a hard-coded one-minute label.
 - Copy a meeting and inspect the clipboard result.
 - Export Markdown and inspect the downloaded file.
 - Import WAV or MP3 audio and play it.

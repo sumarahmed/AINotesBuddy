@@ -12,6 +12,24 @@ but does not yet publish semantic-versioned releases.
 - GitHub-ready project, architecture, privacy, testing, and contribution
   documentation
 - GitHub issue forms, pull request template, and CI validation
+- First-run local profiles with personalised greetings, initials, transcript
+  attribution, and editable names
+- UUID-based profile, meeting, import, and speech-segment identifiers
+
+### Changed
+
+- Home and capture dates now use the browser's current local date and time
+- New browser profiles start with an empty workspace instead of bundled demo
+  meetings and a fake upcoming calendar event
+- Short recordings show their real elapsed seconds instead of being rounded up
+  to one minute
+
+### Fixed
+
+- Opening Settings from mobile navigation now closes the navigation behind it
+- Empty libraries say `No meetings yet` instead of reporting a search mismatch
+- Removed the repeated full-view fade that made recording and option controls
+  appear to flash after state changes
 
 ## 2026-07-29
 

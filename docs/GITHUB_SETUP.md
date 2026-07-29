@@ -60,7 +60,6 @@ Suggested topics:
 
 - Select and add a license.
 - Confirm the project name and branding are approved for public use.
-- Confirm seed meeting text contains no confidential information.
 - Confirm Git history contains no credentials, customer data, or recordings.
 - Confirm the managed Sites remote URL and project metadata may be disclosed.
 - Confirm `.openai/hosting.json` is appropriate to publish.

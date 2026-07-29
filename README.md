@@ -14,6 +14,7 @@ transcripts, notes, and action items.
 ## Highlights
 
 - Real microphone recording with pause, resume, playback, seeking, and download
+- First-run local profile with personalised greetings and transcript attribution
 - Audio import with the original file type and filename preserved
 - Browser-provided live speech recognition without fabricated sample text
 - Searchable meeting library and transcript filtering
@@ -62,7 +63,8 @@ dependencies.
 1. `navigator.mediaDevices.getUserMedia()` requests microphone access.
 2. `MediaRecorder` captures the real microphone stream.
 3. The completed audio Blob is stored in IndexedDB.
-4. Meeting metadata, notes, and settings are stored in `localStorage`.
+4. The local profile, meeting metadata, notes, and settings are stored in
+   `localStorage`.
 5. If enabled and supported, the browser Speech Recognition API supplies live
    text. NotesBuddy never inserts a sample transcript into a new recording.
 6. Playback controls load the exact stored Blob through a temporary object URL.
@@ -93,7 +95,6 @@ NotesBuddy detects media and speech capabilities at runtime:
 |-- dist/                    Generated Sites-compatible production bundle
 |-- src/
 |   |-- app.js               Application state, views, recording, and persistence
-|   |-- data.js              Seed meeting data
 |   `-- styles.css           Responsive visual system
 |-- build.mjs                Dependency-free production build
 |-- index.html               Direct-launch entry point
@@ -104,6 +105,7 @@ NotesBuddy detects media and speech capabilities at runtime:
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Configuration and fixed-value audit](docs/CONFIGURATION.md)
 - [Privacy and data handling](docs/PRIVACY.md)
 - [Testing guide](docs/TESTING.md)
 - [GitHub publishing checklist](docs/GITHUB_SETUP.md)

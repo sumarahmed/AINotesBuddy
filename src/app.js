@@ -1,5 +1,3 @@
-const { INITIAL_MEETINGS } = globalThis.NOTESBUDDY_DATA;
-
 const app = document.getElementById("root");
 
 const ICONS = {
@@ -60,6 +58,52 @@ function loadStored(key, fallback) {
   }
 }
 
+function createId(prefix) {
+  const uniquePart =
+    globalThis.crypto?.randomUUID?.() ||
+    `${Math.random().toString(36).slice(2, 12)}-${Math.random()
+      .toString(36)
+      .slice(2, 12)}`;
+  return `${prefix}-${uniquePart}`;
+}
+
+function initialsForName(name) {
+  const words = String(name)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return "U";
+  const first = words[0][0];
+  const last = words.length > 1 ? words.at(-1)[0] : words[0][1] || "";
+  return `${first}${last}`.toUpperCase();
+}
+
+function normaliseProfile(profile) {
+  const name = profile?.name?.trim().replace(/\s+/g, " ");
+  if (!name) return null;
+  return {
+    id: profile.id || createId("profile"),
+    name,
+    initials: initialsForName(name),
+    createdAt: profile.createdAt || new Date().toISOString(),
+    updatedAt: profile.updatedAt || new Date().toISOString(),
+  };
+}
+
+const LEGACY_SEED_MEETING_IDS = new Set([
+  "product-weekly-0729",
+  "customer-discovery-0728",
+  "design-critique-0727",
+  "sprint-planning-0725",
+]);
+const storedMeetings = loadStored("notesbuddy-meetings", []);
+const initialMeetings = Array.isArray(storedMeetings)
+  ? storedMeetings.filter((meeting) => !LEGACY_SEED_MEETING_IDS.has(meeting.id))
+  : [];
+const initialProfile = normaliseProfile(
+  loadStored("notesbuddy-profile", null),
+);
+
 const defaultSettings = {
   transcriptionModel: "Browser Speech",
   summaryModel: "Extractive brief",
@@ -70,13 +114,15 @@ const defaultSettings = {
 };
 
 const state = {
-  meetings: loadStored("notesbuddy-meetings", structuredClone(INITIAL_MEETINGS)),
+  meetings: initialMeetings,
+  profile: initialProfile,
+  profileOnboardingOpen: !initialProfile,
   settings: {
     ...defaultSettings,
     ...loadStored("notesbuddy-settings", defaultSettings),
   },
   view: "home",
-  selectedMeetingId: INITIAL_MEETINGS[0].id,
+  selectedMeetingId: initialMeetings[0]?.id || null,
   tab: "summary",
   search: "",
   settingsOpen: false,
@@ -109,6 +155,13 @@ let toastId = 0;
 function save() {
   localStorage.setItem("notesbuddy-meetings", JSON.stringify(state.meetings));
   localStorage.setItem("notesbuddy-settings", JSON.stringify(state.settings));
+  if (state.profile) {
+    localStorage.setItem("notesbuddy-profile", JSON.stringify(state.profile));
+  }
+}
+
+if (storedMeetings.length !== initialMeetings.length) {
+  localStorage.setItem("notesbuddy-meetings", JSON.stringify(initialMeetings));
 }
 
 function openAudioDatabase() {
@@ -166,6 +219,64 @@ function formatTimer(totalSeconds) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+function durationLabel(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds) || 0);
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`;
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+  return `${(seconds / 3600).toFixed(1)} hrs`;
+}
+
+function meetingDurationSeconds(meeting) {
+  if (Number.isFinite(meeting.durationSeconds)) {
+    return Math.max(0, meeting.durationSeconds);
+  }
+  const match = String(meeting.duration || "").match(
+    /^([\d.]+)\s*(sec|min|hr)/i,
+  );
+  if (!match) return 0;
+  const multiplier = {
+    sec: 1,
+    min: 60,
+    hr: 3600,
+  }[match[2].toLowerCase()];
+  return Number(match[1]) * multiplier;
+}
+
+function currentUserName() {
+  return state.profile?.name || "You";
+}
+
+function currentUserInitials() {
+  return state.profile?.initials || "U";
+}
+
+function currentUserFirstName() {
+  return currentUserName().split(/\s+/)[0];
+}
+
+function greetingForTime(date = new Date()) {
+  const hour = date.getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function homeDateLabel(date = new Date()) {
+  return new Intl.DateTimeFormat("en-AU", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(date);
+}
+
+function captureDateLabel(date = new Date()) {
+  return new Intl.DateTimeFormat("en-AU", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  }).format(date);
+}
+
 function recordingDownloadName(meeting) {
   if (meeting.audioFileName) {
     return meeting.audioFileName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-");
@@ -192,11 +303,18 @@ function recordingDownloadName(meeting) {
 
 function meetingDate(iso) {
   const date = new Date(iso);
-  const today = new Date("2026-07-29T12:00:00+10:00");
-  const diff = Math.floor(
-    (today.setHours(0, 0, 0, 0) - new Date(date).setHours(0, 0, 0, 0)) /
-      86400000,
+  const today = new Date();
+  const todayValue = Date.UTC(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
   );
+  const dateValue = Date.UTC(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  );
+  const diff = Math.round((todayValue - dateValue) / 86400000);
   if (diff === 0) return "Today";
   if (diff === 1) return "Yesterday";
   return new Intl.DateTimeFormat("en-AU", {
@@ -282,7 +400,15 @@ function sidebar(meetings) {
           </button>`,
         )
         .join("")}
-      ${meetings.length ? "" : '<p class="meeting-nav__empty">No meetings match your search.</p>'}
+      ${
+        meetings.length
+          ? ""
+          : `<p class="meeting-nav__empty">${
+              state.search.trim()
+                ? "No meetings match your search."
+                : "No meetings yet."
+            }</p>`
+      }
     </div>
     <div class="sidebar__footer">
       <div class="local-status">
@@ -296,8 +422,8 @@ function sidebar(meetings) {
 }
 
 function homeView(meetings) {
-  const totalMinutes = meetings.reduce(
-    (total, meeting) => total + (parseInt(meeting.duration, 10) || 0),
+  const totalDurationSeconds = meetings.reduce(
+    (total, meeting) => total + meetingDurationSeconds(meeting),
     0,
   );
   const openActions = meetings.reduce(
@@ -307,7 +433,7 @@ function homeView(meetings) {
   );
   return `<main class="main-view home-view">
     <header class="view-header home-header">
-      <div><span class="eyebrow">Wednesday, 29 July</span><h1>Good afternoon, Syed.</h1><p>Your conversations are ready when you are.</p></div>
+      <div><span class="eyebrow">${escapeHtml(homeDateLabel())}</span><h1>${escapeHtml(greetingForTime())}, ${escapeHtml(currentUserFirstName())}.</h1><p>Your conversations are ready when you are.</p></div>
       <div class="header-actions">
         <button type="button" class="button button--quiet" data-action="import">${icon("upload", 16)} Import audio</button>
         <button type="button" class="button button--primary" data-action="capture">${icon("mic", 16)} Start capture</button>
@@ -327,40 +453,41 @@ function homeView(meetings) {
           <div class="capture-orb">${icon("audio", 32)}</div>
         </div>
       </article>
-      <article class="upcoming-card">
-        <div class="card-heading">
-          <div><span class="eyebrow">Up next</span><h3>Beta readiness review</h3></div>
-          <div class="calendar-chip"><span>29</span><small>JUL</small></div>
-        </div>
-        <div class="upcoming-time">${icon("clock", 16)}<span>3:30–4:15 pm</span><span class="dot-separator">·</span><span>in 42 min</span></div>
-        <div class="participant-row">
-          <div class="avatar-stack">${avatar("MC", "blue", true)}${avatar("JB", "amber", true)}${avatar("PS", "violet", true)}</div><span>Maya, Jon, Priya + 2</span>
-        </div>
-        <button type="button" class="upcoming-action" data-action="capture">${icon("radio", 15)} Capture this meeting</button>
+      <article class="upcoming-card workspace-card">
+        <div class="workspace-card__icon">${icon("shield", 23)}</div>
+        <span class="eyebrow">This browser profile</span>
+        <h3>Private meeting memory for ${escapeHtml(currentUserFirstName())}</h3>
+        <p>There is no shared calendar or server account connected. Recordings and meeting records stay in this browser unless you export them.</p>
+        <div class="workspace-card__status">${icon("checkCircle", 15)}Profile saved locally</div>
+        <button type="button" class="upcoming-action" data-action="capture">${icon("radio", 15)} Start a private capture</button>
       </article>
     </section>
     <section class="insight-strip">
       <div><span class="insight-strip__icon insight-strip__icon--teal">${icon("notebook", 17)}</span><div><strong>${meetings.length}</strong><span>meetings in memory</span></div></div>
-      <div><span class="insight-strip__icon insight-strip__icon--amber">${icon("clock", 17)}</span><div><strong>${totalMinutes > 60 ? `${(totalMinutes / 60).toFixed(1)} hrs` : `${totalMinutes} min`}</strong><span>conversation captured</span></div></div>
+      <div><span class="insight-strip__icon insight-strip__icon--amber">${icon("clock", 17)}</span><div><strong>${totalDurationSeconds ? durationLabel(totalDurationSeconds) : "0 min"}</strong><span>conversation captured</span></div></div>
       <div><span class="insight-strip__icon insight-strip__icon--coral">${icon("checkCircle", 17)}</span><div><strong>${openActions}</strong><span>open action items</span></div></div>
       <div class="insight-strip__privacy">${icon("lock", 15)}<span>Recordings stay on this device</span></div>
     </section>
     <section class="recent-section">
-      <div class="section-title-row"><div><span class="eyebrow">Your memory</span><h2>${state.showAllMeetings ? "All meetings" : "Recent meetings"}</h2></div><button type="button" class="text-button" data-action="view-all">${state.showAllMeetings ? "Show recent" : "View all"} ${icon("chevronRight", 15)}</button></div>
+      <div class="section-title-row"><div><span class="eyebrow">Your memory</span><h2>${state.showAllMeetings ? "All meetings" : "Recent meetings"}</h2></div>${state.meetings.length > 4 ? `<button type="button" class="text-button" data-action="view-all">${state.showAllMeetings ? "Show recent" : "View all"} ${icon("chevronRight", 15)}</button>` : ""}</div>
       <div class="meeting-cards">
-        ${meetings
-          .slice(0, state.showAllMeetings ? meetings.length : 4)
-          .map(
-            (meeting) => `<button type="button" class="meeting-card" data-action="meeting" data-id="${meeting.id}">
-              <div class="meeting-card__top"><span>${meetingDate(meeting.dateISO)}</span><span class="meeting-card__duration">${icon("audio", 13)}${escapeHtml(meeting.duration)}</span></div>
-              <h3>${escapeHtml(meeting.title)}</h3><p>${escapeHtml(meeting.overview)}</p>
-              <div class="meeting-card__footer">
-                <div class="avatar-stack">${meeting.participants.slice(0, 3).map((person) => avatar(person.initials, person.color, true)).join("")}</div>
-                <div class="meeting-card__tags">${meeting.tags.slice(0, 2).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>
-              </div>
-            </button>`,
-          )
-          .join("")}
+        ${
+          meetings.length
+            ? meetings
+                .slice(0, state.showAllMeetings ? meetings.length : 4)
+                .map(
+                  (meeting) => `<button type="button" class="meeting-card" data-action="meeting" data-id="${meeting.id}">
+                    <div class="meeting-card__top"><span>${meetingDate(meeting.dateISO)}</span><span class="meeting-card__duration">${icon("audio", 13)}${escapeHtml(meeting.duration)}</span></div>
+                    <h3>${escapeHtml(meeting.title)}</h3><p>${escapeHtml(meeting.overview)}</p>
+                    <div class="meeting-card__footer">
+                      <div class="avatar-stack">${meeting.participants.slice(0, 3).map((person) => avatar(person.initials, person.color, true)).join("")}</div>
+                      <div class="meeting-card__tags">${meeting.tags.slice(0, 2).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>
+                    </div>
+                  </button>`,
+                )
+                .join("")
+            : `<div class="meeting-cards__empty">${icon(state.search ? "search" : "notebook", 24)}<div><h3>${state.search ? "No matching meetings" : "Your workspace is ready"}</h3><p>${state.search ? "Try a different title, topic, or transcript phrase." : "Your real recordings, transcripts, and notes will appear here."}</p></div>${state.search ? "" : `<button type="button" class="button button--primary" data-action="capture">${icon("mic", 15)} Record your first meeting</button>`}</div>`
+        }
       </div>
     </section>
   </main>`;
@@ -385,7 +512,7 @@ function captureView() {
       <div class="capture-title-block">
         <span class="recording-status recording-status--${capture.status}"><i></i>${statusLabel}</span>
         <input class="capture-title-input" data-input="capture-title" value="${escapeHtml(capture.title)}" aria-label="Meeting title">
-        <div class="capture-meta">${icon("calendar", 14)} Wed, 29 Jul <span>·</span>${icon("clock", 14)}<strong data-capture-clock>${formatTimer(capture.elapsed)}</strong></div>
+        <div class="capture-meta">${icon("calendar", 14)} ${escapeHtml(captureDateLabel())} <span>·</span>${icon("clock", 14)}<strong data-capture-clock>${formatTimer(capture.elapsed)}</strong></div>
       </div>
       ${
         idle
@@ -596,6 +723,11 @@ function settingsPanel() {
       <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
       <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>Local recording</strong><p>Audio and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.</p></div></section>
       <section class="settings-section">
+        <span class="eyebrow">Local profile</span>
+        <label><span>Your name</span><input data-input="profile-name" value="${escapeHtml(currentUserName())}" maxlength="80" autocomplete="name" aria-label="Your name"></label>
+        <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
+      </section>
+      <section class="settings-section">
         <span class="eyebrow">AI models</span>
         <label><span>Live transcription</span><select disabled><option>Browser speech recognition</option></select></label>
         <label><span>Meeting brief</span><select disabled><option>Extractive brief from recognised text</option></select></label>
@@ -603,6 +735,24 @@ function settingsPanel() {
       <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("browserTranscription", "Browser live transcription", "Use recognised speech returned by your browser; never inject sample text.")}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original audio", "Retain audio alongside the meeting record.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
+  </div>`;
+}
+
+function profileOnboarding() {
+  return `<div class="profile-setup-backdrop">
+    <section class="profile-setup-card" role="dialog" aria-modal="true" aria-labelledby="profile-setup-title">
+      ${brand()}
+      <span class="eyebrow">Set up this browser</span>
+      <h1 id="profile-setup-title">Welcome to NotesBuddy</h1>
+      <p>What should NotesBuddy call you? Your name stays in this browser and is used for greetings, transcript attribution, and follow-ups.</p>
+      <form data-form="profile-setup" novalidate>
+        <label for="profile-setup-name">Your name</label>
+        <input id="profile-setup-name" data-input="profile-setup-name" name="name" maxlength="80" autocomplete="name" placeholder="e.g. Alex Morgan" required autofocus>
+        <span class="profile-setup-error" data-profile-error hidden>Please enter your name.</span>
+        <button type="submit" class="button button--primary">Create local workspace ${icon("chevronRight", 16)}</button>
+      </form>
+      <small>${icon("lock", 13)}No account is created. This profile and its meetings remain local to this browser.</small>
+    </section>
   </div>`;
 }
 
@@ -639,6 +789,7 @@ function render(focusTarget = "") {
     </div>
     <input class="visually-hidden" data-input="file" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac">
     ${state.settingsOpen ? settingsPanel() : ""}
+    ${state.profileOnboardingOpen ? profileOnboarding() : ""}
     ${toastRegion()}
   </div>`;
 
@@ -969,9 +1120,9 @@ function startSpeechRecognition() {
       if (!text) continue;
       if (result.isFinal) {
         state.capture.segments.push({
-          id: `speech-${Date.now()}-${index}`,
-          speaker: "You",
-          initials: "YA",
+          id: createId("speech"),
+          speaker: currentUserName(),
+          initials: currentUserInitials(),
           color: "teal",
           timestamp: formatTimer(state.capture.elapsed),
           text,
@@ -1114,7 +1265,7 @@ async function finishCapture() {
     new Promise((resolve) => window.setTimeout(resolve, 850)),
   ]);
 
-  const id = `meeting-${Date.now()}`;
+  const id = createId("meeting");
   let audioSaved = false;
   if (audioBlob && state.settings.keepAudio) {
     try {
@@ -1139,7 +1290,13 @@ async function finishCapture() {
           ]),
         ).values(),
       )
-    : [{ name: "You", initials: "YA", color: "teal" }];
+    : [
+        {
+          name: currentUserName(),
+          initials: currentUserInitials(),
+          color: "teal",
+        },
+      ];
   const highlights = segments.length
     ? segments.slice(0, 3).map((segment) => segment.text)
     : [
@@ -1153,7 +1310,8 @@ async function finishCapture() {
     audioType: audioBlob?.type || null,
     title,
     dateISO: new Date().toISOString(),
-    duration: `${Math.max(1, Math.ceil(elapsed / 60))} min`,
+    duration: durationLabel(elapsed),
+    durationSeconds: elapsed,
     source: `Browser microphone${audioSaved ? " · audio saved" : ""}`,
     participants,
     tags: ["Recorded", "Local audio"],
@@ -1166,7 +1324,7 @@ async function finishCapture() {
       {
         id: `${id}-review`,
         text: "Review the recording and transcript",
-        owner: "You",
+        owner: currentUserName(),
         done: false,
       },
     ],
@@ -1233,7 +1391,7 @@ function exportMeeting() {
 }
 
 async function importAudio(file) {
-  const id = `import-${Date.now()}`;
+  const id = createId("import");
   let audioSaved = false;
   try {
     await storeAudio(id, file);
@@ -1264,7 +1422,7 @@ async function importAudio(file) {
       {
         id: `${id}-review`,
         text: "Review and transcribe imported audio",
-        owner: "You",
+        owner: currentUserName(),
         done: false,
       },
     ],
@@ -1283,6 +1441,40 @@ async function importAudio(file) {
       : "The browser could not save the audio file.",
   );
 }
+
+function updateProfileName(rawName) {
+  const name = String(rawName).trim().replace(/\s+/g, " ");
+  if (!name) return false;
+  const updatedAt = new Date().toISOString();
+  state.profile = normaliseProfile({
+    ...state.profile,
+    name,
+    createdAt: state.profile?.createdAt || updatedAt,
+    updatedAt,
+  });
+  save();
+  return true;
+}
+
+app.addEventListener("submit", (event) => {
+  const form = event.target.closest("[data-form='profile-setup']");
+  if (!form) return;
+  event.preventDefault();
+  const input = form.querySelector("[data-input='profile-setup-name']");
+  const error = form.querySelector("[data-profile-error]");
+  if (!updateProfileName(input.value)) {
+    input.setAttribute("aria-invalid", "true");
+    error.hidden = false;
+    input.focus();
+    return;
+  }
+  state.profileOnboardingOpen = false;
+  render();
+  showToast(
+    `Welcome, ${currentUserFirstName()}`,
+    "Your private browser workspace is ready.",
+  );
+});
 
 app.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-action]");
@@ -1305,6 +1497,7 @@ app.addEventListener("click", async (event) => {
     state.showAllMeetings = !state.showAllMeetings;
   } else if (action === "settings") {
     state.settingsOpen = true;
+    state.mobileNavOpen = false;
   } else if (action === "close-settings") {
     if (event.target.closest("[data-panel='settings']") && !event.target.closest("button")) {
       return;
@@ -1408,6 +1601,12 @@ app.addEventListener("input", (event) => {
     render("search");
   } else if (type === "capture-title") {
     state.capture.title = input.value;
+  } else if (type === "profile-name") {
+    updateProfileName(input.value);
+  } else if (type === "profile-setup-name") {
+    input.removeAttribute("aria-invalid");
+    const error = app.querySelector("[data-profile-error]");
+    if (error) error.hidden = true;
   } else if (type === "meeting-title") {
     const meeting = selectedMeeting();
     if (meeting) {
