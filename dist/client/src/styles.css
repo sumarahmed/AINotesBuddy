@@ -1648,6 +1648,10 @@ kbd {
   border-radius: 50%;
 }
 
+.confidence-pill b {
+  font: inherit;
+}
+
 .live-transcript__scroll {
   flex: 1;
   min-height: 0;

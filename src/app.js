@@ -360,7 +360,7 @@ function captureView() {
       <div class="capture-title-block">
         <span class="recording-status recording-status--${capture.status}"><i></i>${statusLabel}</span>
         <input class="capture-title-input" data-input="capture-title" value="${escapeHtml(capture.title)}" aria-label="Meeting title">
-        <div class="capture-meta">${icon("calendar", 14)} Wed, 29 Jul <span>·</span>${icon("clock", 14)}${formatTimer(capture.elapsed)}</div>
+        <div class="capture-meta">${icon("calendar", 14)} Wed, 29 Jul <span>·</span>${icon("clock", 14)}<strong data-capture-clock>${formatTimer(capture.elapsed)}</strong></div>
       </div>
       ${
         idle
@@ -381,16 +381,12 @@ function captureView() {
             </div>`
           : `<div class="live-workspace">
               <div class="live-meter">
-                <div class="live-meter__top"><div><span class="live-pill"><i></i>Live</span><span>${capture.permission === "granted" ? "Microphone recording" : "Microphone unavailable"}</span></div><strong>${formatTimer(capture.elapsed)}</strong></div>
+                <div class="live-meter__top"><div><span class="live-pill"><i></i>Live</span><span>${capture.permission === "granted" ? "Microphone recording" : "Microphone unavailable"}</span></div><strong data-capture-clock>${formatTimer(capture.elapsed)}</strong></div>
                 ${waveform(capture.status === "recording", true)}
               </div>
               <div class="live-transcript">
-                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span>${capture.transcriptionStatus === "listening" ? "Browser speech" : "Audio recording"}</span></div>
-                <div class="live-transcript__scroll">
-                  ${capture.segments.map(transcriptRow).join("")}
-                  ${capture.interimTranscript ? `<div class="interim-transcript">${icon("audio", 18)}<span>${escapeHtml(capture.interimTranscript)}</span></div>` : ""}
-                  ${capture.segments.length || capture.interimTranscript ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? "Listening for your voice…" : "Recording audio — live speech text is unavailable in this browser."}</div>`}
-                </div>
+                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span><b data-transcription-label>${capture.transcriptionStatus === "listening" ? "Browser speech" : "Audio recording"}</b></span></div>
+                <div class="live-transcript__scroll" data-live-transcript>${liveTranscriptMarkup(capture)}</div>
               </div>
             </div>`
       }
@@ -410,6 +406,33 @@ function captureView() {
         : ""
     }
   </main>`;
+}
+
+function liveTranscriptMarkup(capture) {
+  return `${capture.segments.map(transcriptRow).join("")}
+    ${capture.interimTranscript ? `<div class="interim-transcript">${icon("audio", 18)}<span>${escapeHtml(capture.interimTranscript)}</span></div>` : ""}
+    ${capture.segments.length || capture.interimTranscript ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? "Listening for your voice…" : "Recording audio — live speech text is unavailable in this browser."}</div>`}`;
+}
+
+function updateCaptureRuntimeUI({ transcript = false } = {}) {
+  if (state.view !== "capture") return;
+  app.querySelectorAll("[data-capture-clock]").forEach((element) => {
+    element.textContent = formatTimer(state.capture.elapsed);
+  });
+  const transcriptionLabel = app.querySelector("[data-transcription-label]");
+  if (transcriptionLabel) {
+    transcriptionLabel.textContent =
+      state.capture.transcriptionStatus === "listening"
+        ? "Browser speech"
+        : "Audio recording";
+  }
+  if (transcript) {
+    const container = app.querySelector("[data-live-transcript]");
+    if (container) {
+      container.innerHTML = liveTranscriptMarkup(state.capture);
+      container.scrollTop = container.scrollHeight;
+    }
+  }
 }
 
 function transcriptRow(segment, documentMode = false) {
@@ -591,11 +614,24 @@ async function hydrateMeetingAudio() {
 function showToast(title, description = "") {
   const id = ++toastId;
   state.toasts.push({ id, title, description });
-  render();
+  refreshToastRegion();
   window.setTimeout(() => {
     state.toasts = state.toasts.filter((toast) => toast.id !== id);
-    render();
+    refreshToastRegion();
   }, 3600);
+}
+
+function refreshToastRegion() {
+  const current = app.querySelector(".toast-region");
+  const captureIsActive =
+    state.view === "capture" &&
+    (state.capture.status === "recording" ||
+      state.capture.status === "paused");
+  if (current && captureIsActive) {
+    current.outerHTML = toastRegion();
+  } else {
+    render();
+  }
 }
 
 function resetCapture() {
@@ -624,7 +660,7 @@ function startCaptureTimer() {
   captureTimer = window.setInterval(() => {
     if (state.capture.status !== "recording") return;
     state.capture.elapsed += 1;
-    render();
+    updateCaptureRuntimeUI();
   }, 1000);
 }
 
@@ -659,7 +695,7 @@ function startSpeechRecognition() {
   recognition.lang = "en-AU";
   recognition.onstart = () => {
     state.capture.transcriptionStatus = "listening";
-    render();
+    updateCaptureRuntimeUI({ transcript: true });
   };
   recognition.onresult = (event) => {
     let interim = "";
@@ -681,12 +717,13 @@ function startSpeechRecognition() {
       }
     }
     state.capture.interimTranscript = interim;
-    render();
+    updateCaptureRuntimeUI({ transcript: true });
   };
   recognition.onerror = (event) => {
     state.capture.interimTranscript = "";
     if (event.error === "no-speech" || event.error === "aborted") return;
     state.capture.transcriptionStatus = "unavailable";
+    updateCaptureRuntimeUI({ transcript: true });
     if (!state.capture.speechErrorShown) {
       state.capture.speechErrorShown = true;
       showToast(
@@ -705,6 +742,7 @@ function startSpeechRecognition() {
           recognition.start();
         } catch {
           state.capture.transcriptionStatus = "unavailable";
+          updateCaptureRuntimeUI({ transcript: true });
         }
       }, 250);
     }
@@ -713,6 +751,7 @@ function startSpeechRecognition() {
     recognition.start();
   } catch {
     state.capture.transcriptionStatus = "unavailable";
+    updateCaptureRuntimeUI({ transcript: true });
   }
 }
 
