@@ -1,55 +1,4 @@
 (() => {
-const CAPTURE_SCRIPT = [
-  {
-    id: "live-1",
-    speaker: "You",
-    initials: "YA",
-    color: "teal",
-    timestamp: "00:02",
-    text: "Thanks everyone for joining. I want to use this time to align on the next milestone and make sure the handoff is clear.",
-  },
-  {
-    id: "live-2",
-    speaker: "Jordan Lee",
-    initials: "JL",
-    color: "blue",
-    timestamp: "00:06",
-    text: "The prototype is in good shape. The main open question is whether we include the reporting view in this release.",
-  },
-  {
-    id: "live-3",
-    speaker: "Priya Shah",
-    initials: "PS",
-    color: "violet",
-    timestamp: "00:10",
-    text: "I would keep reporting in scope, but start with the three metrics customers ask for most often.",
-  },
-  {
-    id: "live-4",
-    speaker: "You",
-    initials: "YA",
-    color: "teal",
-    timestamp: "00:15",
-    text: "Agreed. Let us ship the focused version and treat custom dashboards as the next iteration.",
-  },
-  {
-    id: "live-5",
-    speaker: "Jordan Lee",
-    initials: "JL",
-    color: "blue",
-    timestamp: "00:20",
-    text: "I can have the focused reporting screen ready for review by Thursday afternoon.",
-  },
-  {
-    id: "live-6",
-    speaker: "Priya Shah",
-    initials: "PS",
-    color: "violet",
-    timestamp: "00:25",
-    text: "I will validate the metric definitions with support and share the final list tomorrow.",
-  },
-];
-
 const INITIAL_MEETINGS = [
   {
     id: "product-weekly-0729",
@@ -354,7 +303,6 @@ const INITIAL_MEETINGS = [
 ];
 
 globalThis.NOTESBUDDY_DATA = {
-  CAPTURE_SCRIPT,
   INITIAL_MEETINGS,
 };
 })();

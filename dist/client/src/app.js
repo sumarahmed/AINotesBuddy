@@ -1,4 +1,4 @@
-const { CAPTURE_SCRIPT, INITIAL_MEETINGS } = globalThis.NOTESBUDDY_DATA;
+const { INITIAL_MEETINGS } = globalThis.NOTESBUDDY_DATA;
 
 const app = document.getElementById("root");
 
@@ -61,16 +61,20 @@ function loadStored(key, fallback) {
 }
 
 const defaultSettings = {
-  transcriptionModel: "Parakeet TDT 0.6B",
-  summaryModel: "NotesBuddy Local",
+  transcriptionModel: "Browser Speech",
+  summaryModel: "Extractive brief",
   autoSummarize: true,
   keepAudio: true,
   systemAudio: true,
+  browserTranscription: true,
 };
 
 const state = {
   meetings: loadStored("notesbuddy-meetings", structuredClone(INITIAL_MEETINGS)),
-  settings: loadStored("notesbuddy-settings", defaultSettings),
+  settings: {
+    ...defaultSettings,
+    ...loadStored("notesbuddy-settings", defaultSettings),
+  },
   view: "home",
   selectedMeetingId: INITIAL_MEETINGS[0].id,
   tab: "summary",
@@ -85,6 +89,8 @@ const state = {
     status: "idle",
     elapsed: 0,
     segments: [],
+    interimTranscript: "",
+    transcriptionStatus: "idle",
     microphoneOn: true,
     systemAudioOn: true,
     permission: "prompt",
@@ -94,11 +100,63 @@ const state = {
 let captureTimer;
 let mediaStream;
 let mediaRecorder;
+let recordedChunks = [];
+let speechRecognition;
+let activeAudioUrl;
 let toastId = 0;
 
 function save() {
   localStorage.setItem("notesbuddy-meetings", JSON.stringify(state.meetings));
   localStorage.setItem("notesbuddy-settings", JSON.stringify(state.settings));
+}
+
+function openAudioDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("notesbuddy-audio", 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("recordings")) {
+        database.createObjectStore("recordings");
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function storeAudio(id, blob) {
+  const database = await openAudioDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction("recordings", "readwrite");
+    transaction.objectStore("recordings").put(blob, id);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+async function getAudio(id) {
+  const database = await openAudioDatabase();
+  const blob = await new Promise((resolve, reject) => {
+    const transaction = database.transaction("recordings", "readonly");
+    const request = transaction.objectStore("recordings").get(id);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return blob;
+}
+
+async function deleteAudio(id) {
+  if (!id) return;
+  const database = await openAudioDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction("recordings", "readwrite");
+    transaction.objectStore("recordings").delete(id);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
 }
 
 function formatTimer(totalSeconds) {
@@ -236,7 +294,7 @@ function homeView(meetings) {
         <div class="capture-card__content">
           <div class="capture-card__kicker"><span class="pulse-ring">${icon("mic", 17)}</span><span>Ready to listen</span></div>
           <h2>Turn the next conversation into clear, useful memory.</h2>
-          <p>Capture microphone and system audio. Your transcript and summary stay in this browser.</p>
+          <p>Record real microphone audio, keep it on this device, and review browser-recognised speech when available.</p>
           <button type="button" data-action="capture">Start a new capture ${icon("chevronRight", 17)}</button>
         </div>
         <div class="capture-card__visual" aria-hidden="true">
@@ -260,7 +318,7 @@ function homeView(meetings) {
       <div><span class="insight-strip__icon insight-strip__icon--teal">${icon("notebook", 17)}</span><div><strong>${meetings.length}</strong><span>meetings in memory</span></div></div>
       <div><span class="insight-strip__icon insight-strip__icon--amber">${icon("clock", 17)}</span><div><strong>${totalMinutes > 60 ? `${(totalMinutes / 60).toFixed(1)} hrs` : `${totalMinutes} min`}</strong><span>conversation captured</span></div></div>
       <div><span class="insight-strip__icon insight-strip__icon--coral">${icon("checkCircle", 17)}</span><div><strong>${openActions}</strong><span>open action items</span></div></div>
-      <div class="insight-strip__privacy">${icon("lock", 15)}<span>Nothing leaves this device</span></div>
+      <div class="insight-strip__privacy">${icon("lock", 15)}<span>Recordings stay on this device</span></div>
     </section>
     <section class="recent-section">
       <div class="section-title-row"><div><span class="eyebrow">Your memory</span><h2>Recent meetings</h2></div><button type="button" class="text-button">View all ${icon("chevronRight", 15)}</button></div>
@@ -295,7 +353,7 @@ function captureView() {
   return `<main class="main-view capture-view">
     <header class="capture-header">
       <button type="button" class="back-button" data-action="cancel-capture">${icon("arrowLeft", 17)} Back</button>
-      <div class="capture-header__privacy">${icon("shield", 15)} Local capture <span>·</span> ${escapeHtml(state.settings.transcriptionModel)}</div>
+      <div class="capture-header__privacy">${icon("shield", 15)} Local audio <span>·</span> ${state.settings.browserTranscription ? "Browser speech" : "Audio only"}</div>
       ${iconButton("noop", "Capture options", "more")}
     </header>
     <section class="capture-workspace">
@@ -309,29 +367,29 @@ function captureView() {
           ? `<div class="capture-ready">
               <div class="capture-ready__visual"><div class="ready-ring ready-ring--outer"></div><div class="ready-ring ready-ring--inner"></div><div class="ready-mic">${icon("mic", 34)}</div></div>
               <h2>Ready for your next conversation</h2>
-              <p>We’ll capture audio and show a representative local transcript for this browser prototype.</p>
+              <p>NotesBuddy will record your real microphone audio. Live text appears only when your browser returns recognised speech.</p>
               <div class="source-options">
                 <button type="button" data-action="toggle-mic" class="${capture.microphoneOn ? "source-option--active" : ""}">
                   <span>${icon("mic", 17)}</span><div><strong>Microphone</strong><small>Default input</small></div><i>${capture.microphoneOn ? icon("check", 13) : ""}</i>
                 </button>
-                <button type="button" data-action="toggle-system" class="${capture.systemAudioOn ? "source-option--active" : ""}">
-                  <span>${icon("headphones", 17)}</span><div><strong>System audio</strong><small>Meeting sound</small></div><i>${capture.systemAudioOn ? icon("check", 13) : ""}</i>
+                <button type="button" disabled title="System audio capture requires the desktop application">
+                  <span>${icon("headphones", 17)}</span><div><strong>System audio</strong><small>Desktop app only</small></div><i></i>
                 </button>
               </div>
               <button type="button" class="start-recording" data-action="start-capture"><span>${icon("mic", 20)}</span>Start capture</button>
-              <div class="prototype-note">${icon("sparkles", 14)}Prototype mode uses a simulated transcript; microphone audio is not uploaded or retained.</div>
+              <div class="prototype-note">${icon("shield", 14)}Audio is saved locally for playback. Browser speech recognition may use your browser provider’s service.</div>
             </div>`
           : `<div class="live-workspace">
               <div class="live-meter">
-                <div class="live-meter__top"><div><span class="live-pill"><i></i>Live</span><span>${capture.permission === "granted" ? "Microphone" : "Demo audio"}</span></div><strong>${formatTimer(capture.elapsed)}</strong></div>
+                <div class="live-meter__top"><div><span class="live-pill"><i></i>Live</span><span>${capture.permission === "granted" ? "Microphone recording" : "Microphone unavailable"}</span></div><strong>${formatTimer(capture.elapsed)}</strong></div>
                 ${waveform(capture.status === "recording", true)}
               </div>
               <div class="live-transcript">
-                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span>Local preview</span></div>
+                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span>${capture.transcriptionStatus === "listening" ? "Browser speech" : "Audio recording"}</span></div>
                 <div class="live-transcript__scroll">
                   ${capture.segments.map(transcriptRow).join("")}
-                  ${capture.segments.length ? "" : `<div class="listening-state">${icon("audio", 20)}Listening for speech…</div>`}
-                  ${capture.status === "recording" && capture.segments.length ? '<div class="streaming-line"><span></span><span></span><span></span></div>' : ""}
+                  ${capture.interimTranscript ? `<div class="interim-transcript">${icon("audio", 18)}<span>${escapeHtml(capture.interimTranscript)}</span></div>` : ""}
+                  ${capture.segments.length || capture.interimTranscript ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? "Listening for your voice…" : "Recording audio — live speech text is unavailable in this browser."}</div>`}
                 </div>
               </div>
             </div>`
@@ -348,7 +406,7 @@ function captureView() {
     }
     ${
       capture.status === "processing"
-        ? `<div class="processing-overlay"><div class="processing-card"><div class="processing-orb">${icon("sparkles", 24)}</div><h2>Turning conversation into memory</h2><p>Structuring highlights, decisions, and action items locally.</p><div class="processing-bar"><span></span></div></div></div>`
+        ? `<div class="processing-overlay"><div class="processing-card"><div class="processing-orb">${icon("audio", 24)}</div><h2>Saving your recording</h2><p>Storing the real audio and available transcript on this device.</p><div class="processing-bar"><span></span></div></div></div>`
         : ""
     }
   </main>`;
@@ -384,7 +442,7 @@ function summaryView(meeting) {
     <aside class="meeting-context">
       <section><span class="eyebrow">People</span><h3>In this conversation</h3><div class="people-list">${meeting.participants.map((person) => `<div>${avatar(person.initials, person.color, true)}<span>${escapeHtml(person.name)}</span></div>`).join("")}</div></section>
       <section><span class="eyebrow">Topics</span><div class="context-tags">${meeting.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div></section>
-      <section class="privacy-context"><div>${icon("lock", 15)}<strong>Processed locally</strong></div><p>This summary and transcript are stored only in your browser.</p></section>
+      <section class="privacy-context"><div>${icon("lock", 15)}<strong>Stored locally</strong></div><p>The recording and meeting record are stored on this device.</p></section>
     </aside>
   </div>`;
 }
@@ -401,7 +459,7 @@ function transcriptView(meeting) {
     <div class="transcript-document">
       <div class="transcript-document__rail"><button type="button">${icon("play", 15)}</button><span>00:00</span><div>${waveform(false, true)}</div><span>${escapeHtml(meeting.duration)}</span></div>
       ${filtered.map((segment) => transcriptRow(segment, true)).join("")}
-      ${filtered.length ? "" : `<div class="empty-search">${icon("search", 24)}<h3>No matching transcript</h3><p>Try a different word or speaker name.</p></div>`}
+      ${filtered.length ? "" : `<div class="empty-search">${icon(query ? "search" : "audio", 24)}<h3>${query ? "No matching transcript" : "No speech transcript available"}</h3><p>${query ? "Try a different word or speaker name." : "The original audio is still available above for playback."}</p></div>`}
     </div>
   </div>`;
 }
@@ -429,6 +487,16 @@ function meetingView(meeting) {
           </div>
         </div>
       </div>
+      ${
+        meeting.audioId
+          ? `<div class="detail-audio">
+              <span class="detail-audio__icon">${icon("audio", 18)}</span>
+              <div><strong>Original recording</strong><small>Stored locally on this device</small></div>
+              <audio controls preload="metadata" data-audio-id="${escapeHtml(meeting.audioId)}"></audio>
+              <a class="audio-download" data-audio-download="${escapeHtml(meeting.audioId)}" download="${escapeHtml(meeting.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase())}.webm" aria-label="Download recording">${icon("download", 16)}</a>
+            </div>`
+          : ""
+      }
       <div class="detail-tabs" role="tablist" aria-label="Meeting views">${tabButton("summary", "AI summary", "sparkles")}${tabButton("transcript", "Transcript", "file")}${tabButton("notes", "My notes", "notebook")}</div>
     </header>
     <div class="detail-content">${state.tab === "summary" ? summaryView(meeting) : state.tab === "transcript" ? transcriptView(meeting) : notesView(meeting)}</div>
@@ -441,13 +509,13 @@ function settingsPanel() {
   return `<div class="drawer-backdrop" data-action="close-settings">
     <aside class="settings-drawer" data-panel="settings">
       <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
-      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>Local-first by design</strong><p>This prototype keeps its meeting data in your browser’s local storage.</p></div></section>
+      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>Local recording</strong><p>Audio and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.</p></div></section>
       <section class="settings-section">
         <span class="eyebrow">AI models</span>
-        <label><span>Transcription</span><select data-setting="transcriptionModel"><option ${state.settings.transcriptionModel === "Parakeet TDT 0.6B" ? "selected" : ""}>Parakeet TDT 0.6B</option><option ${state.settings.transcriptionModel === "Whisper Small" ? "selected" : ""}>Whisper Small</option><option ${state.settings.transcriptionModel === "Whisper Large v3" ? "selected" : ""}>Whisper Large v3</option></select></label>
-        <label><span>Summary</span><select data-setting="summaryModel"><option ${state.settings.summaryModel === "NotesBuddy Local" ? "selected" : ""}>NotesBuddy Local</option><option ${state.settings.summaryModel === "Ollama · Gemma 3" ? "selected" : ""}>Ollama · Gemma 3</option><option ${state.settings.summaryModel === "Custom endpoint" ? "selected" : ""}>Custom endpoint</option></select></label>
+        <label><span>Live transcription</span><select disabled><option>Browser speech recognition</option></select></label>
+        <label><span>Meeting brief</span><select disabled><option>Extractive brief from recognised text</option></select></label>
       </section>
-      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Capture system audio", "Include sound from the meeting app.")}${toggle("autoSummarize", "Auto-generate summaries", "Create a structured brief when capture ends.")}${toggle("keepAudio", "Keep original audio", "Retain audio alongside the meeting record.")}</section>
+      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("browserTranscription", "Browser live transcription", "Use recognised speech returned by your browser; never inject sample text.")}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original audio", "Retain audio alongside the meeting record.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
   </div>`;
@@ -484,6 +552,9 @@ function render(focusTarget = "") {
     const transcript = app.querySelector(".live-transcript__scroll");
     if (transcript) transcript.scrollTop = transcript.scrollHeight;
   }
+  if (state.view === "meeting") {
+    hydrateMeetingAudio();
+  }
   if (focusTarget) {
     requestAnimationFrame(() => {
       const element = app.querySelector(`[data-input="${focusTarget}"]`);
@@ -495,6 +566,25 @@ function render(focusTarget = "") {
         }
       }
     });
+  }
+}
+
+async function hydrateMeetingAudio() {
+  const player = app.querySelector("audio[data-audio-id]");
+  if (!player) return;
+  try {
+    const blob = await getAudio(player.dataset.audioId);
+    if (!blob || !player.isConnected) return;
+    if (activeAudioUrl) URL.revokeObjectURL(activeAudioUrl);
+    activeAudioUrl = URL.createObjectURL(blob);
+    player.src = activeAudioUrl;
+    const download = app.querySelector(
+      `[data-audio-download="${CSS.escape(player.dataset.audioId)}"]`,
+    );
+    if (download) download.href = activeAudioUrl;
+  } catch {
+    player.outerHTML =
+      '<span class="audio-unavailable">Recording could not be loaded.</span>';
   }
 }
 
@@ -510,15 +600,19 @@ function showToast(title, description = "") {
 
 function resetCapture() {
   clearInterval(captureTimer);
+  stopSpeechRecognition();
   mediaStream?.getTracks().forEach((track) => track.stop());
   if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
   mediaStream = undefined;
   mediaRecorder = undefined;
+  recordedChunks = [];
   state.capture = {
     title: "Untitled meeting",
     status: "idle",
     elapsed: 0,
     segments: [],
+    interimTranscript: "",
+    transcriptionStatus: "idle",
     microphoneOn: true,
     systemAudioOn: state.settings.systemAudio,
     permission: "prompt",
@@ -530,110 +624,264 @@ function startCaptureTimer() {
   captureTimer = window.setInterval(() => {
     if (state.capture.status !== "recording") return;
     state.capture.elapsed += 1;
-    const next = CAPTURE_SCRIPT.find(
-      (segment) =>
-        Number(segment.timestamp.split(":")[1]) <= state.capture.elapsed &&
-        !state.capture.segments.some((existing) => existing.id === segment.id),
-    );
-    if (next) state.capture.segments.push(structuredClone(next));
     render();
   }, 1000);
 }
 
-async function startCapture() {
-  state.capture.status = "recording";
-  render();
-  if (state.capture.microphoneOn && navigator.mediaDevices?.getUserMedia) {
-    try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      state.capture.permission = "granted";
-      if (window.MediaRecorder) {
-        mediaRecorder = new MediaRecorder(mediaStream);
-        mediaRecorder.start();
+function stopSpeechRecognition() {
+  const recognition = speechRecognition;
+  speechRecognition = undefined;
+  if (!recognition) return;
+  recognition.onend = null;
+  try {
+    recognition.stop();
+  } catch {
+    // The service may already be stopped.
+  }
+}
+
+function startSpeechRecognition() {
+  if (!state.settings.browserTranscription) {
+    state.capture.transcriptionStatus = "disabled";
+    return;
+  }
+  const SpeechRecognition =
+    globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    state.capture.transcriptionStatus = "unavailable";
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  speechRecognition = recognition;
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-AU";
+  recognition.onstart = () => {
+    state.capture.transcriptionStatus = "listening";
+    render();
+  };
+  recognition.onresult = (event) => {
+    let interim = "";
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const result = event.results[index];
+      const text = result[0]?.transcript?.trim();
+      if (!text) continue;
+      if (result.isFinal) {
+        state.capture.segments.push({
+          id: `speech-${Date.now()}-${index}`,
+          speaker: "You",
+          initials: "YA",
+          color: "teal",
+          timestamp: formatTimer(state.capture.elapsed),
+          text,
+        });
+      } else {
+        interim = `${interim} ${text}`.trim();
       }
-    } catch {
-      state.capture.permission = "unavailable";
+    }
+    state.capture.interimTranscript = interim;
+    render();
+  };
+  recognition.onerror = (event) => {
+    state.capture.interimTranscript = "";
+    if (event.error === "no-speech" || event.error === "aborted") return;
+    state.capture.transcriptionStatus = "unavailable";
+    if (!state.capture.speechErrorShown) {
+      state.capture.speechErrorShown = true;
       showToast(
-        "Microphone unavailable",
-        "Continuing with the simulated local transcript.",
+        "Live transcription unavailable",
+        "Your real microphone audio is still being recorded for playback.",
       );
     }
-  } else {
-    state.capture.permission = "unavailable";
+  };
+  recognition.onend = () => {
+    if (
+      speechRecognition === recognition &&
+      state.capture.status === "recording"
+    ) {
+      window.setTimeout(() => {
+        try {
+          recognition.start();
+        } catch {
+          state.capture.transcriptionStatus = "unavailable";
+        }
+      }, 250);
+    }
+  };
+  try {
+    recognition.start();
+  } catch {
+    state.capture.transcriptionStatus = "unavailable";
   }
+}
+
+async function startCapture() {
+  if (
+    !state.capture.microphoneOn ||
+    !navigator.mediaDevices?.getUserMedia ||
+    !globalThis.MediaRecorder
+  ) {
+    state.capture.permission = "unavailable";
+    showToast(
+      "Microphone recording unavailable",
+      "Enable the microphone and use a current Chrome, Edge, or Safari browser.",
+    );
+    return;
+  }
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    state.capture.permission = "unavailable";
+    state.capture.status = "idle";
+    showToast(
+      "Microphone permission is required",
+      "Allow microphone access, then start capture again.",
+    );
+    return;
+  }
+
+  recordedChunks = [];
+  const preferredTypes = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+  ];
+  const mimeType = preferredTypes.find((type) =>
+    MediaRecorder.isTypeSupported(type),
+  );
+  mediaRecorder = new MediaRecorder(
+    mediaStream,
+    mimeType ? { mimeType } : undefined,
+  );
+  mediaRecorder.ondataavailable = (event) => {
+    if (event.data?.size) recordedChunks.push(event.data);
+  };
+  mediaRecorder.start(500);
+
+  state.capture.permission = "granted";
+  state.capture.status = "recording";
+  state.capture.transcriptionStatus = "starting";
+  startSpeechRecognition();
   startCaptureTimer();
   render();
 }
 
-function finishCapture() {
+function stopAndCollectRecording() {
+  const recorder = mediaRecorder;
+  if (!recorder) return Promise.resolve(null);
+  if (recorder.state === "inactive") {
+    return Promise.resolve(
+      recordedChunks.length
+        ? new Blob(recordedChunks, { type: recorder.mimeType || "audio/webm" })
+        : null,
+    );
+  }
+  return new Promise((resolve) => {
+    recorder.addEventListener(
+      "stop",
+      () =>
+        resolve(
+          recordedChunks.length
+            ? new Blob(recordedChunks, {
+                type: recorder.mimeType || "audio/webm",
+              })
+            : null,
+        ),
+      { once: true },
+    );
+    recorder.stop();
+  });
+}
+
+async function finishCapture() {
   clearInterval(captureTimer);
+  stopSpeechRecognition();
   state.capture.status = "processing";
-  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  state.capture.interimTranscript = "";
+  const title = state.capture.title.trim() || "Untitled meeting";
+  const elapsed = state.capture.elapsed;
+  const segments = structuredClone(state.capture.segments);
+  const audioPromise = stopAndCollectRecording();
   mediaStream?.getTracks().forEach((track) => track.stop());
   render();
-  window.setTimeout(() => {
-    const id = `meeting-${Date.now()}`;
-    const segments = state.capture.segments.length
-      ? structuredClone(state.capture.segments)
-      : structuredClone(CAPTURE_SCRIPT.slice(0, 3));
-    const participants = Array.from(
-      new Map(
-        segments.map((segment) => [
-          segment.speaker,
-          {
-            name: segment.speaker,
-            initials: segment.initials,
-            color: segment.color,
-          },
-        ]),
-      ).values(),
-    );
-    const meeting = {
-      id,
-      title: state.capture.title.trim() || "Untitled meeting",
-      dateISO: new Date().toISOString(),
-      duration: `${Math.max(1, Math.ceil(state.capture.elapsed / 60))} min`,
-      source: "Browser microphone · prototype",
-      participants,
-      tags: ["New", "Local"],
-      overview:
-        "The team aligned on a focused milestone, keeping the first reporting release intentionally small. Metric definitions will be validated before the final review.",
-      highlights: [
-        "The core prototype is ready for a focused reporting layer.",
-        "Three high-value metrics will be included in the first release.",
-        "Custom dashboards move to the next iteration.",
-      ],
-      decisions: [
-        "Ship the focused reporting view in the next milestone.",
-        "Validate metric definitions with support before review.",
-      ],
-      actions: [
-        {
-          id: `${id}-a1`,
-          text: "Share the focused reporting screen",
-          owner: "Jordan",
-          due: "Thu",
-          done: false,
-        },
-        {
-          id: `${id}-a2`,
-          text: "Confirm the final metric definitions",
-          owner: "Priya",
-          due: "Tomorrow",
-          done: false,
-        },
-      ],
-      transcript: segments,
-      notes: "",
-    };
-    state.meetings.unshift(meeting);
-    state.selectedMeetingId = id;
-    state.view = "meeting";
-    state.tab = "summary";
-    resetCapture();
-    save();
-    showToast("Meeting saved", "Transcript and structured summary are ready.");
-  }, 1100);
+  const [audioBlob] = await Promise.all([
+    audioPromise,
+    new Promise((resolve) => window.setTimeout(resolve, 850)),
+  ]);
+
+  const id = `meeting-${Date.now()}`;
+  let audioSaved = false;
+  if (audioBlob && state.settings.keepAudio) {
+    try {
+      await storeAudio(id, audioBlob);
+      audioSaved = true;
+    } catch {
+      audioSaved = false;
+    }
+  }
+
+  const transcriptText = segments.map((segment) => segment.text).join(" ");
+  const participants = segments.length
+    ? Array.from(
+        new Map(
+          segments.map((segment) => [
+            segment.speaker,
+            {
+              name: segment.speaker,
+              initials: segment.initials,
+              color: segment.color,
+            },
+          ]),
+        ).values(),
+      )
+    : [{ name: "You", initials: "YA", color: "teal" }];
+  const highlights = segments.length
+    ? segments.slice(0, 3).map((segment) => segment.text)
+    : [
+        "The original microphone audio was recorded for playback.",
+        "Browser speech recognition did not return transcript text.",
+        "No sample or fabricated transcript was added.",
+      ];
+  const meeting = {
+    id,
+    audioId: audioSaved ? id : null,
+    audioType: audioBlob?.type || null,
+    title,
+    dateISO: new Date().toISOString(),
+    duration: `${Math.max(1, Math.ceil(elapsed / 60))} min`,
+    source: `Browser microphone${audioSaved ? " · audio saved" : ""}`,
+    participants,
+    tags: ["Recorded", "Local audio"],
+    overview: transcriptText
+      ? `This meeting contains real microphone audio and ${segments.length} browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Review the recording alongside the transcript for accuracy.`
+      : "This meeting contains the real microphone recording. Browser speech recognition did not return text, so NotesBuddy did not generate a sample transcript.",
+    highlights,
+    decisions: [],
+    actions: [
+      {
+        id: `${id}-review`,
+        text: "Review the recording and transcript",
+        owner: "You",
+        done: false,
+      },
+    ],
+    transcript: segments,
+    notes: "",
+  };
+  state.meetings.unshift(meeting);
+  state.selectedMeetingId = id;
+  state.view = "meeting";
+  state.tab = "summary";
+  resetCapture();
+  save();
+  showToast(
+    audioSaved ? "Recording saved" : "Meeting saved without audio",
+    audioSaved
+      ? "Your real microphone audio is ready to play back."
+      : "The browser could not persist the audio recording.",
+  );
 }
 
 function meetingMarkdown(meeting) {
@@ -681,21 +929,31 @@ function exportMeeting() {
   showToast("Markdown exported", "The meeting was downloaded to your device.");
 }
 
-function importAudio(file) {
+async function importAudio(file) {
   const id = `import-${Date.now()}`;
+  let audioSaved = false;
+  try {
+    await storeAudio(id, file);
+    audioSaved = true;
+  } catch {
+    audioSaved = false;
+  }
   const meeting = {
     id,
+    audioId: audioSaved ? id : null,
+    audioType: file.type || null,
     title: file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "),
     dateISO: new Date().toISOString(),
     duration: "Imported",
     source: `${file.type || "Audio file"} · ${(file.size / 1024 / 1024).toFixed(1)} MB`,
     participants: [{ name: "Speaker 1", initials: "S1", color: "teal" }],
     tags: ["Imported", "Needs review"],
-    overview:
-      "Audio metadata was imported locally. Connect a native transcription engine to replace this prototype record with a generated transcript and summary.",
+    overview: audioSaved
+      ? "The original audio file was imported and stored locally for playback. No transcript text was invented."
+      : "The audio file metadata was imported, but the browser could not persist the recording.",
     highlights: [
-      "The file was handled in the browser and was not uploaded.",
-      "Audio transcription requires the native local processing layer.",
+      "The original file is available for local playback.",
+      "No sample or fabricated transcript was generated.",
     ],
     decisions: [],
     actions: [
@@ -706,16 +964,7 @@ function importAudio(file) {
         done: false,
       },
     ],
-    transcript: [
-      {
-        id: `${id}-segment`,
-        speaker: "NotesBuddy",
-        initials: "NB",
-        color: "teal",
-        timestamp: "00:00",
-        text: "Imported audio is ready. This web prototype stores file metadata only; native transcription is not connected.",
-      },
-    ],
+    transcript: [],
     notes: "",
   };
   state.meetings.unshift(meeting);
@@ -723,7 +972,12 @@ function importAudio(file) {
   state.view = "meeting";
   state.tab = "summary";
   save();
-  showToast("Audio added locally", "A meeting record was created for review.");
+  showToast(
+    audioSaved ? "Audio imported" : "Audio metadata imported",
+    audioSaved
+      ? "The original file is ready for playback."
+      : "The browser could not save the audio file.",
+  );
 }
 
 app.addEventListener("click", (event) => {
@@ -768,10 +1022,12 @@ app.addEventListener("click", (event) => {
     if (state.capture.status === "recording") {
       state.capture.status = "paused";
       clearInterval(captureTimer);
+      stopSpeechRecognition();
       if (mediaRecorder?.state === "recording") mediaRecorder.pause();
     } else {
       state.capture.status = "recording";
       if (mediaRecorder?.state === "paused") mediaRecorder.resume();
+      startSpeechRecognition();
       startCaptureTimer();
     }
   } else if (action === "finish-capture") {
@@ -797,6 +1053,10 @@ app.addEventListener("click", (event) => {
   } else if (action === "more") {
     state.moreOpen = !state.moreOpen;
   } else if (action === "delete") {
+    const meetingToDelete = selectedMeeting();
+    if (meetingToDelete?.audioId) {
+      deleteAudio(meetingToDelete.audioId).catch(() => {});
+    }
     state.meetings = state.meetings.filter(
       (meeting) => meeting.id !== state.selectedMeetingId,
     );
@@ -850,10 +1110,10 @@ app.addEventListener("input", (event) => {
   }
 });
 
-app.addEventListener("change", (event) => {
+app.addEventListener("change", async (event) => {
   const input = event.target;
   if (input.dataset.input === "file" && input.files?.[0]) {
-    importAudio(input.files[0]);
+    await importAudio(input.files[0]);
   }
   if (input.dataset.setting) {
     state.settings[input.dataset.setting] = input.value;

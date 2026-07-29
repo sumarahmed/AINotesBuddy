@@ -7,18 +7,21 @@ structured summary, and keep searchable meeting memory.
 ## What works
 
 - Desktop-style meeting library with full-text filtering
-- Microphone capture permission and a clearly labelled simulated local transcript
+- Real microphone recording with persistent local playback and download
+- Live text from browser speech recognition when the browser supports it
 - Recording, pause, resume, finish, and discard flows
-- Audio import flow with local-only file metadata handling
+- Audio import with locally persisted playback
 - Summary, transcript, and notes workspaces
 - Action-item completion, editable titles, notes, and local persistence
 - Markdown export and clipboard copy
 - Local model/privacy settings
 - Responsive layout for desktop and mobile
 
-The browser prototype does not bundle Meetily's native Rust audio engine, Whisper,
-Parakeet, diarization, or Ollama. Those require a desktop/native backend. The UI
-keeps that boundary explicit while providing a realistic end-to-end product demo.
+The app never injects a sample transcript into a new recording. Browser speech
+recognition can depend on the browser provider's speech service, while the
+original recording and meeting data remain stored locally. Meetily's fully local
+Whisper/Parakeet transcription, diarization, and Ollama summarization still
+require a desktop/native backend.
 
 ## Run locally
 
