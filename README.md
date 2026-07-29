@@ -1,37 +1,145 @@
 # NotesBuddy
 
-NotesBuddy is a high-fidelity, local-first meeting assistant prototype inspired by
-Meetily's core workflow: capture a meeting, review a live transcript, generate a
-structured summary, and keep searchable meeting memory.
+NotesBuddy is a private, local-first meeting assistant prototype. It records
+microphone audio, keeps the recording in the browser, captures live speech text
+when the browser supports it, and turns meetings into searchable summaries,
+transcripts, notes, and action items.
 
-## What works
+> **Project status:** Functional prototype. NotesBuddy is an independent project
+> inspired by local-first meeting tools such as Meetily; it is not affiliated
+> with or endorsed by Meetily.
 
-- Desktop-style meeting library with full-text filtering
-- Real microphone recording with persistent local playback and download
-- Live text from browser speech recognition when the browser supports it
-- Recording, pause, resume, finish, and discard flows
-- Audio import with locally persisted playback
-- Summary, transcript, and notes workspaces
-- Action-item completion, editable titles, notes, and local persistence
+[Open the owner-restricted live preview](https://notesbuddy-local.sumarahmed.chatgpt.site)
+
+## Highlights
+
+- Real microphone recording with pause, resume, playback, seeking, and download
+- Audio import with the original file type and filename preserved
+- Browser-provided live speech recognition without fabricated sample text
+- Searchable meeting library and transcript filtering
+- Structured summaries, decisions, highlights, and action items
+- Editable titles and private notes with automatic local persistence
 - Markdown export and clipboard copy
-- Local model/privacy settings
-- Responsive layout for desktop and mobile
+- Responsive desktop and mobile layouts
+- Direct `index.html` launch with no installation or build step
+- Dependency-free source and production bundle
 
-The app never injects a sample transcript into a new recording. Browser speech
-recognition can depend on the browser provider's speech service, while the
-original recording and meeting data remain stored locally. Meetily's fully local
-Whisper/Parakeet transcription, diarization, and Ollama summarization still
-require a desktop/native backend.
+## Quick start
 
-## Run locally
+### Open directly
 
-You can double-click `index.html` to run the app directly from disk, or use the
-local server:
+Open `index.html` in a current browser. Chrome or Edge is recommended for the
+broadest MediaRecorder and speech-recognition support.
+
+### Run the local server
+
+Requirements:
+
+- Node.js 20 or later
+- A browser with microphone access
 
 ```bash
 npm run dev
 ```
 
-No package installation is required. Build the dependency-free production bundle
-with `npm run build`. The bundle includes a lightweight Sites worker entrypoint
-and the static client under `dist/client`.
+Then visit <http://127.0.0.1:4173>.
+
+No `npm install` step is required because the app has no runtime or development
+dependencies.
+
+## Available commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Serve the source app at `http://127.0.0.1:4173` |
+| `npm run build` | Create the deployable bundle in `dist/` |
+| `npm run preview` | Serve the generated `dist/` bundle |
+| `npm run check` | Syntax-check the source and verify a clean build |
+| `npm test` | Run the same repository validation used by CI |
+
+## How recordings and transcripts work
+
+1. `navigator.mediaDevices.getUserMedia()` requests microphone access.
+2. `MediaRecorder` captures the real microphone stream.
+3. The completed audio Blob is stored in IndexedDB.
+4. Meeting metadata, notes, and settings are stored in `localStorage`.
+5. If enabled and supported, the browser Speech Recognition API supplies live
+   text. NotesBuddy never inserts a sample transcript into a new recording.
+6. Playback controls load the exact stored Blob through a temporary object URL.
+
+Browser speech recognition may use a service operated by the browser provider.
+The recording and meeting database remain in the local browser profile unless
+the user explicitly downloads or exports them.
+
+See [Privacy and data handling](docs/PRIVACY.md) for the complete data boundary.
+
+## Browser behavior
+
+NotesBuddy detects media and speech capabilities at runtime:
+
+- Recording requires `getUserMedia` and `MediaRecorder`.
+- Live text requires `SpeechRecognition` or `webkitSpeechRecognition`.
+- Audio recording still works when live speech recognition is unavailable.
+- System-audio capture is intentionally disabled in this browser prototype.
+- Browser storage is origin-specific. Data recorded through `file://` and data
+  recorded through `http://127.0.0.1:4173` may appear in separate libraries.
+
+## Repository layout
+
+```text
+.
+|-- .github/                 GitHub workflow and contribution templates
+|-- docs/                    Architecture, privacy, testing, and publishing guides
+|-- dist/                    Generated Sites-compatible production bundle
+|-- src/
+|   |-- app.js               Application state, views, recording, and persistence
+|   |-- data.js              Seed meeting data
+|   `-- styles.css           Responsive visual system
+|-- build.mjs                Dependency-free production build
+|-- index.html               Direct-launch entry point
+|-- server.mjs               Local static development server
+`-- site-worker.mjs          Production asset worker and SPA fallback
+```
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Privacy and data handling](docs/PRIVACY.md)
+- [Testing guide](docs/TESTING.md)
+- [GitHub publishing checklist](docs/GITHUB_SETUP.md)
+- [Contributing](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+
+## Current limitations
+
+This browser prototype does not yet provide:
+
+- Fully offline speech-to-text such as Whisper or Parakeet
+- Speaker diarization
+- Local LLM summarization through Ollama
+- Browser system-audio capture
+- Cloud synchronization, accounts, or multi-device access
+- Encrypted browser storage
+
+Those capabilities require a native/desktop backend or a deliberately designed
+server component.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Bug
+reports should include the browser, operating system, launch method, and exact
+recording or playback steps.
+
+## Security
+
+Do not include real meeting audio, transcripts, credentials, or other sensitive
+information in a public issue. Follow [SECURITY.md](SECURITY.md) for private
+reporting guidance.
+
+## License
+
+No open-source license has been selected yet. Until a license is added, the
+default copyright restrictions apply. Choose and add an appropriate license
+before making the repository public or accepting external contributions.

@@ -2,10 +2,16 @@
   "name": "notesbuddy",
   "private": true,
   "version": "0.1.0",
+  "description": "A private, local-first meeting capture and notes prototype.",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "node server.mjs",
     "build": "node build.mjs",
-    "preview": "node server.mjs dist"
+    "preview": "node server.mjs dist/client",
+    "check": "node --check src/app.js && node --check build.mjs && node --check server.mjs && node --check site-worker.mjs && npm run build && node --check dist/client/src/app.js && git diff --exit-code -- dist",
+    "test": "npm run check"
   }
 }

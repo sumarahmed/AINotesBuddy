@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose an improvement to NotesBuddy
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the desired behavior without prescribing implementation unless necessary.
+    validations:
+      required: true
+
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and data impact
+      description: Explain whether this changes permissions, storage, processing location, retention, or external services.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Project principles
+      options:
+        - label: The request preserves honest transcript and processing behavior.
+          required: true
+        - label: The request identifies any new dependency or service.
+          required: true
