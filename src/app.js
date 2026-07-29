@@ -1,4 +1,4 @@
-import { CAPTURE_SCRIPT, INITIAL_MEETINGS } from "./data.js";
+const { CAPTURE_SCRIPT, INITIAL_MEETINGS } = globalThis.NOTESBUDDY_DATA;
 
 const app = document.getElementById("root");
 

@@ -1,4 +1,5 @@
-export const CAPTURE_SCRIPT = [
+(() => {
+const CAPTURE_SCRIPT = [
   {
     id: "live-1",
     speaker: "You",
@@ -49,7 +50,7 @@ export const CAPTURE_SCRIPT = [
   },
 ];
 
-export const INITIAL_MEETINGS = [
+const INITIAL_MEETINGS = [
   {
     id: "product-weekly-0729",
     title: "Product & engineering weekly",
@@ -351,3 +352,9 @@ export const INITIAL_MEETINGS = [
     notes: "",
   },
 ];
+
+globalThis.NOTESBUDDY_DATA = {
+  CAPTURE_SCRIPT,
+  INITIAL_MEETINGS,
+};
+})();

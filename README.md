@@ -22,6 +22,9 @@ keeps that boundary explicit while providing a realistic end-to-end product demo
 
 ## Run locally
 
+You can double-click `index.html` to run the app directly from disk, or use the
+local server:
+
 ```bash
 npm run dev
 ```
