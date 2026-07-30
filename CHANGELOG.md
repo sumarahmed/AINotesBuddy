@@ -67,6 +67,10 @@ but does not yet publish semantic-versioned releases.
 
 ### Fixed
 
+- Kept unnecessary Torch source, test, and metadata trees out of the Windows
+  installer and verified model-inclusive packages during their self-test
+- Decode meeting audio into an in-memory waveform before diarization so the
+  desktop companion does not depend on a system FFmpeg/TorchCodec installation
 - Bound native browser `fetch` correctly so local companion health/jobs run
 - Preserved transcript text longer than the 80-character speaker-name limit
 - Added modern private-network preflight handling for HTTPS-to-loopback pairing

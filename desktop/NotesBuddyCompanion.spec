@@ -22,17 +22,10 @@ for package in (
     "ctranslate2",
     "faster_whisper",
     "huggingface_hub",
-    "numpy",
-    "onnxruntime",
     "PIL",
     "pyannote.audio",
     "pystray",
-    "scipy",
-    "sklearn",
     "soundfile",
-    "torch",
-    "torchaudio",
-    "torchcodec",
 ):
     try:
         package_datas, package_binaries, package_hiddenimports = collect_all(package)

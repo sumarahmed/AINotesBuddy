@@ -45,6 +45,12 @@ class DesktopUtilityTests(unittest.TestCase):
         self.assertEqual(parsed.port, 9876)
         self.assertTrue(parsed.empty_engine)
 
+    def test_cli_can_require_models_during_packaged_self_test(self) -> None:
+        parsed = parse_arguments(["--self-test", "--require-models"])
+
+        self.assertTrue(parsed.self_test)
+        self.assertTrue(parsed.require_models)
+
 
 if __name__ == "__main__":
     unittest.main()
