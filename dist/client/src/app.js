@@ -136,7 +136,7 @@ const runtimeTranscriptionEndpoint =
     : runtimeHostedTranscriptionEndpoint;
 const companionDownloadUrl = String(
   runtimeConfig.companionDownloadUrl ||
-    "https://github.com/sumarahmed/AINotesBuddy/releases/latest",
+    "https://github.com/sumarahmed/AINotesBuddy/releases",
 );
 const storedSettings = loadStored("notesbuddy-settings", {});
 const defaultSettings = {

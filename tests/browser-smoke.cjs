@@ -344,7 +344,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   const localEndpoint = "http://127.0.0.1:8765";
   const hostedEndpoint = "https://transcribe.notesbuddy.test";
   const downloadUrl =
-    "https://github.com/sumarahmed/AINotesBuddy/releases/latest";
+    "https://github.com/sumarahmed/AINotesBuddy/releases";
   const calls = [];
   let hostedCalls = 0;
 
@@ -485,7 +485,7 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${unavailableEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "https://github.com/sumarahmed/AINotesBuddy/releases/latest" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${unavailableEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "https://github.com/sumarahmed/AINotesBuddy/releases" });`,
     });
   });
   await page.route(`${unavailableEndpoint}/v1/**`, async (route) => {

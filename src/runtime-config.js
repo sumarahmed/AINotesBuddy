@@ -5,5 +5,5 @@ globalThis.NotesBuddyRuntime = Object.freeze({
   transcriptionEndpoint:
     "https://sumarahmed--notesbuddy-public-transcription-public-api.modal.run",
   companionDownloadUrl:
-    "https://github.com/sumarahmed/AINotesBuddy/releases/latest",
+    "https://github.com/sumarahmed/AINotesBuddy/releases",
 });
