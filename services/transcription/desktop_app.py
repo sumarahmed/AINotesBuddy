@@ -6,6 +6,7 @@ import argparse
 import importlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -16,7 +17,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-COMPANION_VERSION = "0.1.1"
+COMPANION_VERSION = "0.1.2"
 DEFAULT_PORT = 8765
 DEFAULT_WEB_URL = "https://sumarahmed.github.io/AINotesBuddy/"
 AUTOSTART_VALUE_NAME = "NotesBuddyCompanion"
@@ -142,6 +143,7 @@ class CompanionServer:
                 port=self.port,
                 access_log=False,
                 log_level="warning",
+                log_config=None,
             )
             self.server = uvicorn.Server(config)
             self.server.install_signal_handlers = lambda: None
@@ -183,6 +185,7 @@ class DesktopWindow:
         self,
         *,
         server: CompanionServer,
+        server_result: str,
         web_url: str,
         background: bool,
     ) -> None:
@@ -209,11 +212,7 @@ class DesktopWindow:
         self.autostart = tk.BooleanVar(value=autostart_enabled())
         self._build()
         self._start_tray()
-        threading.Thread(
-            target=self._start_server,
-            name="notesbuddy-startup",
-            daemon=True,
-        ).start()
+        self.root.after(0, self._show_server_result, server_result)
 
         if background:
             if self.tray_icon is not None:
@@ -281,10 +280,6 @@ class DesktopWindow:
             foreground="#5b6470",
             wraplength=490,
         ).pack(anchor="w", pady=(18, 0))
-
-    def _start_server(self) -> None:
-        result = self.server.start()
-        self.root.after(0, self._show_server_result, result)
 
     def _show_server_result(self, result: str) -> None:
         if result == "started":
@@ -386,7 +381,50 @@ class DesktopWindow:
         self.root.mainloop()
 
 
-def self_test(*, require_models: bool = False) -> dict[str, Any]:
+def _available_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.bind(("127.0.0.1", 0))
+        return int(server_socket.getsockname()[1])
+
+
+def self_test(
+    *,
+    require_models: bool = False,
+    require_server: bool = False,
+) -> dict[str, Any]:
+    server_check: dict[str, Any] | None = None
+    if require_server:
+        companion_server = CompanionServer(
+            port=_available_loopback_port(),
+            empty_engine=True,
+        )
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        try:
+            sys.stdout = None
+            sys.stderr = None
+            server_result = companion_server.start()
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+        try:
+            if server_result != "started":
+                raise RuntimeError(
+                    companion_server.error
+                    or "The packaged loopback API did not start."
+                )
+            discovery = probe_companion(companion_server.port)
+            if discovery is None:
+                raise RuntimeError(
+                    "The packaged loopback API started but did not answer discovery."
+                )
+            server_check = {
+                "status": "ok",
+                "host": "127.0.0.1",
+                "apiVersion": discovery.get("apiVersion"),
+            }
+        finally:
+            companion_server.stop()
+
     from notesbuddy_transcription.engine import EmptyEngine, LocalDiarizationEngine
     from notesbuddy_transcription.server import create_app
 
@@ -413,6 +451,8 @@ def self_test(*, require_models: bool = False) -> dict[str, Any]:
         "version": COMPANION_VERSION,
         "routes": sorted(expected),
     }
+    if server_check is not None:
+        result["server"] = server_check
     if require_models:
         for package in (
             "faster_whisper",
@@ -456,6 +496,11 @@ def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Require bundled runtime packages and offline models during self-test.",
     )
+    parser.add_argument(
+        "--require-server",
+        action="store_true",
+        help="Start and probe the packaged loopback API during self-test.",
+    )
     parser.add_argument("--version", action="store_true")
     parsed = parser.parse_args(arguments)
     try:
@@ -471,7 +516,15 @@ def main(arguments: list[str] | None = None) -> int:
         print(COMPANION_VERSION)
         return 0
     if parsed.self_test:
-        print(json.dumps(self_test(require_models=parsed.require_models), indent=2))
+        print(
+            json.dumps(
+                self_test(
+                    require_models=parsed.require_models,
+                    require_server=parsed.require_server,
+                ),
+                indent=2,
+            )
+        )
         return 0
 
     server = CompanionServer(
@@ -481,9 +534,11 @@ def main(arguments: list[str] | None = None) -> int:
     if parsed.show_token:
         print(server.token)
         return 0
+    server_result = server.start()
 
     window = DesktopWindow(
         server=server,
+        server_result=server_result,
         web_url=parsed.web_url,
         background=parsed.background,
     )
