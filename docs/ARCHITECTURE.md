@@ -1,9 +1,9 @@
 # Architecture
 
-NotesBuddy consists of a dependency-free static browser client and an optional
-Python companion running on the same computer. The client owns capture, browser
-storage, playback, and UI. The companion owns speech-to-text and speaker
-diarization.
+NotesBuddy consists of a dependency-free static browser client and a Python
+transcription service that can run as a paired loopback companion or a hosted
+anonymous API. The client owns capture, browser storage, playback, and UI. The
+selected service owns speech-to-text and speaker diarization.
 
 ## Design goals
 
@@ -14,6 +14,8 @@ diarization.
 - Keep controls stable during recording and playback.
 - Preserve legacy single-recording meetings.
 - Avoid placing model credentials in the static client.
+- Keep local pairing and hosted access behind one browser job contract.
+- Give hosted prototype jobs short-lived ownership and bounded compute.
 
 ## Runtime overview
 
@@ -34,9 +36,12 @@ flowchart LR
     BrowserSpeech --> LocalStorage["localStorage meeting record"]
 
     IDB --> Client["NotesBuddy client"]
-    Client -->|"Explicit authenticated job"| Companion["127.0.0.1 companion"]
+    Client -->|"Pairing token"| Companion["127.0.0.1 companion"]
+    Client -->|"Anonymous session + HTTPS"| Hosted["Hosted API (optional)"]
     Companion --> Whisper["faster-whisper words"]
+    Hosted --> Whisper
     Companion --> Pyannote["pyannote remote turns"]
+    Hosted --> Pyannote
     Whisper --> Alignment["Timestamp alignment + echo de-duplication"]
     Pyannote --> Alignment
     Alignment --> Client
@@ -47,8 +52,14 @@ flowchart LR
 
 ### `index.html`
 
-Direct-launch entry point. It loads `src/meeting-audio.js` before `src/app.js`
-using relative paths, so both HTTP and `file://` launch paths work.
+Direct-launch entry point. It loads `src/runtime-config.js`, then
+`src/meeting-audio.js`, then `src/app.js` using relative paths, so both HTTP and
+`file://` launch paths work.
+
+### `src/runtime-config.js`
+
+Contains public, non-secret deployment configuration: local/hosted mode and the
+transcription endpoint. Credentials must never be placed in this file.
 
 ### `src/meeting-audio.js`
 
@@ -60,7 +71,7 @@ Framework-independent browser module containing:
 - cross-source echo de-duplication;
 - speaker rename propagation;
 - extractive brief generation;
-- authenticated local-companion API client.
+- local-pairing and hosted anonymous-session API client.
 
 The module uses a classic global (`NotesBuddyMeetingAudio`) so direct local-file
 launch does not depend on ES module CORS behavior. Its pure functions are tested
@@ -136,7 +147,7 @@ ended, inserts a persistent warning, and keeps the microphone path active.
 | --- | --- |
 | `notesbuddy-profile` | Local profile ID, name, initials, timestamps |
 | `notesbuddy-meetings` | Meetings, asset metadata, speakers, transcript, notes, actions |
-| `notesbuddy-settings` | Capture defaults, companion endpoint/token, processing preferences |
+| `notesbuddy-settings` | Capture defaults, service mode/endpoint, local token, processing preferences |
 
 ### IndexedDB
 
@@ -156,9 +167,11 @@ Deletion enumerates and removes every unique asset ID.
 Profile, meeting, import, transcript, and job identifiers use UUIDs. A profile
 ID is not authentication or a server session.
 
-## Local companion
+## Transcription service
 
-The companion lives under `services/transcription/`.
+The shared engine and API live under `services/transcription/`.
+
+### Local security boundary
 
 ### Security boundary
 
@@ -191,6 +204,24 @@ The companion lives under `services/transcription/`.
 
 Cancellation sets a cooperative event. Native model work may finish its current
 operation before observing it, but terminal cleanup always runs.
+
+### Hosted anonymous boundary
+
+`NOTESBUDDY_ACCESS_MODE=anonymous` changes authentication without changing the
+job/model contract:
+
+1. `POST /v1/sessions` issues a random expiring browser-session token.
+2. Only its SHA-256 digest is kept by the service.
+3. Job creation reserves bounded compute for that session.
+4. Every read/cancel request must present the owning session token.
+5. Requests for another session's job return `404`.
+6. Session creation is rate-limited by a hashed client network key.
+
+The Modal package runs one autoscaled GPU container so the in-memory session and
+job stores remain coherent during the prototype. Model weights are cached in a
+persistent volume; meeting audio and transcript results are not written there.
+Production horizontal scaling requires durable sessions, queues, job ownership,
+and result storage.
 
 ### Model adapter
 
@@ -235,9 +266,11 @@ flowchart LR
     Source["index.html + src/"] --> Build["npm run build"]
     Build --> Client["dist/client"]
     Client --> StaticHost["Any HTTPS static host"]
-    Companion["Local Python companion"] -. "not deployed with client" .-> StaticHost
+    Local["Local Python companion"] -. "local mode" .-> StaticHost
+    Hosted["Hosted Python API"] -. "hosted mode" .-> StaticHost
 ```
 
-The companion is never part of the static bundle. A hosted static page talks
-only to the explicitly paired `127.0.0.1` process. This feature branch does not
-merge or deploy `main`.
+The Python service is never part of the static bundle. Local mode talks only to
+the explicitly paired `127.0.0.1` process. Hosted mode talks to the HTTPS
+endpoint in `runtime-config.js`; the model token remains in the hosting
+provider's secret manager.

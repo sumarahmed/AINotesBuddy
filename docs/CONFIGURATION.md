@@ -16,8 +16,13 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | Automatically identify speakers | Off | Start the paired local job after saving a recording |
 | Create meeting brief | On | Build an extractive brief only from returned transcript segments |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
-| Companion URL | `http://127.0.0.1:8765` | Loopback-only local API |
-| Pairing token | Empty | Must be copied from the local companion |
+| Transcription mode | From `src/runtime-config.js` | `local` or centrally managed `hosted` |
+| Companion URL | `http://127.0.0.1:8765` in local mode | Loopback-only local API |
+| Pairing token | Empty in local mode | Must be copied from the local companion |
+
+In hosted mode, the runtime endpoint is controlled by the deployment and the
+URL/token inputs are hidden. Hosted users receive an expiring session
+automatically; they never configure the owner's model token.
 
 Changing a source toggle while capture is already running does not mutate live
 streams. It applies to the next capture.
@@ -29,6 +34,8 @@ streams. It applies to the next capture.
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
+| Runtime transcription mode | `local` | Public non-secret setting in `src/runtime-config.js` |
+| Runtime transcription endpoint | `http://127.0.0.1:8765` | Replaced with the hosted HTTPS endpoint when activated |
 | Storage keys | `notesbuddy-profile`, `notesbuddy-meetings`, `notesbuddy-settings`, `notesbuddy-audio` | Namespace isolation in `src/app.js` |
 | IndexedDB schema | Version 1, `recordings` store | Blob persistence in `openAudioDatabase()` |
 | Recorder preference | Opus WebM, WebM, then MP4 | First browser-supported type in `preferredRecordingType()` |
@@ -76,8 +83,18 @@ same NotesBuddy data.
 | `NOTESBUDDY_MAX_WORKERS` | `1` (clamped 1–2) | Concurrent model jobs |
 | `NOTESBUDDY_MAX_JOBS` | `64` (clamped 4–256) | Maximum in-memory active/recent job records |
 | `NOTESBUDDY_JOB_RETENTION_SECONDS` | `3600` (clamped 60–86400) | Recent terminal result retention in process memory |
-| `NOTESBUDDY_MAX_SOURCE_BYTES` | 2 GiB per source | Multipart source limit |
+| `NOTESBUDDY_MAX_SOURCE_BYTES` | 2 GiB local / 250 MiB hosted | Multipart per-source limit |
+| `NOTESBUDDY_MAX_TOTAL_UPLOAD_BYTES` | 6 GiB local / 400 MiB hosted | Combined multipart limit |
+| `NOTESBUDDY_MAX_DURATION_MS` | 7200000 | Declared recording-duration limit |
 | `NOTESBUDDY_TRANSCRIPTION_ENGINE` | `local` | `empty` allowed only for smoke testing |
+| `NOTESBUDDY_ACCESS_MODE` | `local` | `local` pairing or `anonymous` hosted sessions |
+| `NOTESBUDDY_SESSION_TTL_SECONDS` | 86400 | Hosted anonymous-session lifetime |
+| `NOTESBUDDY_MAX_SESSIONS` | 2048 | Maximum hosted sessions retained in process memory |
+| `NOTESBUDDY_SESSION_ISSUE_WINDOW_SECONDS` | 3600 | Session-issuance quota window |
+| `NOTESBUDDY_MAX_SESSIONS_PER_CLIENT` | 10 | Session issuances per hashed network key/window |
+| `NOTESBUDDY_JOB_LIMIT_WINDOW_SECONDS` | 3600 | Hosted per-session job quota window |
+| `NOTESBUDDY_MAX_JOBS_PER_SESSION` | 3 | Hosted job starts per session/window |
+| `NOTESBUDDY_MAX_ACTIVE_JOBS_PER_SESSION` | 1 | Simultaneous jobs per hosted session |
 
 The launcher intentionally binds to `127.0.0.1`; there is no environment
 setting to expose a LAN host. `--port` defaults to 8765.
@@ -87,15 +104,16 @@ values only; use a private process environment or launcher.
 
 ## Deployment configuration
 
-The static client can be served from any HTTPS host. For a new host, add its
-exact origin to `NOTESBUDDY_ALLOWED_ORIGINS` on each user's local companion.
-Never put the pairing token or `HF_TOKEN` in static host variables or client
-source.
+The static client can be served from any HTTPS host. For local mode on a new
+host, add its exact origin to `NOTESBUDDY_ALLOWED_ORIGINS` on each user's local
+companion. For hosted mode, add the origin once to the hosted API and set its
+public HTTPS URL in `src/runtime-config.js`. Never put a pairing token or
+`HF_TOKEN` in static host variables or client source.
 
 The existing `.openai/hosting.json` project ID and GitHub Pages workflows are
-repository deployment metadata. This feature branch does not invoke them. A
-future deployment destination is a separate decision.
+repository deployment metadata. Hosted model deployment is separate from the
+static GitHub Pages workflow.
 
-True server-backed multi-user sharing would require authentication,
-authorization, encrypted transport/storage, and per-user meeting ownership.
-Those are intentionally outside this local browser profile model.
+Anonymous hosted sessions isolate prototype jobs but are not user accounts.
+Subscription operation requires authentication, entitlements, durable quotas,
+encrypted lifecycle storage, and per-user meeting ownership.

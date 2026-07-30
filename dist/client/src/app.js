@@ -1,5 +1,6 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
+const runtimeConfig = globalThis.NotesBuddyRuntime || {};
 
 if (!MeetingAudio) {
   throw new Error("NotesBuddy meeting-audio module failed to load.");
@@ -112,24 +113,45 @@ initialMeetings = initialMeetings.map((meeting) =>
   MeetingAudio.ensureMeetingSpeakers(meeting, initialProfile),
 );
 
+const runtimeTranscriptionMode =
+  runtimeConfig.transcriptionMode === "hosted" ? "hosted" : "local";
+const runtimeTranscriptionEndpoint = String(
+  runtimeConfig.transcriptionEndpoint ||
+    (runtimeTranscriptionMode === "hosted"
+      ? ""
+      : "http://127.0.0.1:8765"),
+).replace(/\/+$/, "");
+const storedSettings = loadStored("notesbuddy-settings", {});
 const defaultSettings = {
   autoSummarize: true,
   keepAudio: true,
   systemAudio: true,
   browserTranscription: true,
   autoTranscribe: false,
-  transcriptionEndpoint: "http://127.0.0.1:8765",
+  transcriptionMode: runtimeTranscriptionMode,
+  transcriptionEndpoint: runtimeTranscriptionEndpoint,
   transcriptionToken: "",
+};
+const initialSettings = {
+  ...defaultSettings,
+  ...storedSettings,
+  transcriptionMode: runtimeTranscriptionMode,
+  transcriptionEndpoint:
+    runtimeTranscriptionMode === "hosted"
+      ? runtimeTranscriptionEndpoint
+      : storedSettings.transcriptionEndpoint ||
+        defaultSettings.transcriptionEndpoint,
+  transcriptionToken:
+    runtimeTranscriptionMode === "hosted"
+      ? ""
+      : storedSettings.transcriptionToken || "",
 };
 
 const state = {
   meetings: initialMeetings,
   profile: initialProfile,
   profileOnboardingOpen: !initialProfile,
-  settings: {
-    ...defaultSettings,
-    ...loadStored("notesbuddy-settings", defaultSettings),
-  },
+  settings: initialSettings,
   view: "home",
   selectedMeetingId: initialMeetings[0]?.id || null,
   tab: "summary",
@@ -296,6 +318,10 @@ function currentUserInitials() {
 
 function currentUserFirstName() {
   return currentUserName().split(/\s+/)[0];
+}
+
+function usesHostedTranscription() {
+  return state.settings.transcriptionMode === "hosted";
 }
 
 function greetingForTime(date = new Date()) {
@@ -720,11 +746,17 @@ function transcriptionWorkspace(meeting) {
       : status === "failed"
         ? "Retry speaker transcription"
         : "Transcribe and identify speakers";
+  const serviceDescription = usesHostedTranscription()
+    ? "Audio is sent to the public transcription service for this job and removed from its temporary storage after processing."
+    : "Uses the paired local companion. Audio is processed on this computer and temporary service files are removed.";
+  const failureDescription = usesHostedTranscription()
+    ? "The public transcription service could not complete this job."
+    : "The local companion could not complete this job.";
   return `<section class="transcription-workspace transcription-workspace--${escapeHtml(status)}">
     <div>
       <span class="eyebrow">Speaker transcription</span>
       <h3>${escapeHtml(statusLabel)}</h3>
-      <p>${status === "completed" ? `${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"} · ${(meeting.speakers || []).length} speaker${(meeting.speakers || []).length === 1 ? "" : "s"}` : status === "failed" ? escapeHtml(meeting.transcription?.error || "The local companion could not complete this job.") : "Uses the paired local companion. Audio is processed on this computer and temporary service files are removed."}</p>
+      <p>${status === "completed" ? `${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"} · ${(meeting.speakers || []).length} speaker${(meeting.speakers || []).length === 1 ? "" : "s"}` : status === "failed" ? escapeHtml(meeting.transcription?.error || failureDescription) : serviceDescription}</p>
     </div>
     <div class="transcription-workspace__actions">
       ${isRunning ? `<button type="button" class="button button--quiet" data-action="cancel-transcription">Cancel</button>` : ""}
@@ -890,23 +922,37 @@ function meetingView(meeting) {
 function settingsPanel() {
   const toggle = (key, title, description) =>
     `<button type="button" class="setting-toggle" data-action="setting-toggle" data-id="${key}" aria-pressed="${state.settings[key]}"><div><strong>${title}</strong><span>${description}</span></div><i class="${state.settings[key] ? "toggle--on" : ""}"><span></span></i></button>`;
-  return `<div class="drawer-backdrop" data-action="close-settings">
-    <aside class="settings-drawer" data-panel="settings">
-      <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
-      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>Local recording</strong><p>Audio and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.</p></div></section>
-      <section class="settings-section">
-        <span class="eyebrow">Local profile</span>
-        <label><span>Your name</span><input data-input="profile-name" value="${escapeHtml(currentUserName())}" maxlength="80" autocomplete="name" aria-label="Your name"></label>
-        <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
-      </section>
-      <section class="settings-section">
+  const hosted = usesHostedTranscription();
+  const privacyMessage = hosted
+    ? "Recordings stay in this browser until transcription is requested. Selected audio is then sent securely to the public service and removed from its temporary storage after processing."
+    : "Audio and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.";
+  const transcriptionSettings = hosted
+    ? `<section class="settings-section">
+        <span class="eyebrow">Online speaker transcription</span>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(state.transcriptionServiceStatus)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test service</button></div>
+        <p class="settings-help">No installation or token is required. Anonymous sessions are temporary and public usage limits apply.</p>
+      </section>`
+    : `<section class="settings-section">
         <span class="eyebrow">Local speaker transcription</span>
         <label><span>Companion URL</span><input data-setting="transcriptionEndpoint" value="${escapeHtml(state.settings.transcriptionEndpoint)}" inputmode="url" spellcheck="false" aria-label="Transcription companion URL"></label>
         <label><span>Pairing token</span><input data-setting="transcriptionToken" value="${escapeHtml(state.settings.transcriptionToken)}" type="password" autocomplete="off" spellcheck="false" aria-label="Transcription pairing token"></label>
         <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(state.transcriptionServiceStatus)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
         <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
+      </section>`;
+  const autoTranscribeDescription = hosted
+    ? "Send saved source tracks to the public transcription service after capture."
+    : "Send saved local tracks to the paired localhost companion after capture.";
+  return `<div class="drawer-backdrop" data-action="close-settings">
+    <aside class="settings-drawer" data-panel="settings">
+      <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
+      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>${hosted ? "Local recording · online transcription" : "Local recording"}</strong><p>${privacyMessage}</p></div></section>
+      <section class="settings-section">
+        <span class="eyebrow">Local profile</span>
+        <label><span>Your name</span><input data-input="profile-name" value="${escapeHtml(currentUserName())}" maxlength="80" autocomplete="name" aria-label="Your name"></label>
+        <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
       </section>
-      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Ask for a tab, window, or screen audio source when capture starts.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised microphone speech as a draft; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", "Send saved local tracks to the paired localhost companion after capture.")}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
+      ${transcriptionSettings}
+      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Ask for a tab, window, or screen audio source when capture starts.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised microphone speech as a draft; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
   </div>`;
@@ -1901,7 +1947,10 @@ function selectedMeeting() {
 function createTranscriptionClient() {
   return new MeetingAudio.TranscriptionClient({
     endpoint: state.settings.transcriptionEndpoint,
-    token: state.settings.transcriptionToken,
+    mode: state.settings.transcriptionMode,
+    token: usesHostedTranscription()
+      ? ""
+      : state.settings.transcriptionToken,
   });
 }
 
@@ -1924,15 +1973,23 @@ async function testTranscriptionService() {
     state.transcriptionServiceStatus =
       health?.status === "ok" ? "connected" : "unavailable";
     showToast(
-      "Transcription companion connected",
-      `${health?.engine || "Local engine"} is ready on this computer.`,
+      usesHostedTranscription()
+        ? "Public transcription service connected"
+        : "Transcription companion connected",
+      usesHostedTranscription()
+        ? `${health?.engine || "Transcription engine"} is ready. No user token is required.`
+        : `${health?.engine || "Local engine"} is ready on this computer.`,
     );
   } catch (error) {
     state.transcriptionServiceStatus = "unavailable";
     showToast(
-      "Companion connection failed",
+      usesHostedTranscription()
+        ? "Public transcription service unavailable"
+        : "Companion connection failed",
       error?.message ||
-        "Start the local service and verify its URL and pairing token.",
+        (usesHostedTranscription()
+          ? "Try again shortly. The service may be starting."
+          : "Start the local service and verify its URL and pairing token."),
     );
   }
   render();
@@ -1977,7 +2034,9 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
         meetingId: meeting.id,
         captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
         captureClockVersion: meeting.captureClockVersion || 1,
-        localSpeakerName: currentUserName(),
+        ...(usesHostedTranscription()
+          ? {}
+          : { localSpeakerName: currentUserName() }),
         durationMs: Math.max(
           0,
           Number(meeting.durationSeconds || 0) * 1000,
@@ -1988,7 +2047,11 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
       ...meeting.transcription,
       status: created.status || "queued",
       jobId: created.jobId,
-      provider: created.engine || "local-companion",
+      provider:
+        created.engine ||
+        (usesHostedTranscription()
+          ? "public-transcription-service"
+          : "local-companion"),
     };
     save();
     render();
@@ -2009,21 +2072,21 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
       ? brief.overview
       : meeting.transcript.length
         ? `Speaker transcription identified ${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} across ${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"}.`
-        : "The local transcription companion did not return speech text, so NotesBuddy did not generate a transcript.";
+        : `The ${usesHostedTranscription() ? "public transcription service" : "local transcription companion"} did not return speech text, so NotesBuddy did not generate a transcript.`;
     meeting.highlights = brief
       ? brief.highlights
       : meeting.transcript.length
         ? meeting.transcript.slice(0, 3).map((segment) => segment.text)
         : [
             "The original recordings remain available for playback.",
-            "No speech text was returned by the local companion.",
+            `No speech text was returned by the ${usesHostedTranscription() ? "public service" : "local companion"}.`,
             "No sample or fabricated transcript was added.",
           ];
     save();
     render();
     showToast(
       "Speaker transcript ready",
-      `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified locally.`,
+      `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified ${usesHostedTranscription() ? "by the public service" : "locally"}.`,
     );
   } catch (error) {
     const cancelled =

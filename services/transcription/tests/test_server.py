@@ -122,6 +122,101 @@ class LocalApiTests(unittest.TestCase):
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test dependencies are not installed")
+class AnonymousHostedApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from notesbuddy_transcription.server import create_app
+
+        self.client = TestClient(
+            create_app(
+                engine=EmptyEngine(),
+                authentication_mode="anonymous",
+                allowed_origins=["https://sumarahmed.github.io"],
+            )
+        )
+
+    def _new_session(self) -> dict[str, str]:
+        response = self.client.post("/v1/sessions")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        return {
+            "X-NotesBuddy-Session-Token": response.json()["sessionToken"],
+        }
+
+    def _wait_for_terminal(self, job_id: str, headers: dict[str, str]) -> dict:
+        for _attempt in range(100):
+            response = self.client.get(
+                f"/v1/transcriptions/{job_id}",
+                headers=headers,
+            )
+            payload = response.json()
+            if payload["status"] in {"completed", "failed", "cancelled"}:
+                return payload
+            time.sleep(0.01)
+        self.fail("Hosted transcription job did not reach a terminal state")
+
+    def test_health_is_public_but_jobs_require_anonymous_session(self) -> None:
+        health = self.client.get("/v1/health")
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["access"], "anonymous-session")
+
+        missing_session = self.client.post(
+            "/v1/transcriptions",
+            files={"mixed": ("mixed.webm", b"audio", "audio/webm")},
+            data={"metadata": "{}"},
+        )
+        self.assertEqual(missing_session.status_code, 401)
+
+        too_long = self.client.post(
+            "/v1/transcriptions",
+            headers=self._new_session(),
+            files={"mixed": ("mixed.webm", b"audio", "audio/webm")},
+            data={"metadata": '{"durationMs":7200001}'},
+        )
+        self.assertEqual(too_long.status_code, 413)
+
+    def test_session_owns_job_and_other_sessions_cannot_read_it(self) -> None:
+        owner_headers = self._new_session()
+        other_headers = self._new_session()
+        created = self.client.post(
+            "/v1/transcriptions",
+            headers=owner_headers,
+            files={"meeting": ("meeting.webm", b"remote-voice", "audio/webm")},
+            data={"metadata": '{"meetingId":"public-test"}'},
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.headers.get("cache-control"), "no-store")
+        job_id = created.json()["jobId"]
+
+        hidden = self.client.get(
+            f"/v1/transcriptions/{job_id}",
+            headers=other_headers,
+        )
+        self.assertEqual(hidden.status_code, 404)
+
+        completed = self._wait_for_terminal(job_id, owner_headers)
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["segments"], [])
+
+    def test_cors_allows_public_site_and_session_header(self) -> None:
+        allowed = self.client.options(
+            "/v1/sessions",
+            headers={
+                "Origin": "https://sumarahmed.github.io",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-NotesBuddy-Session-Token",
+            },
+        )
+        self.assertEqual(
+            allowed.headers.get("access-control-allow-origin"),
+            "https://sumarahmed.github.io",
+        )
+        self.assertIn(
+            "x-notesbuddy-session-token",
+            allowed.headers.get("access-control-allow-headers", "").lower(),
+        )
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test dependencies are not installed")
 class CancellationTests(unittest.TestCase):
     def test_cancellation_signals_engine_and_removes_temporary_audio(self) -> None:
         from notesbuddy_transcription.server import create_app

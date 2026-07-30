@@ -9,6 +9,14 @@ but does not yet publish semantic-versioned releases.
 
 ### Added
 
+- Hosted anonymous transcription mode with expiring browser sessions,
+  per-session job ownership, hashed client rate-limit keys, and bounded quotas
+- Modal serverless GPU deployment package, protected Hugging Face secret, and
+  persistent model-cache volume
+- Public runtime configuration that switches local/hosted behavior without
+  putting credentials in the static client
+- Hosted API, browser-client, CORS, ownership, and UI integration tests
+- Hosted processing, operations, privacy, and subscription-migration guide
 - Synchronized microphone, shared meeting-audio, and mixed recording sources
 - Source-specific IndexedDB storage, playback, download, reload, and deletion
 - Meeting-only capture and microphone fallback when display sharing is denied
@@ -29,6 +37,10 @@ but does not yet publish semantic-versioned releases.
 
 ### Changed
 
+- Settings hide the local URL/pairing fields in hosted mode and disclose when
+  transcription sends selected audio to the public processing service
+- Transcription API supports either local pairing or anonymous hosted access
+  behind the same job/model contract
 - Meeting briefs are extractive and contain only real transcript segment text
 - Profile renames synchronize local speaker metadata and owned follow-ups
 - Imported mixed audio can be sent to the local companion for diarization

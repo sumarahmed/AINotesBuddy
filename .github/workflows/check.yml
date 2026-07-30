@@ -56,4 +56,6 @@ jobs:
         run: python -m pip install -r services/transcription/requirements-test.txt
 
       - name: Validate timestamp alignment and local API
-        run: python -m unittest discover -s services/transcription/tests -v
+        run: |
+          python -m py_compile services/transcription/modal_app.py
+          python -m unittest discover -s services/transcription/tests -v

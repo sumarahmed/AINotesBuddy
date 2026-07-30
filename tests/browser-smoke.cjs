@@ -225,6 +225,119 @@ async function playSelectedRecording(page, source) {
   );
 }
 
+async function runHostedClientWorkflow(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const hostedEndpoint = "https://transcribe.notesbuddy.test";
+  let healthCalls = 0;
+  let sessionCalls = 0;
+  let jobCalls = 0;
+  let receivedSessionToken = "";
+
+  await page.route("**/src/runtime-config.js", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript; charset=utf-8",
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hosted", transcriptionEndpoint: "${hostedEndpoint}" });`,
+    });
+  });
+  await page.route(`${hostedEndpoint}/v1/**`, async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const headers = {
+      "access-control-allow-origin": baseUrl,
+      "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
+      "access-control-allow-headers":
+        "Content-Type,X-NotesBuddy-Session-Token",
+      "content-type": "application/json",
+    };
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers, body: "" });
+      return;
+    }
+    if (pathname === "/v1/health") {
+      healthCalls += 1;
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          status: "ok",
+          access: "anonymous-session",
+          engine: "hosted-test",
+        }),
+      });
+      return;
+    }
+    if (pathname === "/v1/sessions") {
+      sessionCalls += 1;
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          sessionToken: "browser-anonymous-session",
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        }),
+      });
+      return;
+    }
+    if (pathname === "/v1/transcriptions") {
+      jobCalls += 1;
+      receivedSessionToken =
+        request.headers()["x-notesbuddy-session-token"] || "";
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          jobId: "job-hosted-browser",
+          status: "queued",
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, headers, body: "{}" });
+  });
+
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Hosted Browser Tester");
+  await page.locator("[data-action='settings']").first().click();
+  await page.locator("[data-panel='settings']").waitFor();
+  await page
+    .locator(".settings-section", { hasText: "Online speaker transcription" })
+    .waitFor();
+  assert.equal(
+    await page.locator("[data-setting='transcriptionToken']").count(),
+    0,
+    "hosted users must not see a pairing-token field",
+  );
+  assert.equal(
+    await page.locator("[data-setting='transcriptionEndpoint']").count(),
+    0,
+    "hosted users must not configure a service URL",
+  );
+  await page.locator("[data-action='test-transcription-service']").click();
+  await page
+    .locator(".service-check__status--connected")
+    .waitFor({ timeout: 5000 });
+  assert.equal(healthCalls, 1);
+  assert.equal(sessionCalls, 0, "health checks should not consume a session");
+
+  const created = await page.evaluate(async ({ endpoint }) => {
+    const client = new globalThis.NotesBuddyMeetingAudio.TranscriptionClient({
+      endpoint,
+      mode: "hosted",
+    });
+    return client.createJob({
+      meetingBlob: new Blob(["remote audio"], { type: "audio/webm" }),
+      metadata: { meetingId: "hosted-browser" },
+    });
+  }, { endpoint: hostedEndpoint });
+  assert.equal(created.jobId, "job-hosted-browser");
+  assert.equal(sessionCalls, 1);
+  assert.equal(jobCalls, 1);
+  assert.equal(receivedSessionToken, "browser-anonymous-session");
+  await context.close();
+}
+
 async function runMainWorkflow(browser, baseUrl) {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
@@ -645,8 +758,9 @@ async function runDirectFileLoad(browser) {
     await runMeetingOnlyCapture(browser, baseUrl);
     await runUnexpectedMeetingStop(browser, baseUrl);
     await runDirectFileLoad(browser);
+    await runHostedClientWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, transcription, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, local and hosted transcription clients, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

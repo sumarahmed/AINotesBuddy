@@ -3,13 +3,13 @@
 NotesBuddy is a local-first meeting recorder and notes workspace. The browser
 client can capture your microphone and supported meeting audio as synchronized
 tracks, save them in the current browser profile, play each source back, and
-send them to an optional local companion for speech-to-text and speaker
-diarization.
+send them to either an optional local companion or a centrally hosted service
+for speech-to-text and speaker diarization.
 
-> **Project status:** Functional prototype. This implementation is on
-> `feature/meeting-audio-diarization`; it does not change or deploy `main`.
-> NotesBuddy is an independent project inspired by local-first meeting tools
-> such as Meetily and is not affiliated with Meetily.
+> **Project status:** Functional prototype. The deployed static client uses the
+> local mode until a hosted API endpoint is activated. NotesBuddy is an
+> independent project inspired by local-first meeting tools such as Meetily and
+> is not affiliated with Meetily.
 
 ## What works
 
@@ -20,6 +20,8 @@ diarization.
 - Persistent warning when meeting sharing stops during a recording
 - Optional browser live-speech draft with no inserted sample text
 - Local faster-whisper transcription and pyannote speaker diarization companion
+- Hosted anonymous-session API and browser client with per-session job isolation
+- Serverless GPU deployment package with a persistent model cache
 - Automatic **You** attribution for the isolated microphone track
 - Session-local **Speaker 1**, **Speaker 2**, and unknown-speaker labels for
   meeting audio
@@ -88,25 +90,38 @@ The pyannote community model requires accepting its model terms before the
 first download. See the complete [companion setup and troubleshooting
 guide](services/transcription/README.md).
 
+### Public hosted transcription
+
+Public users should not install a companion or configure any token. In hosted
+mode, the site creates an expiring anonymous session and sends selected audio
+over HTTPS to a centrally managed service. The owner's Hugging Face token stays
+in the hosting provider's secret manager.
+
+The deployment package currently targets Modal. See [Public hosted
+transcription](docs/HOSTED_TRANSCRIPTION.md) for the deployment, safeguards,
+operating limits, and future subscription migration.
+
 ## Data and privacy
 
 | Data | Location |
 | --- | --- |
 | Profile, meeting records, speaker names, transcripts, settings | Browser `localStorage` |
 | Microphone, meeting, and mixed audio Blobs | Browser IndexedDB |
-| Pairing token | Browser settings and a user-local companion token file |
-| Companion job audio | OS temporary directory, deleted after terminal job state |
-| Speech and diarization models | Local model caches |
+| Local pairing token | Browser settings and a user-local companion token file |
+| Transcription job audio | Temporary local/hosted job directory, deleted after terminal state |
+| Hosted anonymous session | Browser `sessionStorage`, expiring |
+| Speech and diarization models | Local or hosted model cache |
 
-Nothing is synchronized between people, devices, browsers, or site origins.
-The local profile is not an account. Two users sharing one operating-system
-browser profile share the same NotesBuddy workspace, while different browser
-profiles have separate storage.
+Meeting records are not synchronized between people, devices, browsers, or
+site origins. Hosted processing returns the result only to the requesting
+anonymous session. The local profile is not an account. Two users sharing one
+operating-system browser profile share the same NotesBuddy workspace, while
+different browser profiles have separate storage.
 
-The companion binds to `127.0.0.1`, checks an origin allowlist, requires a
-256-bit pairing token, and does not log transcript content. Browser live speech
-recognition is separate and may use the browser provider's service; it can be
-disabled.
+The local companion binds to `127.0.0.1` and requires a 256-bit pairing token.
+Hosted mode uses expiring anonymous sessions, per-session job ownership, CORS,
+rate/size limits, and temporary upload deletion. Browser live speech
+recognition is separate and may use the browser provider's service.
 
 See [Privacy and data handling](docs/PRIVACY.md).
 
@@ -118,7 +133,7 @@ See [Privacy and data handling](docs/PRIVACY.md).
 | `npm run build` | Recreate the static bundle in `dist/` |
 | `npm run preview` | Serve `dist/client` locally |
 | `npm run test:unit` | Run browser-module state and transcript tests |
-| `npm run test:service` | Run Python alignment and local API tests after API dependencies are installed |
+| `npm run test:service` | Run Python alignment plus local/hosted API tests after API dependencies are installed |
 | `npm run test:browser` | Run the optional Playwright synthetic-media browser suite |
 | `npm test` | Syntax-check, unit-test, build, and verify tracked `dist/` |
 
@@ -134,8 +149,10 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 |-- services/transcription/
 |   |-- notesbuddy_transcription/  Local API, model adapter, and alignment core
 |   |-- tests/                     Python unit and API integration tests
+|   |-- modal_app.py               Hosted anonymous GPU API deployment
 |   `-- run.py                     Local companion launcher
 |-- src/
+|   |-- runtime-config.js          Public local/hosted mode and endpoint
 |   |-- meeting-audio.js           Recording assets, transcript, and API client
 |   |-- app.js                     Application UI, capture, playback, persistence
 |   `-- styles.css                 Responsive visual system
@@ -150,6 +167,7 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 - [Architecture](docs/ARCHITECTURE.md)
 - [Meeting-audio implementation plan](docs/MEETING_AUDIO_DIARIZATION_PLAN.md)
 - [Local transcription companion](services/transcription/README.md)
+- [Public hosted transcription](docs/HOSTED_TRANSCRIPTION.md)
 - [Configuration and fixed-value audit](docs/CONFIGURATION.md)
 - [Privacy and data handling](docs/PRIVACY.md)
 - [Testing guide](docs/TESTING.md)
@@ -164,9 +182,11 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 - Some surface/browser combinations do not expose audio; there is no silent
   operating-system loopback capture.
 - Initial model installation is large and requires network access and pyannote
-  model access. Processing speed depends on the computer.
+  model access. Processing speed depends on the selected compute.
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
+- Anonymous hosted access is a prototype safeguard, not a subscription,
+  entitlement, or production abuse-prevention boundary.
 - Briefs are extractive transcript text, not LLM-generated conclusions.
 - Overlapping speech and poor audio can reduce diarization accuracy; users
   should review labels before relying on them.

@@ -1,10 +1,11 @@
 # Privacy and data handling
 
 NotesBuddy keeps meeting records and original recordings in the browser profile
-that created them. Optional speaker transcription runs in a paired service on
-the same computer. This document describes the prototype's data paths; browser,
-operating-system, and model-provider behavior remains outside the application's
-control.
+that created them. Optional speaker transcription runs either in a paired
+service on the same computer or in a centrally hosted service selected by the
+deployment owner. This document describes the prototype's data paths; browser,
+operating-system, hosting, and model-provider behavior remains outside the
+application's control.
 
 ## Data inventory
 
@@ -13,13 +14,17 @@ control.
 | Local profile name, initials, ID | Browser `localStorage` | Until site data is cleared |
 | Meeting metadata, speakers, rename mappings | Browser `localStorage` | Until meeting/site data is deleted |
 | Transcript, extractive brief, actions, notes | Browser `localStorage` | Until meeting/site data is deleted |
-| Companion URL and pairing token | Browser `localStorage` | Until settings/site data is cleared |
+| Local companion URL and pairing token | Browser `localStorage` | Until settings/site data is cleared |
+| Hosted anonymous session token | Browser `sessionStorage` | Session expiry or tab/session storage deletion |
 | Microphone, meeting, mixed audio | Browser IndexedDB | Until meeting/site data is deleted |
 | Browser live-speech audio | Browser speech provider when enabled | Provider/browser controlled |
-| Companion job audio | Random OS temporary directory | Removed after job success, failure, or cancellation |
+| Local companion job audio | Random OS temporary directory | Removed after job success, failure, or cancellation |
+| Hosted job audio | Host container temporary directory | Removed after job success, failure, or cancellation |
+| Hosted job status/result | Host process memory | One hour by default or until process eviction |
+| Hashed hosted client network key | Host process memory | Rate-limit window/session cleanup |
 | Companion pairing token | Local OS user configuration directory | Until token file is deleted |
-| Speech/diarization models | Local model cache | Until user removes the cache |
-| Hugging Face model token | Companion process environment | Process/shell controlled |
+| Speech/diarization models | Local or hosted model cache | Until the owner removes the cache |
+| Hugging Face model token | Local process environment or host secret manager | Owner controlled |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
 
 ## Browser capture
@@ -95,15 +100,49 @@ keeps recent job status/results in process memory for one hour by default (and
 evicts older completed entries when its bounded job table fills). It has no
 job database or cloud synchronization.
 
+## Hosted anonymous transcription
+
+When `src/runtime-config.js` selects `hosted` mode, the user does not configure
+a companion URL or token. The deployment contains one public HTTPS endpoint.
+
+The browser first requests a random short-lived anonymous session token and
+stores it in `sessionStorage`. It sends that token with transcription job
+requests. The service associates each job with a one-way token digest and
+returns `404` rather than disclosing another session's job.
+
+Hosted processing changes the privacy boundary: selecting **Transcribe and
+identify speakers** uploads the saved source audio from IndexedDB to the
+deployment owner's compute provider. Audio is encrypted in transit by HTTPS but
+is available in plaintext to the model process while being decoded. Job files
+are placed in a random temporary directory and removed in `finally` after
+success, failure, or cancellation.
+
+The prototype keeps job status and transcript results in process memory for up
+to one hour by default. It does not intentionally write meeting audio,
+transcripts, profile names, or job results to the persistent model-cache
+volume. The browser receives the transcript and stores it in its local meeting
+record.
+
+Anonymous safeguards include bounded upload size, queue size, worker count,
+sessions, per-session job starts, active jobs, and CORS origins. A hash of the
+requesting network address is retained temporarily for session-issuance rate
+limits; the raw address is not stored by NotesBuddy application code. Hosting
+providers may independently retain network and request metadata under their
+own policies.
+
+Anonymous mode does not provide verified identity, subscription entitlement,
+durable account deletion, or strong protection against distributed abuse. It
+is a public prototype boundary only.
+
 ## Model access and caches
 
 The pyannote community model requires a Hugging Face token for initial access.
 That token belongs only in the companion process environment and is not the
 same as the NotesBuddy pairing token.
 
-Speech/diarization models are cached locally by their libraries. Model cache
-files contain model weights, not meeting audio. Their size and deletion method
-are controlled by the model libraries/provider.
+Speech/diarization models are cached locally or in a host-mounted model-cache
+volume. Model cache files contain model weights, not meeting audio. Their size
+and deletion method are controlled by the model libraries/provider.
 
 ## Speaker labels
 
@@ -135,6 +174,11 @@ To revoke local-companion access:
 Stopping the companion prevents further local transcription. Model caches and
 the Hugging Face token environment are managed separately.
 
+To stop hosted processing, stop or delete the hosted API deployment. Deleting a
+browser meeting removes the browser copy but cannot cancel a job that already
+reached a terminal state; terminal hosted job files have already been removed.
+The deployment owner manages host logs, model caches, secrets, and billing.
+
 ## Security considerations
 
 - Browser storage is not encrypted by NotesBuddy.
@@ -142,6 +186,12 @@ the Hugging Face token environment are managed separately.
 - Browser extensions or compromised scripts may inspect page data.
 - A pairing token stored in browser storage can be read by scripts executing in
   that same origin; use only trusted static hosting.
+- A hosted anonymous session token can be read by scripts executing in the same
+  origin/tab; Content Security Policy and dependency review remain important.
+- Hosted transcription sends meeting audio outside the user's device. The UI
+  must accurately disclose that behavior before commercial use.
+- CORS is a browser control, not authentication for non-browser clients.
+- Anonymous IP/session limits reduce but cannot eliminate automated abuse.
 - Private/incognito storage may disappear when the session ends.
 - Browser quotas/cleanup can remove recordings.
 - Imported or captured media may exercise browser/model decoders and should be

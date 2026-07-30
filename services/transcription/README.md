@@ -6,6 +6,12 @@ The companion processes NotesBuddy recordings on the same computer. It combines:
 - pyannote `speaker-diarization-community-1` intervals;
 - deterministic timestamp alignment and echo de-duplication.
 
+This guide covers private `127.0.0.1` operation. The same engine also supports
+a centrally hosted anonymous mode where end users install nothing. Deployment
+owners should follow [Public hosted
+transcription](../../docs/HOSTED_TRANSCRIPTION.md); never expose this local
+launcher directly to a LAN or the internet.
+
 The microphone track is always assigned to `local-user` (**You**). Meeting-only
 voices receive session-local IDs such as `remote-1`; those IDs are not voice
 biometrics and do not identify real people.

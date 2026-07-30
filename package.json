@@ -2,7 +2,7 @@
   "name": "notesbuddy",
   "private": true,
   "version": "0.1.0",
-  "description": "A private, local-first meeting capture and notes prototype.",
+  "description": "A local-first meeting capture app with local or hosted speaker transcription.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -14,7 +14,7 @@
     "test:unit": "node tests/meeting-audio.test.mjs",
     "test:service": "python -m unittest discover -s services/transcription/tests -v",
     "test:browser": "node tests/browser-smoke.cjs",
-    "check": "node --check src/meeting-audio.js && node --check src/app.js && node --check build.mjs && node --check server.mjs && node --check site-worker.mjs && npm run test:unit && npm run build && node --check dist/client/src/meeting-audio.js && node --check dist/client/src/app.js && git diff --exit-code -- dist",
+    "check": "node --check src/runtime-config.js && node --check src/meeting-audio.js && node --check src/app.js && node --check build.mjs && node --check server.mjs && node --check site-worker.mjs && npm run test:unit && npm run build && node --check dist/client/src/runtime-config.js && node --check dist/client/src/meeting-audio.js && node --check dist/client/src/app.js && git diff --exit-code -- dist",
     "test": "npm run check"
   }
 }

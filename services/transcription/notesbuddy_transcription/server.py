@@ -1,4 +1,4 @@
-"""Authenticated localhost API for NotesBuddy transcription jobs."""
+"""Local or anonymous-hosted API for NotesBuddy transcription jobs."""
 
 from __future__ import annotations
 
@@ -14,13 +14,27 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable, NoReturn
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
+from .access import (
+    AnonymousSessionStore,
+    SessionAccessError,
+    anonymise_client_key,
+)
 from .engine import EngineCancelled, engine_from_environment
 from .security import ensure_pairing_token
 
@@ -52,6 +66,8 @@ class Job:
     metadata: dict[str, Any]
     paths: dict[str, Path]
     engine_name: str
+    owner_digest: str | None = None
+    on_terminal: Callable[[str | None], None] | None = None
     status: str = "queued"
     progress: float = 0.0
     stage: str = "queued"
@@ -127,6 +143,10 @@ class JobStore:
             self._cleanup_locked()
             return self._jobs.get(job_id)
 
+    def remove(self, job_id: str) -> Job | None:
+        with self._lock:
+            return self._jobs.pop(job_id, None)
+
 
 def _safe_error(error: BaseException, work_dir: Path) -> str:
     message = str(error).replace(str(work_dir), "[temporary audio]").strip()
@@ -141,6 +161,8 @@ def _run_job(job: Job, engine: object) -> None:
             job.completed_at = _now()
             job.completed_monotonic = time.monotonic()
             shutil.rmtree(job.work_dir, ignore_errors=True)
+            if job.on_terminal is not None:
+                job.on_terminal(job.owner_digest)
             return
         job.status = "processing"
         job.stage = "loading local models"
@@ -188,6 +210,8 @@ def _run_job(job: Job, engine: object) -> None:
             job.completed_monotonic = time.monotonic()
     finally:
         shutil.rmtree(job.work_dir, ignore_errors=True)
+        if job.on_terminal is not None:
+            job.on_terminal(job.owner_digest)
 
 
 async def _save_upload(
@@ -229,12 +253,72 @@ def create_app(
     engine: object | None = None,
     pairing_token: str | None = None,
     allowed_origins: list[str] | None = None,
+    authentication_mode: str | None = None,
 ) -> FastAPI:
     active_engine = engine or engine_from_environment()
-    if pairing_token is None:
-        pairing_token, _token_path, _created = ensure_pairing_token()
-    if len(pairing_token) < 24:
-        raise RuntimeError("The NotesBuddy pairing token is too short.")
+    access_mode = (
+        authentication_mode
+        or os.getenv("NOTESBUDDY_ACCESS_MODE", "local")
+    ).strip().lower()
+    if access_mode not in {"local", "anonymous"}:
+        raise RuntimeError(
+            "NOTESBUDDY_ACCESS_MODE must be 'local' or 'anonymous'."
+        )
+    hosted = access_mode == "anonymous"
+    if not hosted:
+        if pairing_token is None:
+            pairing_token, _token_path, _created = ensure_pairing_token()
+        if len(pairing_token) < 24:
+            raise RuntimeError("The NotesBuddy pairing token is too short.")
+
+    sessions = (
+        AnonymousSessionStore(
+            session_ttl_seconds=max(
+                15 * 60,
+                min(
+                    48 * 60 * 60,
+                    int(
+                        os.getenv(
+                            "NOTESBUDDY_SESSION_TTL_SECONDS",
+                            str(24 * 60 * 60),
+                        )
+                    ),
+                ),
+            ),
+            maximum_sessions=max(
+                16,
+                min(
+                    100_000,
+                    int(os.getenv("NOTESBUDDY_MAX_SESSIONS", "2048")),
+                ),
+            ),
+            issue_window_seconds=max(
+                60,
+                int(os.getenv("NOTESBUDDY_SESSION_ISSUE_WINDOW_SECONDS", "3600")),
+            ),
+            maximum_issues_per_client=max(
+                1,
+                int(os.getenv("NOTESBUDDY_MAX_SESSIONS_PER_CLIENT", "10")),
+            ),
+            job_window_seconds=max(
+                60,
+                int(os.getenv("NOTESBUDDY_JOB_LIMIT_WINDOW_SECONDS", "3600")),
+            ),
+            maximum_jobs_per_session=max(
+                1,
+                int(os.getenv("NOTESBUDDY_MAX_JOBS_PER_SESSION", "3")),
+            ),
+            maximum_active_jobs_per_session=max(
+                1,
+                min(
+                    2,
+                    int(os.getenv("NOTESBUDDY_MAX_ACTIVE_JOBS_PER_SESSION", "1")),
+                ),
+            ),
+        )
+        if hosted
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -244,8 +328,12 @@ def create_app(
             executor.shutdown(wait=False, cancel_futures=True)
 
     app = FastAPI(
-        title="NotesBuddy local transcription companion",
-        version="1.0.0",
+        title=(
+            "NotesBuddy public transcription service"
+            if hosted
+            else "NotesBuddy local transcription companion"
+        ),
+        version="1.1.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -253,12 +341,15 @@ def create_app(
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=allowed_origins or _allowed_origins(),
+        allow_origins=(
+            allowed_origins if allowed_origins is not None else _allowed_origins()
+        ),
         allow_credentials=False,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=[
             "Content-Type",
             "X-NotesBuddy-Pairing-Token",
+            "X-NotesBuddy-Session-Token",
         ],
         max_age=600,
     )
@@ -270,7 +361,8 @@ def create_app(
     ):
         response = await call_next(request)
         if (
-            request.headers.get("access-control-request-private-network")
+            not hosted
+            and request.headers.get("access-control-request-private-network")
             == "true"
         ):
             response.headers["Access-Control-Allow-Private-Network"] = "true"
@@ -300,32 +392,118 @@ def create_app(
     )
     maximum_source_bytes = max(
         1024 * 1024,
-        int(os.getenv("NOTESBUDDY_MAX_SOURCE_BYTES", str(2 * 1024**3))),
+        int(
+            os.getenv(
+                "NOTESBUDDY_MAX_SOURCE_BYTES",
+                str(250 * 1024**2 if hosted else 2 * 1024**3),
+            )
+        ),
+    )
+    maximum_total_bytes = max(
+        maximum_source_bytes,
+        int(
+            os.getenv(
+                "NOTESBUDDY_MAX_TOTAL_UPLOAD_BYTES",
+                str(400 * 1024**2 if hosted else 6 * 1024**3),
+            )
+        ),
+    )
+    maximum_duration_ms = max(
+        60_000,
+        int(
+            os.getenv(
+                "NOTESBUDDY_MAX_DURATION_MS",
+                str(2 * 60 * 60 * 1000),
+            )
+        ),
     )
 
-    def require_token(
-        supplied: Annotated[
+    def _raise_session_error(error: SessionAccessError) -> NoReturn:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.detail,
+        ) from error
+
+    def require_access(
+        supplied_pairing_token: Annotated[
+            str | None,
+            Header(alias="X-NotesBuddy-Pairing-Token"),
+        ] = None,
+        supplied_session_token: Annotated[
+            str | None,
+            Header(alias="X-NotesBuddy-Session-Token"),
+        ] = None,
+    ) -> str | None:
+        if hosted:
+            assert sessions is not None
+            try:
+                return sessions.require(supplied_session_token)
+            except SessionAccessError as error:
+                _raise_session_error(error)
+        assert pairing_token is not None
+        if not supplied_pairing_token or not hmac.compare_digest(
+            supplied_pairing_token,
+            pairing_token,
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="Pairing token is missing or invalid.",
+            )
+        return None
+
+    def health_access(
+        supplied_pairing_token: Annotated[
             str | None,
             Header(alias="X-NotesBuddy-Pairing-Token"),
         ] = None,
     ) -> None:
-        if not supplied or not hmac.compare_digest(supplied, pairing_token):
+        if hosted:
+            return
+        assert pairing_token is not None
+        if not supplied_pairing_token or not hmac.compare_digest(
+            supplied_pairing_token,
+            pairing_token,
+        ):
             raise HTTPException(
                 status_code=401,
                 detail="Pairing token is missing or invalid.",
             )
 
-    @app.get("/v1/health", dependencies=[Depends(require_token)])
-    def health() -> dict[str, Any]:
+    @app.get("/v1/health", dependencies=[Depends(health_access)])
+    def health(response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
         return {
             "status": "ok",
-            "engine": getattr(active_engine, "name", active_engine.__class__.__name__),
+            "engine": getattr(
+                active_engine,
+                "name",
+                active_engine.__class__.__name__,
+            ),
             "modelStatus": "loaded on first job",
             "storage": "temporary job files only",
+            "access": "anonymous-session" if hosted else "local-pairing",
         }
 
-    @app.post("/v1/transcriptions", dependencies=[Depends(require_token)])
+    @app.post("/v1/sessions")
+    def create_session(request: Request, response: Response) -> dict[str, Any]:
+        if not hosted or sessions is None:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        client_host = request.client.host if request.client else "unknown"
+        try:
+            token, session = sessions.issue(anonymise_client_key(client_host))
+        except SessionAccessError as error:
+            _raise_session_error(error)
+        response.headers["Cache-Control"] = "no-store"
+        return {
+            "sessionToken": token,
+            "expiresAt": session.expires_at,
+            "access": "anonymous",
+        }
+
+    @app.post("/v1/transcriptions")
     async def create_transcription(
+        response: Response,
+        owner_digest: str | None = Depends(require_access),
         microphone: Annotated[UploadFile | None, File()] = None,
         meeting: Annotated[UploadFile | None, File()] = None,
         mixed: Annotated[UploadFile | None, File()] = None,
@@ -359,60 +537,107 @@ def create_app(
                 status_code=400,
                 detail="Metadata must be a JSON object.",
             )
+        if hosted:
+            try:
+                requested_duration_ms = int(parsed_metadata.get("durationMs", 0))
+            except (TypeError, ValueError):
+                requested_duration_ms = 0
+            if requested_duration_ms > maximum_duration_ms:
+                raise HTTPException(
+                    status_code=413,
+                    detail="The recording duration exceeds the public service limit.",
+                )
+
+        reservation_owned = False
+        if hosted:
+            assert sessions is not None
+            assert owner_digest is not None
+            try:
+                sessions.reserve_job(owner_digest)
+                reservation_owned = True
+            except SessionAccessError as error:
+                _raise_session_error(error)
 
         work_dir = Path(tempfile.mkdtemp(prefix="notesbuddy-job-"))
         paths: dict[str, Path] = {}
+        total_upload_bytes = 0
         try:
             for source, upload in uploads.items():
-                path, _size = await _save_upload(
+                path, source_bytes = await _save_upload(
                     upload,
                     source=source,
                     work_dir=work_dir,
                     maximum_bytes=maximum_source_bytes,
                 )
                 paths[source] = path
+                total_upload_bytes += source_bytes
+                if total_upload_bytes > maximum_total_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="The combined recordings exceed the configured limit.",
+                    )
+            job = Job(
+                id=f"job-{uuid4()}",
+                work_dir=work_dir,
+                metadata=parsed_metadata,
+                paths=paths,
+                engine_name=getattr(
+                    active_engine,
+                    "name",
+                    active_engine.__class__.__name__,
+                ),
+                owner_digest=owner_digest,
+                on_terminal=sessions.release_job if sessions is not None else None,
+            )
+            if not jobs.add(job):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "The public transcription queue is full."
+                        if hosted
+                        else "The local transcription queue is full."
+                    ),
+                )
+            try:
+                executor.submit(_run_job, job, active_engine)
+            except RuntimeError as error:
+                jobs.remove(job.id)
+                raise HTTPException(
+                    status_code=503,
+                    detail="The transcription worker is unavailable.",
+                ) from error
+            reservation_owned = False
+            response.headers["Cache-Control"] = "no-store"
+            return job.public()
         except Exception:
             shutil.rmtree(work_dir, ignore_errors=True)
+            if reservation_owned and sessions is not None:
+                sessions.release_job(owner_digest)
             raise
 
-        job = Job(
-            id=f"job-{uuid4()}",
-            work_dir=work_dir,
-            metadata=parsed_metadata,
-            paths=paths,
-            engine_name=getattr(
-                active_engine,
-                "name",
-                active_engine.__class__.__name__,
-            ),
-        )
-        if not jobs.add(job):
-            shutil.rmtree(work_dir, ignore_errors=True)
-            raise HTTPException(
-                status_code=429,
-                detail="The local transcription queue is full.",
-            )
-        executor.submit(_run_job, job, active_engine)
+    def _owned_job(job_id: str, owner_digest: str | None) -> Job:
+        job = jobs.get(job_id)
+        if job is None or job.owner_digest != owner_digest:
+            raise HTTPException(status_code=404, detail="Job was not found.")
+        return job
+
+    @app.get("/v1/transcriptions/{job_id}")
+    def get_transcription(
+        job_id: str,
+        response: Response,
+        owner_digest: str | None = Depends(require_access),
+    ) -> dict[str, Any]:
+        job = _owned_job(job_id, owner_digest)
+        response.headers["Cache-Control"] = "no-store"
         return job.public()
 
-    @app.get(
-        "/v1/transcriptions/{job_id}",
-        dependencies=[Depends(require_token)],
-    )
-    def get_transcription(job_id: str) -> dict[str, Any]:
-        job = jobs.get(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job was not found.")
-        return job.public()
-
-    @app.delete(
-        "/v1/transcriptions/{job_id}",
-        dependencies=[Depends(require_token)],
-    )
-    def cancel_transcription(job_id: str) -> dict[str, Any]:
-        job = jobs.get(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job was not found.")
+    @app.delete("/v1/transcriptions/{job_id}")
+    def cancel_transcription(
+        job_id: str,
+        response: Response,
+        owner_digest: str | None = Depends(require_access),
+    ) -> dict[str, Any]:
+        job = _owned_job(job_id, owner_digest)
         job.cancel_event.set()
         with job.lock:
             if job.status in {"queued", "processing"}:
@@ -420,6 +645,7 @@ def create_app(
                 job.stage = "cancellation requested"
                 job.completed_at = _now()
                 job.completed_monotonic = time.monotonic()
+        response.headers["Cache-Control"] = "no-store"
         return job.public()
 
     return app

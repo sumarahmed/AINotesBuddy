@@ -8,6 +8,10 @@ await mkdir(resolve(output, "server"), { recursive: true });
 await mkdir(resolve(output, ".openai"), { recursive: true });
 await cp(resolve("index.html"), resolve(output, "client", "index.html"));
 await cp(
+  resolve("src", "runtime-config.js"),
+  resolve(output, "client", "src", "runtime-config.js"),
+);
+await cp(
   resolve("src", "meeting-audio.js"),
   resolve(output, "client", "src", "meeting-audio.js"),
 );

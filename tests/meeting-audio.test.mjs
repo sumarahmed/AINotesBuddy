@@ -246,3 +246,129 @@ test("transcription client sends pairing token and all source assets", async () 
     ["microphone", "meeting", "mixed", "metadata"],
   );
 });
+
+test("hosted transcription client creates an anonymous session automatically", async () => {
+  const calls = [];
+  const sessionValues = new Map();
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/v1/sessions")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            sessionToken: "anonymous-session-secret",
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          };
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { jobId: "job-public", status: "queued" };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "https://transcribe.example.test/",
+    mode: "hosted",
+    token: "must-not-be-used",
+    fetchImpl,
+    sessionStorageImpl: {
+      getItem(key) {
+        return sessionValues.get(key) || null;
+      },
+      setItem(key, value) {
+        sessionValues.set(key, value);
+      },
+    },
+  });
+
+  const result = await client.createJob({
+    meetingBlob: new Blob(["meeting"], { type: "audio/webm" }),
+    metadata: { meetingId: "meeting-public" },
+  });
+
+  assert.equal(result.jobId, "job-public");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "https://transcribe.example.test/v1/sessions");
+  assert.equal(
+    calls[1].options.headers["X-NotesBuddy-Session-Token"],
+    "anonymous-session-secret",
+  );
+  assert.equal(
+    calls[1].options.headers["X-NotesBuddy-Pairing-Token"],
+    undefined,
+  );
+  assert.equal(sessionValues.size, 1);
+});
+
+test("hosted transcription client replaces a session lost during scale-to-zero", async () => {
+  const endpoint = "https://transcribe.example.test";
+  const storageKey = `notesbuddy-transcription-session:${endpoint}`;
+  const sessionValues = new Map([
+    [
+      storageKey,
+      JSON.stringify({
+        sessionToken: "stale-session",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      }),
+    ],
+  ]);
+  const jobTokens = [];
+  let sessionsCreated = 0;
+  const fetchImpl = async (url, options = {}) => {
+    if (url.endsWith("/v1/sessions")) {
+      sessionsCreated += 1;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            sessionToken: "replacement-session",
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          };
+        },
+      };
+    }
+    jobTokens.push(options.headers["X-NotesBuddy-Session-Token"]);
+    const accepted =
+      options.headers["X-NotesBuddy-Session-Token"] === "replacement-session";
+    return {
+      ok: accepted,
+      status: accepted ? 200 : 401,
+      async json() {
+        return accepted
+          ? { jobId: "job-after-cold-start", status: "queued" }
+          : { detail: "The anonymous transcription session expired." };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint,
+    mode: "hosted",
+    fetchImpl,
+    sessionStorageImpl: {
+      getItem(key) {
+        return sessionValues.get(key) || null;
+      },
+      setItem(key, value) {
+        sessionValues.set(key, value);
+      },
+      removeItem(key) {
+        sessionValues.delete(key);
+      },
+    },
+  });
+
+  const result = await client.createJob({
+    mixedBlob: new Blob(["audio"], { type: "audio/webm" }),
+  });
+
+  assert.equal(result.jobId, "job-after-cold-start");
+  assert.equal(sessionsCreated, 1);
+  assert.deepEqual(jobTokens, ["stale-session", "replacement-session"]);
+});

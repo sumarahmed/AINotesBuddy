@@ -1,8 +1,8 @@
 # Testing guide
 
 NotesBuddy combines browser permissions, several live audio tracks, IndexedDB,
-playback, and a localhost model service. Unit, API, browser, and real-device
-checks cover different parts of that boundary.
+playback, and local/hosted model-service modes. Unit, API, browser, and
+real-device checks cover different parts of that boundary.
 
 Use only generated or consented non-confidential audio.
 
@@ -29,13 +29,15 @@ The JavaScript tests cover:
 - **You**, detected, renamed, and unknown speaker labels;
 - rename propagation to participants;
 - extractive briefs with no invented text;
-- authenticated multipart client construction.
+- authenticated local multipart client construction;
+- hosted anonymous-session creation and session-token multipart requests.
+- automatic replacement of hosted sessions lost during scale-to-zero.
 
 The test file runs directly rather than with Node's process-isolated test mode,
 which also works in restricted Windows environments that deny child-process
 creation.
 
-## Local companion tests
+## Transcription service tests
 
 Install only the lightweight API/test dependencies; model downloads are not
 needed:
@@ -48,7 +50,7 @@ python -m pip install -r requirements-test.txt
 python -m unittest discover -s tests -v
 ```
 
-The 15 Python tests cover:
+The 20 Python tests cover:
 
 - greatest-overlap word/speaker assignment;
 - stable first-appearance remote IDs;
@@ -64,6 +66,9 @@ The 15 Python tests cover:
 - cancellation signaling and temporary-audio deletion.
 - production adapter parsing of fake faster-whisper/pyannote outputs;
 - mixed-only diarization and mic-only duplicate-mixed suppression.
+- anonymous session opacity, expiry/error handling, issuance limits, active-job
+  limits, and compute quotas;
+- hosted job ownership isolation and hosted CORS/session headers.
 
 The API tests use `EmptyEngine`, which deliberately returns no transcript text.
 They do not prove model accuracy.
@@ -104,6 +109,9 @@ The workflow verifies:
 - playback time advancing for every source;
 - reload and replay of every source;
 - all three assets included in the transcription request;
+- hosted settings without per-user URL/token fields;
+- hosted health checks without consuming a session;
+- automatic anonymous-session creation and session-token job submission;
 - **You** plus two remote speakers in a completed result;
 - untruncated transcript text;
 - speaker rename, name search, and Markdown export;
@@ -119,7 +127,7 @@ Synthetic end-to-end suite run on 2026-07-30:
 | Google Chrome | 150.0.7871.188 | Passed |
 | Microsoft Edge | 150.0.4078.105 | Passed |
 
-API/service/adapter suite: 15/15 passed. Browser-module suite: 8/8 passed.
+API/service/adapter suite: 20/20 passed. Browser-module suite: 10/10 passed.
 
 These runs validate NotesBuddy logic and browser media plumbing with generated
 tracks. They do not replace a real Teams/Zoom/Meet share test because platforms,

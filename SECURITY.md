@@ -19,7 +19,8 @@ Include:
 - Reproduction steps or a minimal proof of concept
 - Affected browser, operating system, and launch method
 - Whether microphone/display capture, local storage, imports, exports,
-  downloaded files, pairing/CORS, or the local model companion are involved
+  downloaded files, pairing/CORS, anonymous sessions, job ownership, quotas,
+  or the local/hosted model service are involved
 - Suggested mitigations, if known
 
 Do not include genuine meeting audio, transcripts, access tokens, employee
@@ -47,3 +48,12 @@ browser origins. Do not expose port 8765 to a LAN/public interface, commit model
 or pairing tokens, or weaken temporary-job cleanup. Reports involving a leaked
 token, cross-origin access, retained job audio, unsafe media decoding, or model
 supply-chain behavior should be treated as security reports.
+
+Hosted anonymous mode deliberately accepts jobs from the public site. It uses
+expiring random sessions, per-session ownership checks, bounded uploads/jobs,
+temporary-file cleanup, and an exact CORS allowlist. CORS does not authenticate
+non-browser callers, and anonymous limits do not prevent distributed abuse.
+Keep model tokens only in the hosting provider's secret manager, configure
+spending alerts, and preserve the one-container prototype cap. Session
+isolation bypasses, quota bypasses, unexpected retention, exposed secrets, and
+cross-session transcript access are security issues.

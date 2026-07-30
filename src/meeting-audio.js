@@ -518,32 +518,156 @@
   }
 
   class TranscriptionClient {
-    constructor({ endpoint, token = "", fetchImpl = globalObject.fetch } = {}) {
+    constructor({
+      endpoint,
+      token = "",
+      mode = "local",
+      fetchImpl = globalObject.fetch,
+      sessionStorageImpl,
+    } = {}) {
       this.endpoint = String(endpoint || "http://127.0.0.1:8765").replace(
         /\/+$/,
         "",
       );
+      this.mode = mode === "hosted" ? "hosted" : "local";
       this.token = String(token || "");
+      this.sessionToken = "";
+      this.sessionExpiresAt = 0;
+      try {
+        this.sessionStorage =
+          sessionStorageImpl === undefined
+            ? globalObject.sessionStorage
+            : sessionStorageImpl;
+      } catch {
+        this.sessionStorage = null;
+      }
+      this.sessionStorageKey = `notesbuddy-transcription-session:${this.endpoint}`;
       this.fetchImpl =
         typeof fetchImpl === "function"
           ? fetchImpl.bind(globalObject)
           : fetchImpl;
+      this.restoreSession();
+    }
+
+    restoreSession() {
+      if (this.mode !== "hosted" || !this.sessionStorage) return;
+      try {
+        const stored = JSON.parse(
+          this.sessionStorage.getItem(this.sessionStorageKey) || "null",
+        );
+        const expiresAt = Date.parse(stored?.expiresAt || "");
+        if (
+          stored?.sessionToken &&
+          Number.isFinite(expiresAt) &&
+          expiresAt > Date.now() + 30_000
+        ) {
+          this.sessionToken = String(stored.sessionToken);
+          this.sessionExpiresAt = expiresAt;
+        }
+      } catch {
+        // A blocked or malformed session store simply creates a fresh session.
+      }
+    }
+
+    saveSession(expiresAt) {
+      if (!this.sessionStorage) return;
+      try {
+        this.sessionStorage.setItem(
+          this.sessionStorageKey,
+          JSON.stringify({
+            sessionToken: this.sessionToken,
+            expiresAt,
+          }),
+        );
+      } catch {
+        // In-memory use still works when sessionStorage is unavailable.
+      }
+    }
+
+    clearSession() {
+      this.sessionToken = "";
+      this.sessionExpiresAt = 0;
+      if (!this.sessionStorage) return;
+      try {
+        this.sessionStorage.removeItem(this.sessionStorageKey);
+      } catch {
+        // The next request can still create an in-memory replacement session.
+      }
+    }
+
+    async ensureSession() {
+      if (this.mode !== "hosted") return;
+      if (
+        this.sessionToken &&
+        this.sessionExpiresAt > Date.now() + 30_000
+      ) {
+        return;
+      }
+      const response = await this.fetchImpl(`${this.endpoint}/v1/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+      if (!response.ok || !payload?.sessionToken) {
+        const error = new Error(
+          payload?.detail ||
+            payload?.error ||
+            `Public transcription service returned ${response.status}`,
+        );
+        error.status = response.status;
+        throw error;
+      }
+      this.sessionToken = String(payload.sessionToken);
+      this.sessionExpiresAt =
+        Date.parse(payload.expiresAt || "") || Date.now() + 60 * 60 * 1000;
+      this.saveSession(
+        payload.expiresAt || new Date(this.sessionExpiresAt).toISOString(),
+      );
     }
 
     headers(extra = {}) {
       return {
-        ...(this.token
-          ? { "X-NotesBuddy-Pairing-Token": this.token }
-          : {}),
+        ...(this.mode === "hosted" && this.sessionToken
+          ? { "X-NotesBuddy-Session-Token": this.sessionToken }
+          : this.token
+            ? { "X-NotesBuddy-Pairing-Token": this.token }
+            : {}),
         ...extra,
       };
     }
 
     async request(path, options = {}) {
-      const response = await this.fetchImpl(`${this.endpoint}${path}`, {
-        ...options,
-        headers: this.headers(options.headers),
+      const {
+        skipSession = false,
+        retrySession = true,
+        ...fetchOptions
+      } = options;
+      if (this.mode === "hosted" && !skipSession) {
+        await this.ensureSession();
+      }
+      let response = await this.fetchImpl(`${this.endpoint}${path}`, {
+        ...fetchOptions,
+        headers: this.headers(fetchOptions.headers),
       });
+      if (
+        response.status === 401 &&
+        this.mode === "hosted" &&
+        !skipSession &&
+        retrySession
+      ) {
+        this.clearSession();
+        await this.ensureSession();
+        response = await this.fetchImpl(`${this.endpoint}${path}`, {
+          ...fetchOptions,
+          headers: this.headers(fetchOptions.headers),
+        });
+      }
       let payload = null;
       try {
         payload = await response.json();
@@ -563,7 +687,7 @@
     }
 
     health() {
-      return this.request("/v1/health");
+      return this.request("/v1/health", { skipSession: true });
     }
 
     async createJob({
