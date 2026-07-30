@@ -16,7 +16,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-COMPANION_VERSION = "0.1.0"
+COMPANION_VERSION = "0.1.1"
 DEFAULT_PORT = 8765
 DEFAULT_WEB_URL = "https://sumarahmed.github.io/AINotesBuddy/"
 AUTOSTART_VALUE_NAME = "NotesBuddyCompanion"

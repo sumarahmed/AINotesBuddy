@@ -58,9 +58,27 @@ $selfTestArguments = @("--self-test")
 if ($RequireModels) {
     $selfTestArguments += "--require-models"
 }
-& $executable @selfTestArguments
-if ($LASTEXITCODE -ne 0) {
-    throw "Packaged companion self-test failed with exit code $LASTEXITCODE."
+$selfTestStdout = Join-Path $outputRoot "self-test.stdout.log"
+$selfTestStderr = Join-Path $outputRoot "self-test.stderr.log"
+$selfTestProcess = Start-Process `
+    -FilePath $executable `
+    -ArgumentList $selfTestArguments `
+    -WindowStyle Hidden `
+    -Wait `
+    -PassThru `
+    -RedirectStandardOutput $selfTestStdout `
+    -RedirectStandardError $selfTestStderr
+if (Test-Path -LiteralPath $selfTestStdout) {
+    Get-Content -LiteralPath $selfTestStdout
+}
+if (Test-Path -LiteralPath $selfTestStderr) {
+    Get-Content -LiteralPath $selfTestStderr
+}
+if ($selfTestProcess.ExitCode -ne 0) {
+    throw (
+        "Packaged companion self-test failed with exit code " +
+        "$($selfTestProcess.ExitCode)."
+    )
 }
 
 if (-not $SkipInstaller) {
