@@ -338,6 +338,186 @@ async function runHostedClientWorkflow(browser, baseUrl) {
   await context.close();
 }
 
+async function runHybridCompanionWorkflow(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const localEndpoint = "http://127.0.0.1:8765";
+  const hostedEndpoint = "https://transcribe.notesbuddy.test";
+  const downloadUrl =
+    "https://github.com/sumarahmed/AINotesBuddy/releases/latest";
+  const calls = [];
+  let hostedCalls = 0;
+
+  await page.route("**/src/runtime-config.js", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript; charset=utf-8",
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "${hostedEndpoint}", companionDownloadUrl: "${downloadUrl}" });`,
+    });
+  });
+  await page.route(`${localEndpoint}/v1/**`, async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    calls.push({
+      pathname,
+      method: request.method(),
+      token: request.headers()["x-notesbuddy-pairing-token"] || "",
+    });
+    const headers = {
+      "access-control-allow-origin": baseUrl,
+      "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
+      "access-control-allow-headers":
+        "Content-Type,X-NotesBuddy-Pairing-Token",
+      "access-control-allow-private-network": "true",
+      "content-type": "application/json",
+    };
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers, body: "" });
+      return;
+    }
+    if (pathname === "/v1/companion") {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          product: "NotesBuddy Desktop Companion",
+          version: "0.1.0",
+          apiVersion: 1,
+          status: "available",
+          browserPairing: true,
+          engine: "desktop-browser-test",
+        }),
+      });
+      return;
+    }
+    if (pathname === "/v1/pairings") {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          pairingToken: "automatic-browser-pairing-token-value",
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        }),
+      });
+      return;
+    }
+    const accepted =
+      request.headers()["x-notesbuddy-pairing-token"] ===
+      "automatic-browser-pairing-token-value";
+    await route.fulfill({
+      status: accepted ? 200 : 401,
+      headers,
+      body: JSON.stringify(
+        accepted
+          ? { status: "ok", engine: "desktop-browser-test" }
+          : { detail: "Pairing token is missing or invalid." },
+      ),
+    });
+  });
+  await page.route(`${hostedEndpoint}/v1/**`, async (route) => {
+    hostedCalls += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Local mode must not call hosted API." }),
+    });
+  });
+
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Hybrid Companion Tester");
+  await page.locator("[data-action='settings']").first().click();
+  await page.locator("[data-panel='settings']").waitFor();
+  await page
+    .locator(".service-check__status--connected")
+    .waitFor({ timeout: 5000 });
+  await page
+    .locator(".settings-section", {
+      hasText: "Desktop speaker transcription",
+    })
+    .waitFor();
+
+  assert.equal(
+    await page.locator("[data-setting='transcriptionToken']").count(),
+    0,
+    "automatic desktop users must not see a pairing-token field",
+  );
+  assert.equal(
+    await page.locator("[data-setting='transcriptionEndpoint']").count(),
+    0,
+    "automatic desktop users must not edit the loopback URL",
+  );
+  assert.equal(
+    await page
+      .locator(`a[href="${downloadUrl}"]`)
+      .getAttribute("target"),
+    "_blank",
+  );
+  assert.deepEqual(
+    calls
+      .filter(({ method }) => method !== "OPTIONS")
+      .map(({ pathname }) => pathname),
+    ["/v1/companion", "/v1/pairings", "/v1/health"],
+  );
+  assert.equal(calls.at(-1).token, "automatic-browser-pairing-token-value");
+  assert.equal(
+    hostedCalls,
+    0,
+    "a connected companion must not depend on the hosted API",
+  );
+  const persistedSettings = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("notesbuddy-settings") || "{}"),
+  );
+  assert.equal(
+    persistedSettings.transcriptionToken,
+    "",
+    "automatic pairing tokens must never be persisted",
+  );
+  await context.close();
+}
+
+async function runHybridFallbackWorkflow(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const unavailableEndpoint = "http://127.0.0.1:8877";
+  let discoveryCalls = 0;
+
+  await page.route("**/src/runtime-config.js", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript; charset=utf-8",
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${unavailableEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "https://github.com/sumarahmed/AINotesBuddy/releases/latest" });`,
+    });
+  });
+  await page.route(`${unavailableEndpoint}/v1/**`, async (route) => {
+    discoveryCalls += 1;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Companion is not running." }),
+    });
+  });
+
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Hybrid Fallback Tester");
+  await page.locator("[data-action='settings']").first().click();
+  await page.locator("[data-panel='settings']").waitFor();
+  await page
+    .locator(".service-check__status--fallback")
+    .waitFor({ timeout: 5000 });
+  await page.getByText("The online fallback is active.").waitFor();
+
+  assert.equal(discoveryCalls, 1);
+  assert.equal(
+    await page.locator("[data-setting='transcriptionToken']").count(),
+    0,
+  );
+  assert.equal(
+    await page.locator("[data-action='connect-companion']").count(),
+    1,
+  );
+  await context.close();
+}
+
 async function runMainWorkflow(browser, baseUrl) {
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
@@ -766,8 +946,10 @@ async function runDirectFileLoad(browser) {
     await runUnexpectedMeetingStop(browser, baseUrl);
     await runDirectFileLoad(browser);
     await runHostedClientWorkflow(browser, baseUrl);
+    await runHybridCompanionWorkflow(browser, baseUrl);
+    await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, local and hosted transcription clients, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

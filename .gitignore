@@ -12,3 +12,6 @@ __pycache__/
 *.py[cod]
 .venv/
 .verification/
+desktop/models/
+desktop/out/
+desktop/release/

@@ -16,13 +16,15 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | Automatically identify speakers | Off | Start the paired local job after saving a recording |
 | Create meeting brief | On | Build an extractive brief only from returned transcript segments |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
-| Transcription mode | From `src/runtime-config.js` | `local` or centrally managed `hosted` |
+| Transcription mode | From `src/runtime-config.js` | `hybrid`, `local`, or centrally managed `hosted` |
 | Companion URL | `http://127.0.0.1:8765` in local mode | Loopback-only local API |
 | Pairing token | Empty in local mode | Must be copied from the local companion |
 
-In hosted mode, the runtime endpoint is controlled by the deployment and the
-URL/token inputs are hidden. Hosted users receive an expiring session
-automatically; they never configure the owner's model token.
+In `hybrid` mode, the browser first discovers and pairs with the fixed loopback
+companion. The automatic token remains only in page memory. If discovery or
+pairing fails, the centrally managed endpoint becomes the online fallback.
+Hybrid and hosted users never see URL/token inputs or configure the owner's
+model token. Explicit `local` mode retains manual CLI fields for development.
 
 Changing a source toggle while capture is already running does not mutate live
 streams. It applies to the next capture.
@@ -34,8 +36,10 @@ streams. It applies to the next capture.
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
-| Runtime transcription mode | `local` | Public non-secret setting in `src/runtime-config.js` |
-| Runtime transcription endpoint | `http://127.0.0.1:8765` | Replaced with the hosted HTTPS endpoint when activated |
+| Runtime transcription mode | `hybrid` | Public non-secret setting in `src/runtime-config.js` |
+| Local companion endpoint | `http://127.0.0.1:8765` | Fixed loopback discovery/API address |
+| Hosted fallback endpoint | Deployment URL | Used when the companion is unavailable |
+| Companion download URL | Latest GitHub Release | Public Windows installer destination |
 | Storage keys | `notesbuddy-profile`, `notesbuddy-meetings`, `notesbuddy-settings`, `notesbuddy-audio` | Namespace isolation in `src/app.js` |
 | IndexedDB schema | Version 1, `recordings` store | Blob persistence in `openAudioDatabase()` |
 | Recorder preference | Opus WebM, WebM, then MP4 | First browser-supported type in `preferredRecordingType()` |
@@ -73,6 +77,7 @@ same NotesBuddy data.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HF_TOKEN` | None | Access to the accepted pyannote community model |
+| `NOTESBUDDY_MODEL_DIR` | Packaged `models` directory when present | Offline model bundle root |
 | `NOTESBUDDY_ALLOWED_ORIGINS` | Direct file, local dev origins, `https://sumarahmed.github.io` | Comma-separated CORS allowlist |
 | `NOTESBUDDY_PAIRING_TOKEN` | Persistent generated token | Optional explicit token override, at least 24 characters |
 | `NOTESBUDDY_TOKEN_FILE` | OS user config location | Optional persistent token-file override |
@@ -88,6 +93,9 @@ same NotesBuddy data.
 | `NOTESBUDDY_MAX_DURATION_MS` | 7200000 | Declared recording-duration limit |
 | `NOTESBUDDY_TRANSCRIPTION_ENGINE` | `local` | `empty` allowed only for smoke testing |
 | `NOTESBUDDY_ACCESS_MODE` | `local` | `local` pairing or `anonymous` hosted sessions |
+| `NOTESBUDDY_ALLOW_BROWSER_PAIRING` | Off for manual CLI; enabled directly by desktop app | Exact-origin automatic pairing |
+| `NOTESBUDDY_BROWSER_PAIRING_TTL_SECONDS` | 86400 | Automatic token lifetime, clamped 15 minutes–7 days |
+| `NOTESBUDDY_MAX_BROWSER_PAIRINGS` | 32 | Bounded in-memory automatic pairings |
 | `NOTESBUDDY_SESSION_TTL_SECONDS` | 86400 | Hosted anonymous-session lifetime |
 | `NOTESBUDDY_MAX_SESSIONS` | 2048 | Maximum hosted sessions retained in process memory |
 | `NOTESBUDDY_SESSION_ISSUE_WINDOW_SECONDS` | 3600 | Session-issuance quota window |
@@ -104,11 +112,11 @@ values only; use a private process environment or launcher.
 
 ## Deployment configuration
 
-The static client can be served from any HTTPS host. For local mode on a new
-host, add its exact origin to `NOTESBUDDY_ALLOWED_ORIGINS` on each user's local
-companion. For hosted mode, add the origin once to the hosted API and set its
-public HTTPS URL in `src/runtime-config.js`. Never put a pairing token or
-`HF_TOKEN` in static host variables or client source.
+The static client can be served from any HTTPS host. For local/hybrid mode on a
+new host, ship its exact origin in the desktop companion allowlist. For hosted
+mode, add the origin to the hosted API and set its public HTTPS URL in
+`src/runtime-config.js`. Never put a pairing token or `HF_TOKEN` in static host
+variables or client source.
 
 The existing `.openai/hosting.json` project ID and GitHub Pages workflows are
 repository deployment metadata. Hosted model deployment is separate from the

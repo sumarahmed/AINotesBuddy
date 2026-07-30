@@ -42,12 +42,21 @@ Browser speech recognition may process audio through the browser provider's
 service. See [docs/PRIVACY.md](docs/PRIVACY.md) for the full data model and
 privacy boundary.
 
-The optional transcription companion must remain bound to `127.0.0.1`. It
-authenticates all API routes with a persistent random token and restricts
-browser origins. Do not expose port 8765 to a LAN/public interface, commit model
-or pairing tokens, or weaken temporary-job cleanup. Reports involving a leaked
-token, cross-origin access, retained job audio, unsafe media decoding, or model
-supply-chain behavior should be treated as security reports.
+The optional transcription companion must remain bound to `127.0.0.1`. Its
+safe discovery route exposes no token. The packaged app issues expiring,
+memory-only browser tokens only to exact trusted origins; missing, `null`, and
+unknown origins are rejected. Protected routes also retain a persistent random
+manual recovery token. Do not expose port 8765 to a LAN/public interface,
+commit model/pairing tokens, or weaken temporary-job cleanup. Reports involving
+a leaked token, pairing from an untrusted origin, retained job audio, unsafe
+media decoding, installer/update tampering, or model supply-chain behavior
+should be treated as security reports.
+
+The publisher's gated-model `HF_TOKEN` is allowed only in the trusted GitHub
+release job. It must never enter a static site, executable, installer, build
+artifact, log, issue, or customer configuration. Public installer releases
+require model-license/attribution review and a recorded immutable model
+manifest.
 
 Hosted anonymous mode deliberately accepts jobs from the public site. It uses
 expiring random sessions, per-session ownership checks, bounded uploads/jobs,

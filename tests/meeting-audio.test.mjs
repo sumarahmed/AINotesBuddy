@@ -210,6 +210,88 @@ test("builds an extractive brief only from real transcript text", () => {
   );
 });
 
+test("desktop connector discovers, pairs, and verifies the local service", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/v1/companion")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            product: "NotesBuddy Desktop Companion",
+            apiVersion: 1,
+            status: "available",
+            browserPairing: true,
+          };
+        },
+      };
+    }
+    if (url.endsWith("/v1/pairings")) {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            pairingToken: "short-lived-browser-token-that-is-valid",
+            expiresAt: "2099-01-01T00:00:00Z",
+          };
+        },
+      };
+    }
+    return {
+      ok:
+        options.headers["X-NotesBuddy-Pairing-Token"] ===
+        "short-lived-browser-token-that-is-valid",
+      status: 200,
+      async json() {
+        return { status: "ok", engine: "local-test-engine" };
+      },
+    };
+  };
+  const connector = new MeetingAudio.CompanionConnector({
+    endpoint: "http://127.0.0.1:8765/",
+    fetchImpl,
+  });
+
+  const connection = await connector.connect();
+
+  assert.equal(connection.endpoint, "http://127.0.0.1:8765");
+  assert.equal(
+    connection.token,
+    "short-lived-browser-token-that-is-valid",
+  );
+  assert.deepEqual(
+    calls.map(({ url }) => new URL(url).pathname),
+    ["/v1/companion", "/v1/pairings", "/v1/health"],
+  );
+  assert.equal(calls[1].options.method, "POST");
+  assert.equal(calls[2].options.cache, "no-store");
+});
+
+test("desktop connector rejects incompatible or manually paired services", async () => {
+  const connector = new MeetingAudio.CompanionConnector({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          product: "NotesBuddy Desktop Companion",
+          apiVersion: 1,
+          status: "available",
+          browserPairing: false,
+        };
+      },
+    }),
+  });
+
+  await assert.rejects(
+    connector.connect(),
+    /does not support automatic website pairing/,
+  );
+});
+
 test("transcription client sends pairing token and all source assets", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {

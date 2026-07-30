@@ -36,6 +36,7 @@ from .access import (
     anonymise_client_key,
 )
 from .engine import EngineCancelled, engine_from_environment
+from .pairing import BrowserPairingStore
 from .security import ensure_pairing_token
 
 
@@ -57,6 +58,13 @@ def _allowed_origins() -> list[str]:
         "http://localhost:4173",
         "https://sumarahmed.github.io",
     ]
+
+
+def _environment_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(slots=True)
@@ -254,6 +262,8 @@ def create_app(
     pairing_token: str | None = None,
     allowed_origins: list[str] | None = None,
     authentication_mode: str | None = None,
+    allow_browser_pairing: bool | None = None,
+    companion_version: str | None = None,
 ) -> FastAPI:
     active_engine = engine or engine_from_environment()
     access_mode = (
@@ -265,12 +275,38 @@ def create_app(
             "NOTESBUDDY_ACCESS_MODE must be 'local' or 'anonymous'."
         )
     hosted = access_mode == "anonymous"
+    trusted_origins = (
+        list(allowed_origins)
+        if allowed_origins is not None
+        else _allowed_origins()
+    )
+    browser_pairing_enabled = (
+        allow_browser_pairing
+        if allow_browser_pairing is not None
+        else _environment_flag("NOTESBUDDY_ALLOW_BROWSER_PAIRING")
+    ) and not hosted
     if not hosted:
         if pairing_token is None:
             pairing_token, _token_path, _created = ensure_pairing_token()
         if len(pairing_token) < 24:
             raise RuntimeError("The NotesBuddy pairing token is too short.")
 
+    browser_pairings = BrowserPairingStore(
+        ttl_seconds=max(
+            15 * 60,
+            min(
+                7 * 24 * 60 * 60,
+                int(os.getenv("NOTESBUDDY_BROWSER_PAIRING_TTL_SECONDS", "86400")),
+            ),
+        ),
+        maximum_pairings=max(
+            4,
+            min(
+                128,
+                int(os.getenv("NOTESBUDDY_MAX_BROWSER_PAIRINGS", "32")),
+            ),
+        ),
+    )
     sessions = (
         AnonymousSessionStore(
             session_ttl_seconds=max(
@@ -341,9 +377,7 @@ def create_app(
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=(
-            allowed_origins if allowed_origins is not None else _allowed_origins()
-        ),
+        allow_origins=trusted_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=[
@@ -425,6 +459,7 @@ def create_app(
         ) from error
 
     def require_access(
+        request: Request,
         supplied_pairing_token: Annotated[
             str | None,
             Header(alias="X-NotesBuddy-Pairing-Token"),
@@ -441,9 +476,13 @@ def create_app(
             except SessionAccessError as error:
                 _raise_session_error(error)
         assert pairing_token is not None
-        if not supplied_pairing_token or not hmac.compare_digest(
+        persistent_token_matches = bool(
+            supplied_pairing_token
+            and hmac.compare_digest(supplied_pairing_token, pairing_token)
+        )
+        if not persistent_token_matches and not browser_pairings.accepts(
             supplied_pairing_token,
-            pairing_token,
+            origin=request.headers.get("origin"),
         ):
             raise HTTPException(
                 status_code=401,
@@ -452,6 +491,7 @@ def create_app(
         return None
 
     def health_access(
+        request: Request,
         supplied_pairing_token: Annotated[
             str | None,
             Header(alias="X-NotesBuddy-Pairing-Token"),
@@ -460,14 +500,62 @@ def create_app(
         if hosted:
             return
         assert pairing_token is not None
-        if not supplied_pairing_token or not hmac.compare_digest(
+        persistent_token_matches = bool(
+            supplied_pairing_token
+            and hmac.compare_digest(supplied_pairing_token, pairing_token)
+        )
+        if not persistent_token_matches and not browser_pairings.accepts(
             supplied_pairing_token,
-            pairing_token,
+            origin=request.headers.get("origin"),
         ):
             raise HTTPException(
                 status_code=401,
                 detail="Pairing token is missing or invalid.",
             )
+
+    @app.get("/v1/companion")
+    def companion_discovery(response: Response) -> dict[str, Any]:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        response.headers["Cache-Control"] = "no-store"
+        return {
+            "product": "NotesBuddy Desktop Companion",
+            "version": companion_version or "development",
+            "apiVersion": 1,
+            "status": "available",
+            "browserPairing": browser_pairing_enabled,
+            "engine": getattr(
+                active_engine,
+                "name",
+                active_engine.__class__.__name__,
+            ),
+            "storage": "temporary job files only",
+        }
+
+    @app.post("/v1/pairings")
+    def create_browser_pairing(
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        if hosted or not browser_pairing_enabled:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        origin = request.headers.get("origin", "")
+        if (
+            not origin
+            or origin == "null"
+            or origin not in trusted_origins
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="This website is not trusted by the desktop companion.",
+            )
+        token, pairing = browser_pairings.issue(origin)
+        response.headers["Cache-Control"] = "no-store"
+        return {
+            "pairingToken": token,
+            "expiresAt": pairing.expires_at,
+            "origin": pairing.origin,
+        }
 
     @app.get("/v1/health", dependencies=[Depends(health_access)])
     def health(response: Response) -> dict[str, Any]:

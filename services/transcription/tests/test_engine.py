@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -69,6 +71,35 @@ class FakeWhisper:
             )
         ]
         return segments, SimpleNamespace(language="en")
+
+
+class BundledModelConfigurationTests(unittest.TestCase):
+    def test_bundled_models_are_preferred_without_a_user_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            model_root = Path(directory)
+            whisper = model_root / "faster-whisper-small"
+            diarization = model_root / "speaker-diarization-community-1"
+            whisper.mkdir()
+            diarization.mkdir()
+            with patch.dict(
+                "os.environ",
+                {
+                    "NOTESBUDDY_MODEL_DIR": str(model_root),
+                    "HF_TOKEN": "",
+                },
+                clear=False,
+            ):
+                engine = LocalDiarizationEngine()
+
+            self.assertEqual(
+                Path(engine.whisper_model_name).resolve(),
+                whisper.resolve(),
+            )
+            self.assertEqual(
+                Path(engine.diarization_model_name).resolve(),
+                diarization.resolve(),
+            )
+            self.assertEqual(engine.hugging_face_token, "")
 
 
 class FakeTurn:

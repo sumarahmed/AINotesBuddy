@@ -108,6 +108,23 @@ class LocalApiTests(unittest.TestCase):
         )
         self.assertNotIn("access-control-allow-origin", denied.headers)
 
+    def test_discovery_discloses_no_pairing_secret(self) -> None:
+        response = self.client.get("/v1/companion")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        self.assertEqual(response.json()["status"], "available")
+        self.assertFalse(response.json()["browserPairing"])
+        self.assertNotIn("token", response.text.lower())
+
+    def test_automatic_pairing_is_disabled_for_the_manual_cli(self) -> None:
+        response = self.client.post(
+            "/v1/pairings",
+            headers={"Origin": "http://127.0.0.1:4173"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def _wait_for_terminal(self, job_id: str) -> dict:
         for _attempt in range(100):
             response = self.client.get(
@@ -214,6 +231,73 @@ class AnonymousHostedApiTests(unittest.TestCase):
             "x-notesbuddy-session-token",
             allowed.headers.get("access-control-allow-headers", "").lower(),
         )
+
+    def test_local_companion_routes_are_not_exposed_by_hosted_service(self) -> None:
+        self.assertEqual(self.client.get("/v1/companion").status_code, 404)
+        self.assertEqual(self.client.post("/v1/pairings").status_code, 404)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test dependencies are not installed")
+class DesktopBrowserPairingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from notesbuddy_transcription.server import create_app
+
+        self.origin = "https://sumarahmed.github.io"
+        self.client = TestClient(
+            create_app(
+                engine=EmptyEngine(),
+                pairing_token=PAIRING_TOKEN,
+                allowed_origins=[self.origin],
+                allow_browser_pairing=True,
+            )
+        )
+
+    def test_trusted_origin_can_pair_and_use_the_local_api(self) -> None:
+        paired = self.client.post(
+            "/v1/pairings",
+            headers={"Origin": self.origin},
+        )
+
+        self.assertEqual(paired.status_code, 200)
+        self.assertEqual(paired.headers.get("cache-control"), "no-store")
+        payload = paired.json()
+        self.assertEqual(payload["origin"], self.origin)
+        self.assertGreaterEqual(len(payload["pairingToken"]), 32)
+
+        health = self.client.get(
+            "/v1/health",
+            headers={
+                "Origin": self.origin,
+                "X-NotesBuddy-Pairing-Token": payload["pairingToken"],
+            },
+        )
+        self.assertEqual(health.status_code, 200)
+
+        wrong_origin = self.client.get(
+            "/v1/health",
+            headers={
+                "Origin": "https://untrusted.invalid",
+                "X-NotesBuddy-Pairing-Token": payload["pairingToken"],
+            },
+        )
+        self.assertEqual(wrong_origin.status_code, 401)
+
+    def test_pairing_rejects_missing_null_and_untrusted_origins(self) -> None:
+        for headers in (
+            {},
+            {"Origin": "null"},
+            {"Origin": "https://untrusted.invalid"},
+        ):
+            with self.subTest(headers=headers):
+                response = self.client.post("/v1/pairings", headers=headers)
+                self.assertEqual(response.status_code, 403)
+
+    def test_manual_recovery_token_still_works(self) -> None:
+        response = self.client.get(
+            "/v1/health",
+            headers={"X-NotesBuddy-Pairing-Token": PAIRING_TOKEN},
+        )
+        self.assertEqual(response.status_code, 200)
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test dependencies are not installed")

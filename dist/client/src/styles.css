@@ -3134,8 +3134,24 @@ kbd {
   background: var(--teal);
 }
 
+.service-check__status--fallback i {
+  background: var(--amber);
+}
+
 .service-check__status--unavailable i {
   background: var(--coral);
+}
+
+.companion-actions {
+  display: flex;
+  margin-top: 11px;
+}
+
+.companion-actions .button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  text-decoration: none;
 }
 
 .setting-toggle {

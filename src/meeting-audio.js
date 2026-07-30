@@ -517,6 +517,115 @@
     };
   }
 
+  class CompanionConnector {
+    constructor({
+      endpoint = "http://127.0.0.1:8765",
+      fetchImpl = globalObject.fetch,
+      timeoutMs = 8000,
+    } = {}) {
+      this.endpoint = String(endpoint).replace(/\/+$/, "");
+      this.fetchImpl =
+        typeof fetchImpl === "function"
+          ? fetchImpl.bind(globalObject)
+          : fetchImpl;
+      this.timeoutMs = Math.max(250, Number(timeoutMs) || 8000);
+    }
+
+    async request(path, options = {}) {
+      if (typeof this.fetchImpl !== "function") {
+        throw new Error("This browser cannot connect to the desktop companion.");
+      }
+      const controller = new AbortController();
+      const timeout = globalObject.setTimeout(
+        () => controller.abort(),
+        this.timeoutMs,
+      );
+      try {
+        const response = await this.fetchImpl(`${this.endpoint}${path}`, {
+          cache: "no-store",
+          mode: "cors",
+          ...options,
+          signal: controller.signal,
+        });
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        if (!response.ok) {
+          const error = new Error(
+            payload?.detail ||
+              `Desktop companion returned ${response.status}`,
+          );
+          error.status = response.status;
+          throw error;
+        }
+        return payload;
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          throw new Error("Desktop companion connection timed out.");
+        }
+        throw error;
+      } finally {
+        globalObject.clearTimeout(timeout);
+      }
+    }
+
+    async discover() {
+      const companion = await this.request("/v1/companion", {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      if (
+        companion?.product !== "NotesBuddy Desktop Companion" ||
+        companion?.status !== "available" ||
+        companion?.apiVersion !== 1
+      ) {
+        throw new Error("An incompatible service is using the companion port.");
+      }
+      if (!companion.browserPairing) {
+        throw new Error(
+          "The running companion does not support automatic website pairing.",
+        );
+      }
+      return companion;
+    }
+
+    pair() {
+      return this.request("/v1/pairings", {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+    }
+
+    async connect() {
+      const companion = await this.discover();
+      const pairing = await this.pair();
+      const token = String(pairing?.pairingToken || "");
+      if (token.length < 24) {
+        throw new Error("The desktop companion returned an invalid pairing.");
+      }
+      const health = await this.request("/v1/health", {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-NotesBuddy-Pairing-Token": token,
+        },
+      });
+      if (health?.status !== "ok") {
+        throw new Error("The desktop companion is not ready.");
+      }
+      return {
+        endpoint: this.endpoint,
+        token,
+        companion,
+        health,
+        expiresAt: pairing?.expiresAt || null,
+      };
+    }
+  }
+
   class TranscriptionClient {
     constructor({
       endpoint,
@@ -753,6 +862,7 @@
   globalObject.NotesBuddyMeetingAudio = Object.freeze({
     RECORDING_SOURCES,
     SPEAKER_COLORS,
+    CompanionConnector,
     TranscriptionClient,
     applyTranscriptionResult,
     buildExtractiveBrief,

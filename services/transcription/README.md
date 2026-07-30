@@ -12,6 +12,13 @@ owners should follow [Public hosted
 transcription](../../docs/HOSTED_TRANSCRIPTION.md); never expose this local
 launcher directly to a LAN or the internet.
 
+Normal Windows users should install the packaged desktop companion described in
+the [Desktop Companion guide](../../docs/DESKTOP_COMPANION.md). Packaged
+releases contain offline model weights and pair with the public website
+automatically; users do not configure Python, `HF_TOKEN`, a URL, or a pairing
+token. The source instructions below remain for development and manual
+recovery.
+
 The microphone track is always assigned to `local-user` (**You**). Meeting-only
 voices receive session-local IDs such as `remote-1`; those IDs are not voice
 biometrics and do not identify real people.
@@ -67,6 +74,10 @@ The launcher:
 - creates a persistent random 256-bit pairing token on first start;
 - prints the local token-file location;
 - loads speech models only when the first job starts.
+
+`desktop_app.py` is the packaged launcher. In addition to the loopback service,
+it provides a control panel, notification-area menu, Windows sign-in startup,
+safe discovery, and exact-origin automatic browser pairing.
 
 Display the token without starting a second server:
 
@@ -134,7 +145,7 @@ private launcher.
 
 ## API
 
-Every endpoint requires:
+Transcription and health endpoints require:
 
 ```text
 X-NotesBuddy-Pairing-Token: <local pairing token>
@@ -143,11 +154,19 @@ X-NotesBuddy-Pairing-Token: <local pairing token>
 Endpoints:
 
 ```text
+GET    /v1/companion
+POST   /v1/pairings
 GET    /v1/health
 POST   /v1/transcriptions
 GET    /v1/transcriptions/{jobId}
 DELETE /v1/transcriptions/{jobId}
 ```
+
+`GET /v1/companion` returns only non-secret discovery metadata. Packaged desktop
+builds enable `POST /v1/pairings`; it rejects missing, `null`, and untrusted
+origins and returns a short-lived in-memory token. The manual `run.py` launcher
+keeps automatic pairing disabled, so its persistent token workflow remains
+explicit.
 
 `POST` accepts multipart fields named `microphone`, `meeting`, `mixed`, and
 `metadata`. At least one audio field is required. New NotesBuddy captures send

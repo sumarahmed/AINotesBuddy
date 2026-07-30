@@ -113,14 +113,31 @@ initialMeetings = initialMeetings.map((meeting) =>
   MeetingAudio.ensureMeetingSpeakers(meeting, initialProfile),
 );
 
-const runtimeTranscriptionMode =
-  runtimeConfig.transcriptionMode === "hosted" ? "hosted" : "local";
-const runtimeTranscriptionEndpoint = String(
-  runtimeConfig.transcriptionEndpoint ||
-    (runtimeTranscriptionMode === "hosted"
-      ? ""
-      : "http://127.0.0.1:8765"),
+const runtimeTranscriptionMode = ["hosted", "hybrid"].includes(
+  runtimeConfig.transcriptionMode,
+)
+  ? runtimeConfig.transcriptionMode
+  : "local";
+const runtimeLocalCompanionEndpoint = String(
+  runtimeConfig.localCompanionEndpoint ||
+    (runtimeTranscriptionMode === "local"
+      ? runtimeConfig.transcriptionEndpoint
+      : "") ||
+    "http://127.0.0.1:8765",
 ).replace(/\/+$/, "");
+const runtimeHostedTranscriptionEndpoint = String(
+  runtimeTranscriptionMode === "local"
+    ? ""
+    : runtimeConfig.transcriptionEndpoint || "",
+).replace(/\/+$/, "");
+const runtimeTranscriptionEndpoint =
+  runtimeTranscriptionMode === "local"
+    ? runtimeLocalCompanionEndpoint
+    : runtimeHostedTranscriptionEndpoint;
+const companionDownloadUrl = String(
+  runtimeConfig.companionDownloadUrl ||
+    "https://github.com/sumarahmed/AINotesBuddy/releases/latest",
+);
 const storedSettings = loadStored("notesbuddy-settings", {});
 const defaultSettings = {
   autoSummarize: true,
@@ -128,21 +145,29 @@ const defaultSettings = {
   systemAudio: true,
   browserTranscription: true,
   autoTranscribe: false,
-  transcriptionMode: runtimeTranscriptionMode,
+  transcriptionMode:
+    runtimeTranscriptionMode === "hybrid"
+      ? "hosted"
+      : runtimeTranscriptionMode,
   transcriptionEndpoint: runtimeTranscriptionEndpoint,
   transcriptionToken: "",
 };
 const initialSettings = {
   ...defaultSettings,
   ...storedSettings,
-  transcriptionMode: runtimeTranscriptionMode,
+  transcriptionMode:
+    runtimeTranscriptionMode === "hybrid"
+      ? "hosted"
+      : runtimeTranscriptionMode,
   transcriptionEndpoint:
-    runtimeTranscriptionMode === "hosted"
+    runtimeTranscriptionMode === "hosted" ||
+    runtimeTranscriptionMode === "hybrid"
       ? runtimeTranscriptionEndpoint
       : storedSettings.transcriptionEndpoint ||
         defaultSettings.transcriptionEndpoint,
   transcriptionToken:
-    runtimeTranscriptionMode === "hosted"
+    runtimeTranscriptionMode === "hosted" ||
+    runtimeTranscriptionMode === "hybrid"
       ? ""
       : storedSettings.transcriptionToken || "",
 };
@@ -161,6 +186,12 @@ const state = {
   moreOpen: false,
   showAllMeetings: false,
   transcriptionServiceStatus: "unknown",
+  companion: {
+    status: runtimeTranscriptionMode === "hybrid" ? "checking" : "disabled",
+    pairingToken: "",
+    metadata: null,
+    error: null,
+  },
   playbackSourceByMeeting: {},
   toasts: [],
   capture: {
@@ -189,6 +220,7 @@ let captureRuntime = createEmptyCaptureRuntime();
 let speechRecognition;
 let activeAudioUrl;
 let toastId = 0;
+let companionConnectionPromise;
 const transcriptionControllers = new Map();
 
 function createEmptyCaptureRuntime() {
@@ -214,7 +246,19 @@ function createEmptyCaptureRuntime() {
 
 function save() {
   localStorage.setItem("notesbuddy-meetings", JSON.stringify(state.meetings));
-  localStorage.setItem("notesbuddy-settings", JSON.stringify(state.settings));
+  const settingsToStore =
+    runtimeTranscriptionMode === "hybrid"
+      ? {
+          ...state.settings,
+          transcriptionMode: "hosted",
+          transcriptionEndpoint: runtimeHostedTranscriptionEndpoint,
+          transcriptionToken: "",
+        }
+      : state.settings;
+  localStorage.setItem(
+    "notesbuddy-settings",
+    JSON.stringify(settingsToStore),
+  );
   if (state.profile) {
     localStorage.setItem("notesbuddy-profile", JSON.stringify(state.profile));
   }
@@ -322,6 +366,10 @@ function currentUserFirstName() {
 
 function usesHostedTranscription() {
   return state.settings.transcriptionMode === "hosted";
+}
+
+function usesHybridTranscription() {
+  return runtimeTranscriptionMode === "hybrid";
 }
 
 function greetingForTime(date = new Date()) {
@@ -923,20 +971,38 @@ function settingsPanel() {
   const toggle = (key, title, description) =>
     `<button type="button" class="setting-toggle" data-action="setting-toggle" data-id="${key}" aria-pressed="${state.settings[key]}"><div><strong>${title}</strong><span>${description}</span></div><i class="${state.settings[key] ? "toggle--on" : ""}"><span></span></i></button>`;
   const hosted = usesHostedTranscription();
+  const hybrid = usesHybridTranscription();
+  const hybridConnected = hybrid && !hosted;
+  const statusText = {
+    unknown: "not tested",
+    checking: "checking",
+    connected: hybridConnected ? "local connected" : "connected",
+    fallback: "online fallback",
+    unavailable: "unavailable",
+  }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus;
   const privacyMessage = hosted
-    ? "Recordings stay in this browser until transcription is requested. Selected audio is then sent securely to the public service and removed from its temporary storage after processing."
+    ? hybrid
+      ? "Recordings stay in this browser. While the desktop companion is unavailable, requested transcription uses the temporary online service."
+      : "Recordings stay in this browser until transcription is requested. Selected audio is then sent securely to the public service and removed from its temporary storage after processing."
     : "Audio and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.";
-  const transcriptionSettings = hosted
+  const transcriptionSettings = hybrid
     ? `<section class="settings-section">
+        <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
+        <p class="settings-help">${hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is processing audio privately on this computer. Pairing is automatic and expires when the companion restarts.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
+        <div class="companion-actions"><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}Download for Windows</a></div>
+      </section>`
+    : hosted
+      ? `<section class="settings-section">
         <span class="eyebrow">Online speaker transcription</span>
-        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(state.transcriptionServiceStatus)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test service</button></div>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test service</button></div>
         <p class="settings-help">No installation or token is required. Anonymous sessions are temporary and public usage limits apply.</p>
       </section>`
-    : `<section class="settings-section">
+      : `<section class="settings-section">
         <span class="eyebrow">Local speaker transcription</span>
         <label><span>Companion URL</span><input data-setting="transcriptionEndpoint" value="${escapeHtml(state.settings.transcriptionEndpoint)}" inputmode="url" spellcheck="false" aria-label="Transcription companion URL"></label>
         <label><span>Pairing token</span><input data-setting="transcriptionToken" value="${escapeHtml(state.settings.transcriptionToken)}" type="password" autocomplete="off" spellcheck="false" aria-label="Transcription pairing token"></label>
-        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(state.transcriptionServiceStatus)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
         <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
       </section>`;
   const autoTranscribeDescription = hosted
@@ -945,7 +1011,7 @@ function settingsPanel() {
   return `<div class="drawer-backdrop" data-action="close-settings">
     <aside class="settings-drawer" data-panel="settings">
       <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
-      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>${hosted ? "Local recording · online transcription" : "Local recording"}</strong><p>${privacyMessage}</p></div></section>
+      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>${hosted ? "Local recording · online transcription" : "Local recording · on-device transcription"}</strong><p>${privacyMessage}</p></div></section>
       <section class="settings-section">
         <span class="eyebrow">Local profile</span>
         <label><span>Your name</span><input data-input="profile-name" value="${escapeHtml(currentUserName())}" maxlength="80" autocomplete="name" aria-label="Your name"></label>
@@ -1944,13 +2010,91 @@ function selectedMeeting() {
   );
 }
 
+function activateHostedFallback(error = null) {
+  if (!usesHybridTranscription()) return;
+  state.companion = {
+    status: "unavailable",
+    pairingToken: "",
+    metadata: null,
+    error: error?.message || null,
+  };
+  state.settings.transcriptionMode = "hosted";
+  state.settings.transcriptionEndpoint = runtimeHostedTranscriptionEndpoint;
+  state.settings.transcriptionToken = "";
+  state.transcriptionServiceStatus = "fallback";
+}
+
+async function connectLocalCompanion({
+  silent = false,
+  force = false,
+} = {}) {
+  if (!usesHybridTranscription()) return false;
+  if (!force && state.companion.status === "connected") return true;
+  if (companionConnectionPromise) return companionConnectionPromise;
+
+  state.companion.status = "checking";
+  state.companion.error = null;
+  state.transcriptionServiceStatus = "checking";
+  render();
+
+  const attempt = (async () => {
+    try {
+      const connection = await new MeetingAudio.CompanionConnector({
+        endpoint: runtimeLocalCompanionEndpoint,
+      }).connect();
+      state.companion = {
+        status: "connected",
+        pairingToken: connection.token,
+        metadata: connection.companion,
+        expiresAt: connection.expiresAt,
+        error: null,
+      };
+      state.settings.transcriptionMode = "local";
+      state.settings.transcriptionEndpoint = connection.endpoint;
+      state.settings.transcriptionToken = "";
+      state.transcriptionServiceStatus = "connected";
+      save();
+      render();
+      if (!silent) {
+        showToast(
+          "Desktop companion connected",
+          `${connection.health?.engine || "Local transcription"} will process audio on this computer.`,
+        );
+      }
+      return true;
+    } catch (error) {
+      activateHostedFallback(error);
+      save();
+      render();
+      if (!silent) {
+        showToast(
+          "Using online transcription",
+          error?.message ||
+            "Start the desktop companion and choose Look for companion again.",
+        );
+      }
+      return false;
+    }
+  })();
+  companionConnectionPromise = attempt;
+  try {
+    return await attempt;
+  } finally {
+    if (companionConnectionPromise === attempt) {
+      companionConnectionPromise = null;
+    }
+  }
+}
+
 function createTranscriptionClient() {
   return new MeetingAudio.TranscriptionClient({
     endpoint: state.settings.transcriptionEndpoint,
     mode: state.settings.transcriptionMode,
     token: usesHostedTranscription()
       ? ""
-      : state.settings.transcriptionToken,
+      : usesHybridTranscription()
+        ? state.companion.pairingToken
+        : state.settings.transcriptionToken,
   });
 }
 
@@ -1966,10 +2110,27 @@ async function loadMeetingRecordingBlobs(meeting) {
 }
 
 async function testTranscriptionService() {
+  if (usesHybridTranscription() && usesHostedTranscription()) {
+    await connectLocalCompanion({ silent: false, force: true });
+    return;
+  }
+  const testedLocalHybrid =
+    usesHybridTranscription() && !usesHostedTranscription();
   state.transcriptionServiceStatus = "checking";
   render();
   try {
-    const health = await createTranscriptionClient().health();
+    let health;
+    try {
+      health = await createTranscriptionClient().health();
+    } catch (error) {
+      if (!testedLocalHybrid || error?.status !== 401) throw error;
+      const reconnected = await connectLocalCompanion({
+        silent: true,
+        force: true,
+      });
+      if (!reconnected) throw error;
+      health = await createTranscriptionClient().health();
+    }
     state.transcriptionServiceStatus =
       health?.status === "ok" ? "connected" : "unavailable";
     showToast(
@@ -1981,12 +2142,21 @@ async function testTranscriptionService() {
         : `${health?.engine || "Local engine"} is ready on this computer.`,
     );
   } catch (error) {
-    state.transcriptionServiceStatus = "unavailable";
+    if (testedLocalHybrid) {
+      activateHostedFallback(error);
+      save();
+    } else {
+      state.transcriptionServiceStatus = "unavailable";
+    }
     showToast(
-      usesHostedTranscription()
+      testedLocalHybrid
+        ? "Desktop companion disconnected"
+        : usesHostedTranscription()
         ? "Public transcription service unavailable"
         : "Companion connection failed",
-      error?.message ||
+      testedLocalHybrid
+        ? "Online transcription is available as a fallback. Restart the companion to return to private processing."
+        : error?.message ||
         (usesHostedTranscription()
           ? "Try again shortly. The service may be starting."
           : "Start the local service and verify its URL and pairing token."),
@@ -2013,7 +2183,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
 
   const controller = new AbortController();
   transcriptionControllers.set(meeting.id, controller);
-  const client = createTranscriptionClient();
+  let client = createTranscriptionClient();
   meeting.transcription = {
     ...(meeting.transcription || {}),
     status: "queued",
@@ -2026,23 +2196,39 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
 
   try {
     const blobs = await loadMeetingRecordingBlobs(meeting);
-    const created = await client.createJob({
-      microphoneBlob: blobs.microphone,
-      meetingBlob: blobs.meeting,
-      mixedBlob: blobs.mixed,
-      metadata: {
-        meetingId: meeting.id,
-        captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
-        captureClockVersion: meeting.captureClockVersion || 1,
-        ...(usesHostedTranscription()
-          ? {}
-          : { localSpeakerName: currentUserName() }),
-        durationMs: Math.max(
-          0,
-          Number(meeting.durationSeconds || 0) * 1000,
-        ),
-      },
-    });
+    const createJob = () =>
+      client.createJob({
+        microphoneBlob: blobs.microphone,
+        meetingBlob: blobs.meeting,
+        mixedBlob: blobs.mixed,
+        metadata: {
+          meetingId: meeting.id,
+          captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
+          captureClockVersion: meeting.captureClockVersion || 1,
+          ...(usesHostedTranscription()
+            ? {}
+            : { localSpeakerName: currentUserName() }),
+          durationMs: Math.max(
+            0,
+            Number(meeting.durationSeconds || 0) * 1000,
+          ),
+        },
+      });
+    let created;
+    try {
+      created = await createJob();
+    } catch (error) {
+      if (
+        !usesHybridTranscription() ||
+        usesHostedTranscription() ||
+        error?.status !== 401
+      ) {
+        throw error;
+      }
+      await connectLocalCompanion({ silent: true, force: true });
+      client = createTranscriptionClient();
+      created = await createJob();
+    }
     meeting.transcription = {
       ...meeting.transcription,
       status: created.status || "queued",
@@ -2313,6 +2499,9 @@ app.addEventListener("click", async (event) => {
   } else if (action === "test-transcription-service") {
     await testTranscriptionService();
     return;
+  } else if (action === "connect-companion") {
+    await connectLocalCompanion({ silent: false, force: true });
+    return;
   } else if (action === "open-nav") {
     state.mobileNavOpen = true;
   } else if (action === "close-nav") {
@@ -2526,3 +2715,6 @@ window.addEventListener("pagehide", () => {
 });
 
 render();
+if (usesHybridTranscription()) {
+  connectLocalCompanion({ silent: true }).catch(() => {});
+}

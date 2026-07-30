@@ -9,6 +9,13 @@ but does not yet publish semantic-versioned releases.
 
 ### Added
 
+- Windows desktop companion control panel and notification-area lifecycle
+- Exact-origin automatic browser pairing with expiring memory-only tokens
+- Hybrid local-first runtime selection with a visible hosted fallback
+- Offline model preparation, model revision manifest, PyInstaller bundle, Inno
+  Setup installer, and GitHub Actions release workflow
+- Desktop architecture, model notice, release, security, and troubleshooting
+  documentation
 - Hosted anonymous transcription mode with expiring browser sessions,
   per-session job ownership, hashed client rate-limit keys, and bounded quotas
 - Modal serverless GPU deployment package, protected Hugging Face secret, and
@@ -37,6 +44,10 @@ but does not yet publish semantic-versioned releases.
 
 ### Changed
 
+- The public runtime now probes the desktop companion first and does not expose
+  URL/token fields in automatic hybrid mode
+- Packaged releases can use publisher-bundled offline models without requesting
+  a Hugging Face token from each user
 - Settings hide the local URL/pairing fields in hosted mode and disclose when
   transcription sends selected audio to the public processing service
 - Transcription API supports either local pairing or anonymous hosted access

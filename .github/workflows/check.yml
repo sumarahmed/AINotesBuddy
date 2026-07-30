@@ -57,5 +57,7 @@ jobs:
 
       - name: Validate timestamp alignment and local API
         run: |
+          python -m py_compile services/transcription/desktop_app.py
+          python -m py_compile desktop/prepare_models.py
           python -m py_compile services/transcription/modal_app.py
           python -m unittest discover -s services/transcription/tests -v
