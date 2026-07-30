@@ -544,6 +544,7 @@
         const response = await this.fetchImpl(`${this.endpoint}${path}`, {
           cache: "no-store",
           mode: "cors",
+          targetAddressSpace: "loopback",
           ...options,
           signal: controller.signal,
         });
@@ -766,6 +767,9 @@
         await this.ensureSession();
       }
       let response = await this.fetchImpl(`${this.endpoint}${path}`, {
+        ...(this.mode === "local"
+          ? { targetAddressSpace: "loopback" }
+          : {}),
         ...fetchOptions,
         headers: this.headers(fetchOptions.headers),
       });
@@ -778,6 +782,9 @@
         this.clearSession();
         await this.ensureSession();
         response = await this.fetchImpl(`${this.endpoint}${path}`, {
+          ...(this.mode === "local"
+            ? { targetAddressSpace: "loopback" }
+            : {}),
           ...fetchOptions,
           headers: this.headers(fetchOptions.headers),
         });

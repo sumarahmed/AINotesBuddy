@@ -67,6 +67,8 @@ but does not yet publish semantic-versioned releases.
 
 ### Fixed
 
+- Mark loopback fetches for browser Local Network Access permission and show
+  actionable Chrome/Edge site-permission recovery guidance
 - Kept unnecessary Torch source, test, and metadata trees out of the Windows
   installer and verified model-inclusive packages during their self-test
 - Decode meeting audio into an in-memory waveform before diarization so the
