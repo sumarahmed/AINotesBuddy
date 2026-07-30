@@ -17,16 +17,24 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install_from_requirements(
-        "services/transcription/requirements.txt",
+        "services/transcription/requirements-api.txt",
     )
-    .add_local_dir(
-        "services/transcription/notesbuddy_transcription",
-        remote_path="/root/notesbuddy_transcription",
+    .pip_install(
+        "torch==2.11.0",
+        "torchaudio==2.11.0",
+        index_url="https://download.pytorch.org/whl/cu128",
+    )
+    .pip_install_from_requirements(
+        "services/transcription/requirements-models.txt",
     )
     .env(
         {
             "HF_HOME": "/model-cache/huggingface",
             "TORCH_HOME": "/model-cache/torch",
+            "LD_LIBRARY_PATH": (
+                "/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:"
+                "/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib"
+            ),
             "NOTESBUDDY_ACCESS_MODE": "anonymous",
             "NOTESBUDDY_ALLOWED_ORIGINS": "https://sumarahmed.github.io",
             "NOTESBUDDY_MODEL_DEVICE": "cuda",
@@ -43,6 +51,10 @@ image = (
             "NOTESBUDDY_MAX_JOBS_PER_SESSION": "3",
             "NOTESBUDDY_MAX_ACTIVE_JOBS_PER_SESSION": "1",
         }
+    )
+    .add_local_dir(
+        "services/transcription/notesbuddy_transcription",
+        remote_path="/root/notesbuddy_transcription",
     )
 )
 

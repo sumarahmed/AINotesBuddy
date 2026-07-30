@@ -356,6 +356,13 @@ async function runMainWorkflow(browser, baseUrl) {
     }
   });
   await installSyntheticMedia(page);
+  await page.route("**/src/runtime-config.js", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript; charset=utf-8",
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
+    });
+  });
 
   let multipartBody = "";
   let healthRouteCalls = 0;
