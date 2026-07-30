@@ -69,6 +69,8 @@ but does not yet publish semantic-versioned releases.
 
 - Mark loopback fetches for browser Local Network Access permission and show
   actionable Chrome/Edge site-permission recovery guidance
+- Bundle the SoundFile decoder explicitly and wait for the model-inclusive
+  packaged self-test process instead of reading a stale PowerShell exit code
 - Kept unnecessary Torch source, test, and metadata trees out of the Windows
   installer and verified model-inclusive packages during their self-test
 - Decode meeting audio into an in-memory waveform before diarization so the

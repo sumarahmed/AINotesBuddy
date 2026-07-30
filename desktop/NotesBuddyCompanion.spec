@@ -15,7 +15,7 @@ datas = [
     ),
 ]
 binaries = []
-hiddenimports = collect_submodules("uvicorn")
+hiddenimports = collect_submodules("uvicorn") + ["soundfile"]
 
 for package in (
     "av",
@@ -25,7 +25,6 @@ for package in (
     "PIL",
     "pyannote.audio",
     "pystray",
-    "soundfile",
 ):
     try:
         package_datas, package_binaries, package_hiddenimports = collect_all(package)
