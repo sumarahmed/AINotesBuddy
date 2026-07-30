@@ -1,24 +1,24 @@
 # GitHub publishing checklist
 
-The repository is ready to publish, but the GitHub owner and repository URL
-must be chosen by the maintainer.
+The repository publishes the tested `dist/client` bundle to GitHub Pages at
+<https://sumarahmed.github.io/notesbuddy/>.
 
 ## Important remote configuration
 
 The existing `origin` remote is used by the connected Sites deployment. Do not
 replace or remove it.
 
-After creating an empty GitHub repository, add GitHub as a second remote:
+GitHub is configured as a second remote:
 
 ```bash
-git remote add github https://github.com/OWNER/notesbuddy.git
+git remote add github https://github.com/sumarahmed/notesbuddy.git
 git push -u github main
 ```
 
 For SSH:
 
 ```bash
-git remote add github git@github.com:OWNER/notesbuddy.git
+git remote add github git@github.com:sumarahmed/notesbuddy.git
 git push -u github main
 ```
 
@@ -79,7 +79,9 @@ Suggested topics:
   - Require conversations to be resolved
   - Block force pushes and branch deletion
 
-The workflow deliberately uses read-only `contents` permission.
+The repository-check workflow deliberately uses read-only `contents`
+permission. The Pages deployment job additionally receives only `pages: write`
+and `id-token: write`, as required by GitHub Pages.
 
 ## First release
 

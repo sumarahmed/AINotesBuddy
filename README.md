@@ -9,7 +9,9 @@ transcripts, notes, and action items.
 > inspired by local-first meeting tools such as Meetily; it is not affiliated
 > with or endorsed by Meetily.
 
-[Open the owner-restricted live preview](https://notesbuddy-local.sumarahmed.chatgpt.site)
+[Open the public GitHub Pages site](https://sumarahmed.github.io/notesbuddy/)
+
+[Owner-restricted Sites deployment](https://notesbuddy-local.sumarahmed.chatgpt.site)
 
 ## Highlights
 
@@ -57,6 +59,9 @@ dependencies.
 | `npm run preview` | Serve the generated `dist/` bundle |
 | `npm run check` | Syntax-check the source and verify a clean build |
 | `npm test` | Run the same repository validation used by CI |
+
+Pushes to `main` also validate and deploy `dist/client` through the
+`Deploy GitHub Pages` workflow.
 
 ## How recordings and transcripts work
 

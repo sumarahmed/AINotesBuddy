@@ -12,6 +12,7 @@ but does not yet publish semantic-versioned releases.
 - GitHub-ready project, architecture, privacy, testing, and contribution
   documentation
 - GitHub issue forms, pull request template, and CI validation
+- Public GitHub Pages deployment workflow for the generated static client
 - First-run local profiles with personalised greetings, initials, transcript
   attribution, and editable names
 - UUID-based profile, meeting, import, and speech-segment identifiers
