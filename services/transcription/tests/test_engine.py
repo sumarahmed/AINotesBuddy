@@ -126,8 +126,9 @@ class FakeDiarizationPipeline:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def __call__(self, path):
-        self.calls.append(Path(path).name)
+    def __call__(self, audio):
+        self.calls.append(audio["waveform"]["source"])
+        assert audio["sample_rate"] == 16000
         return SimpleNamespace(
             exclusive_speaker_diarization=FakeAnnotation(),
         )
@@ -141,9 +142,32 @@ class LocalEngineAdapterTests(unittest.TestCase):
         self.engine._whisper = self.whisper
         self.engine._diarization = self.diarization
 
+    def _process(self, **kwargs):
+        fake_soundfile = SimpleNamespace(
+            read=lambda path, **_options: (
+                SimpleNamespace(
+                    T=SimpleNamespace(
+                        copy=lambda: SimpleNamespace(source=Path(path).name)
+                    )
+                ),
+                16000,
+            )
+        )
+        fake_torch = SimpleNamespace(
+            from_numpy=lambda samples: {"source": samples.source}
+        )
+        with patch.dict(
+            "sys.modules",
+            {
+                "soundfile": fake_soundfile,
+                "torch": fake_torch,
+            },
+        ):
+            return self.engine.process(**kwargs)
+
     def test_dual_source_result_marks_you_and_orders_remote_ids(self) -> None:
         progress = []
-        result = self.engine.process(
+        result = self._process(
             microphone_path=Path("microphone.webm"),
             meeting_path=Path("meeting.webm"),
             mixed_path=None,
@@ -165,7 +189,7 @@ class LocalEngineAdapterTests(unittest.TestCase):
         self.assertEqual(progress[-1], (1.0, "completed"))
 
     def test_mixed_only_import_is_diarized_as_meeting_audio(self) -> None:
-        result = self.engine.process(
+        result = self._process(
             microphone_path=None,
             meeting_path=None,
             mixed_path=Path("mixed.webm"),
@@ -180,7 +204,7 @@ class LocalEngineAdapterTests(unittest.TestCase):
         self.assertEqual(self.diarization.calls, ["mixed.webm"])
 
     def test_mic_only_capture_does_not_diarize_duplicate_mixed_track(self) -> None:
-        result = self.engine.process(
+        result = self._process(
             microphone_path=Path("microphone.webm"),
             meeting_path=None,
             mixed_path=Path("mixed.webm"),

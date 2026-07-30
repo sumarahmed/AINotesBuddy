@@ -301,7 +301,26 @@ class LocalDiarizationEngine:
         cancel_event: threading.Event,
     ) -> list[SpeakerTurn]:
         pipeline = self._load_diarization()
-        output = pipeline(str(path))
+        try:
+            import soundfile
+            import torch
+        except ImportError as error:
+            raise RuntimeError(
+                "The local audio runtime is incomplete. Reinstall the latest "
+                "NotesBuddy Desktop Companion."
+            ) from error
+        samples, sample_rate = soundfile.read(
+            str(path),
+            dtype="float32",
+            always_2d=True,
+        )
+        waveform = torch.from_numpy(samples.T.copy())
+        output = pipeline(
+            {
+                "waveform": waveform,
+                "sample_rate": int(sample_rate),
+            }
+        )
         if cancel_event.is_set():
             raise EngineCancelled("Transcription cancelled")
         annotation = self._annotation_from_output(output)

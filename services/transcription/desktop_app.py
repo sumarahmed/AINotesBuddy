@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import subprocess
@@ -385,8 +386,8 @@ class DesktopWindow:
         self.root.mainloop()
 
 
-def self_test() -> dict[str, Any]:
-    from notesbuddy_transcription.engine import EmptyEngine
+def self_test(*, require_models: bool = False) -> dict[str, Any]:
+    from notesbuddy_transcription.engine import EmptyEngine, LocalDiarizationEngine
     from notesbuddy_transcription.server import create_app
 
     app = create_app(
@@ -407,11 +408,26 @@ def self_test() -> dict[str, Any]:
     missing = sorted(expected - routes)
     if missing:
         raise RuntimeError(f"Packaged API routes are missing: {', '.join(missing)}")
-    return {
+    result: dict[str, Any] = {
         "status": "ok",
         "version": COMPANION_VERSION,
         "routes": sorted(expected),
     }
+    if require_models:
+        for package in (
+            "faster_whisper",
+            "pyannote.audio",
+            "soundfile",
+            "torch",
+        ):
+            importlib.import_module(package)
+        model_status = LocalDiarizationEngine().configuration_status()
+        if not model_status["ready"] or model_status["source"] != "bundled":
+            raise RuntimeError(
+                "The packaged runtime or offline model directories are incomplete."
+            )
+        result["models"] = model_status
+    return result
 
 
 def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
@@ -435,6 +451,11 @@ def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
         help="Use a dependency-light smoke-test engine.",
     )
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--require-models",
+        action="store_true",
+        help="Require bundled runtime packages and offline models during self-test.",
+    )
     parser.add_argument("--version", action="store_true")
     parsed = parser.parse_args(arguments)
     try:
@@ -450,7 +471,7 @@ def main(arguments: list[str] | None = None) -> int:
         print(COMPANION_VERSION)
         return 0
     if parsed.self_test:
-        print(json.dumps(self_test(), indent=2))
+        print(json.dumps(self_test(require_models=parsed.require_models), indent=2))
         return 0
 
     server = CompanionServer(

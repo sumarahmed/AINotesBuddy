@@ -54,7 +54,11 @@ $executable = Join-Path $outputRoot "dist\NotesBuddyCompanion\NotesBuddyCompanio
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "Packaged companion executable was not created."
 }
-& $executable --self-test
+$selfTestArguments = @("--self-test")
+if ($RequireModels) {
+    $selfTestArguments += "--require-models"
+}
+& $executable @selfTestArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged companion self-test failed with exit code $LASTEXITCODE."
 }
