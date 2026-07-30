@@ -9,6 +9,16 @@ but does not yet publish semantic-versioned releases.
 
 ### Added
 
+- Synchronized microphone, shared meeting-audio, and mixed recording sources
+- Source-specific IndexedDB storage, playback, download, reload, and deletion
+- Meeting-only capture and microphone fallback when display sharing is denied
+- Persistent interrupted-share warning without re-rendering recording controls
+- Local authenticated faster-whisper and pyannote diarization companion
+- Session-local **You**, remote speaker, and unknown-speaker attribution
+- Speaker roster, rename persistence, speaker search, and named Markdown export
+- Local API pairing, origin allowlisting, private-network preflight support,
+  bounded job execution, cancellation, and temporary-upload cleanup
+- JavaScript, Python core/API, and synthetic Chrome/Edge browser test suites
 - GitHub-ready project, architecture, privacy, testing, and contribution
   documentation
 - GitHub issue forms, pull request template, and CI validation
@@ -19,6 +29,9 @@ but does not yet publish semantic-versioned releases.
 
 ### Changed
 
+- Meeting briefs are extractive and contain only real transcript segment text
+- Profile renames synchronize local speaker metadata and owned follow-ups
+- Imported mixed audio can be sent to the local companion for diarization
 - Home and capture dates now use the browser's current local date and time
 - New browser profiles start with an empty workspace instead of bundled demo
   meetings and a fake upcoming calendar event
@@ -27,6 +40,11 @@ but does not yet publish semantic-versioned releases.
 
 ### Fixed
 
+- Bound native browser `fetch` correctly so local companion health/jobs run
+- Preserved transcript text longer than the 80-character speaker-name limit
+- Added modern private-network preflight handling for HTTPS-to-loopback pairing
+- Added the persistent warning when a shared meeting stream ends externally
+- Replaced the no-op summary refresh with honest transcript-only extraction
 - Opening Settings from mobile navigation now closes the navigation behind it
 - Empty libraries say `No meetings yet` instead of reporting a search mismatch
 - Removed the repeated full-view fade that made recording and option controls

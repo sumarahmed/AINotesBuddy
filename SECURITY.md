@@ -18,8 +18,8 @@ Include:
 - A concise description and potential impact
 - Reproduction steps or a minimal proof of concept
 - Affected browser, operating system, and launch method
-- Whether microphone, local storage, imports, exports, or downloaded files are
-  involved
+- Whether microphone/display capture, local storage, imports, exports,
+  downloaded files, pairing/CORS, or the local model companion are involved
 - Suggested mitigations, if known
 
 Do not include genuine meeting audio, transcripts, access tokens, employee
@@ -40,3 +40,10 @@ device may be able to access it.
 Browser speech recognition may process audio through the browser provider's
 service. See [docs/PRIVACY.md](docs/PRIVACY.md) for the full data model and
 privacy boundary.
+
+The optional transcription companion must remain bound to `127.0.0.1`. It
+authenticates all API routes with a persistent random token and restricts
+browser origins. Do not expose port 8765 to a LAN/public interface, commit model
+or pairing tokens, or weaken temporary-job cleanup. Reports involving a leaked
+token, cross-origin access, retained job audio, unsafe media decoding, or model
+supply-chain behavior should be treated as security reports.

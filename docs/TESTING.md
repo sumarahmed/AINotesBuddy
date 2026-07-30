@@ -1,121 +1,208 @@
 # Testing guide
 
-NotesBuddy combines static UI, browser storage, permissions, and media APIs.
-Repository checks cover syntax and build integrity; recording changes also need
-browser-level regression testing.
+NotesBuddy combines browser permissions, several live audio tracks, IndexedDB,
+playback, and a localhost model service. Unit, API, browser, and real-device
+checks cover different parts of that boundary.
 
-## Automated repository check
+Use only generated or consented non-confidential audio.
+
+## Repository validation
 
 ```bash
 npm test
 ```
 
-The command:
+This command:
 
-1. Syntax-checks source and build scripts.
-2. Builds a fresh `dist/` directory.
-3. Syntax-checks the generated client.
-4. Confirms the generated bundle matches the committed `dist/` files.
+1. syntax-checks source/build scripts;
+2. runs `tests/meeting-audio.test.mjs` in-process;
+3. rebuilds `dist/`;
+4. syntax-checks generated client JavaScript;
+5. confirms generated files match tracked `dist/`.
 
-GitHub Actions runs this check on pushes to `main` and on pull requests.
+The JavaScript tests cover:
 
-## Core manual regression
+- legacy `audioId` migration;
+- source preference and asset selection;
+- complete transcript text beyond 80 characters;
+- cross-source echo de-duplication;
+- **You**, detected, renamed, and unknown speaker labels;
+- rename propagation to participants;
+- extractive briefs with no invented text;
+- authenticated multipart client construction.
 
-Use synthetic or non-confidential speech.
+The test file runs directly rather than with Node's process-isolated test mode,
+which also works in restricted Windows environments that deny child-process
+creation.
 
-### Launch paths
+## Local companion tests
 
-- Clear site data and confirm first launch asks for a name.
-- Submit an empty name and confirm validation remains in the setup dialog.
-- Create a profile and confirm the greeting, initials, and current date are
-  personalised.
-- Edit the name in Settings and reload to confirm it persists.
-- Open `index.html` directly and confirm the home screen loads and is styled.
-- Run `npm run dev` and open <http://127.0.0.1:4173>.
-- Run `npm run build`, then `npm run preview`, and open the preview.
+Install only the lightweight API/test dependencies; model downloads are not
+needed:
 
-### Recording
+```powershell
+cd services\transcription
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-test.txt
+python -m unittest discover -s tests -v
+```
 
-- Start a capture and allow microphone permission.
-- Confirm the timer advances without moving or replacing the pause/finish
-  controls.
-- Pause and confirm the timer stops.
-- Resume and confirm the timer continues.
-- Open capture settings while recording and confirm capture continues.
-- Finish and confirm a meeting opens with an original-recording player.
-- Deny microphone permission and confirm the app stays in the ready state with
-  a useful error.
-- Turn the microphone source off and confirm recording cannot start.
+The 15 Python tests cover:
 
-### Playback
+- greatest-overlap word/speaker assignment;
+- stable first-appearance remote IDs;
+- unknown-speaker tolerance;
+- speaker-boundary segment collapse;
+- microphone **You** attribution;
+- cross-source clock merge and echo removal;
+- silence returning no fabricated segments;
+- pairing-token rejection;
+- allowed/denied CORS origins and private-network preflight;
+- multipart source upload and asynchronous job polling;
+- invalid metadata rejection;
+- cancellation signaling and temporary-audio deletion.
+- production adapter parsing of fake faster-whisper/pyannote outputs;
+- mixed-only diarization and mic-only duplicate-mixed suppression.
 
-- Play through the native audio controls and confirm time advances.
-- Open Transcript and use the green waveform play button.
-- Confirm the icon changes to pause and elapsed time advances.
-- Pause, resume, and seek using the waveform.
-- Change tabs while playing and confirm playback resumes from the same
-  position.
-- Filter the transcript while playing and confirm the audio element is not
-  replaced.
-- Download the recording and verify the filename and extension.
+The API tests use `EmptyEngine`, which deliberately returns no transcript text.
+They do not prove model accuracy.
 
-### Transcript integrity
+## Synthetic browser integration
 
-- With browser recognition disabled or unavailable, confirm no sample
-  transcript is inserted.
-- With recognition available, confirm only returned recognition text is saved
-  and the configured profile name and initials are used.
-- Search for a speaker or phrase and confirm the segment list filters.
-- Click a transcript timestamp for a meeting with audio and confirm the player
-  seeks.
-- Confirm timestamps are plain text when no recording exists.
+`tests/browser-smoke.cjs` uses Playwright and an installed Chromium-family
+browser. It replaces permission APIs with Web Audio oscillators and a generated
+canvas display stream. It never opens a physical microphone.
 
-### Persistence and meeting tools
+If Playwright is installed in the project:
 
-- Rename a meeting, add notes, toggle an action, and reload.
-- Confirm all three changes persist.
-- Confirm new meeting and import IDs contain UUIDs rather than timestamps alone.
-- Confirm a recording shorter than one minute displays its elapsed seconds
-  rather than a hard-coded one-minute label.
-- Copy a meeting and inspect the clipboard result.
-- Export Markdown and inspect the downloaded file.
-- Import WAV or MP3 audio and play it.
-- Confirm imported files retain the correct download extension.
-- Delete a meeting and confirm it and its audio disappear.
-- Simulate a missing IndexedDB recording and confirm controls become disabled
-  with a clear unavailable message.
+```bash
+npm run test:browser
+```
 
-### Library, settings, and keyboard
+In the Codex bundled runtime on Windows, the equivalent is:
 
-- Search meetings and clear the search.
-- Toggle View all and Show recent.
-- Open and close Settings using Done and Escape.
-- Change a setting and reload to confirm persistence.
-- Press `N` outside a text field to open capture.
-- Press `Ctrl+K` or `Cmd+K` to focus meeting search.
+```powershell
+$env:NODE_PATH = "C:\Users\<you>\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules"
+$env:NOTESBUDDY_CHROME_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+node tests\browser-smoke.cjs
+```
 
-### Responsive checks
+Set `NOTESBUDDY_CHROME_PATH` to Edge to repeat the matrix.
+
+The workflow verifies:
+
+- direct `file://.../index.html` loading;
+- simultaneous mic/meeting/mixed capture;
+- meeting-only capture with the microphone disabled;
+- microphone fallback when display sharing is denied;
+- persistent warning and microphone continuity when display sharing ends;
+- recording-dock position stability while the timer updates;
+- opening/testing/closing Settings during recording;
+- pause/resume/finish;
+- three non-empty source Blobs in IndexedDB;
+- playback time advancing for every source;
+- reload and replay of every source;
+- all three assets included in the transcription request;
+- **You** plus two remote speakers in a completed result;
+- untruncated transcript text;
+- speaker rename, name search, and Markdown export;
+- transcript/speaker layout without horizontal overflow at 390 px and 320 px;
+- no uncaught page or console errors.
+
+## Verified Windows browser matrix
+
+Synthetic end-to-end suite run on 2026-07-30:
+
+| Browser | Version | Result |
+| --- | --- | --- |
+| Google Chrome | 150.0.7871.188 | Passed |
+| Microsoft Edge | 150.0.4078.105 | Passed |
+
+API/service/adapter suite: 15/15 passed. Browser-module suite: 8/8 passed.
+
+These runs validate NotesBuddy logic and browser media plumbing with generated
+tracks. They do not replace a real Teams/Zoom/Meet share test because platforms,
+surface types, audio drivers, and enterprise policies vary.
+
+## Real meeting-audio regression
+
+Use headphones to prevent acoustic feedback and a non-confidential source tab.
+
+### Capture
+
+- Start microphone + meeting capture.
+- Choose the meeting tab and enable **Share audio**.
+- Confirm all three status chips show `recording`.
+- Speak locally and play a remote voice in the shared tab.
+- Open Settings while recording; confirm controls do not flash or move.
+- Pause at least five seconds, resume, and finish.
+- Repeat with the microphone disabled.
+- Repeat after cancelling the share dialog; confirm microphone-only fallback.
+- Repeat after sharing a surface that has no audio; confirm the recovery message.
+- Stop sharing from the browser toolbar mid-recording; confirm the persistent
+  warning and microphone continuation.
+
+### Playback and persistence
+
+- Play mixed, microphone, and meeting assets with the native player.
+- Open Transcript and use its play/seek controls.
+- Click a transcript timestamp and confirm mixed playback seeks.
+- Reload, reopen the meeting, and replay/download every source.
+- Confirm the mic track does not contain a fabricated remote channel. Some
+  acoustic leakage is possible without headphones.
+- Delete the meeting and confirm every source asset disappears.
+
+### Speaker transcription
+
+- Start the real local companion with an accepted pyannote token/model.
+- Test the pairing token in Settings.
+- Transcribe one local plus one remote speaker.
+- Transcribe one local plus two or three alternating remote speakers.
+- Test silence/background noise and confirm no placeholder text.
+- Test a remote voice faintly echoed into the microphone.
+- Check approximate timestamp ranges and stable IDs within that job.
+- Rename each remote speaker and verify search, copy, and exported Markdown.
+- Confirm microphone speech is **You**.
+- Confirm uncertain unassigned words are **Unknown speaker**, not a guessed name.
+- Cancel a long job and confirm no `notesbuddy-job-*` temporary directory
+  remains after the worker reaches terminal state.
+
+Model output varies by language, overlap, noise, model version, and hardware.
+Set timing/speaker-count tolerances rather than asserting exact wording.
+
+## Profile and integrity
+
+- First launch asks for a name and rejects an empty submission.
+- Greeting, initials, **You** details, and new follow-up owner use that profile.
+- Rename the profile and verify existing local participants/follow-ups update.
+- Confirm separate site origins have separate data.
+- Import WAV/MP3 and transcribe it as a mixed-only remote recording.
+- Refresh a brief with no transcript; confirm no brief is fabricated.
+- Confirm browser live text is explicitly marked as a draft.
+
+## Responsive and accessibility checks
 
 At 390 x 844 and 320 px wide:
 
-- Confirm there is no horizontal overflow.
-- Open and close mobile navigation with both the close button and scrim.
-- Record, pause, resume, finish, and play audio.
-- Confirm settings remain usable during recording.
-
-## Browser console
-
-Repeat the main workflow with the browser developer console open. Treat
-uncaught exceptions, failed asset requests, unhandled promise rejections, and
-media decoding failures as test failures.
+- no horizontal overflow;
+- capture source controls remain reachable;
+- recording dock remains visible;
+- transcription and speaker panels stack correctly;
+- source switcher is usable;
+- Settings remains scrollable during recording;
+- focus outlines, labels, and keyboard actions remain functional;
+- reduced-motion mode disables nonessential animation.
 
 ## Pull request evidence
 
 Include:
 
-- Operating system and browser versions
-- Launch method (`file://`, development server, or preview)
-- Automated command output
-- Manual scenarios exercised
-- Screenshots for visual changes
-- Confirmation that only synthetic test audio was used
+- operating system and exact browser versions;
+- launch path (`file://`, development server, or static host);
+- JavaScript, Python API, and browser-suite results;
+- real meeting platform/surface tested, if any;
+- screenshots for visual changes;
+- model/device configuration without tokens;
+- confirmation that no confidential audio or credentials were used;
+- confirmation that the feature branch did not deploy `main`.

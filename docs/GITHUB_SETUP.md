@@ -1,25 +1,22 @@
 # GitHub publishing checklist
 
-The repository publishes the tested `dist/client` bundle to GitHub Pages at
-<https://sumarahmed.github.io/AINotesBuddy/>.
+The `main` branch is configured to publish the tested `dist/client` bundle to
+GitHub Pages at <https://sumarahmed.github.io/AINotesBuddy/>. Feature branches
+and pull requests run checks but do not deploy.
 
 ## Important remote configuration
 
-The existing `origin` remote is used by the connected Sites deployment. Do not
-replace or remove it.
-
-GitHub is configured as a second remote:
+This workspace uses `github` for the public repository:
 
 ```bash
-git remote add github https://github.com/sumarahmed/AINotesBuddy.git
-git push -u github main
+git remote get-url github
+# https://github.com/sumarahmed/AINotesBuddy.git
 ```
 
-For SSH:
+If cloning elsewhere:
 
 ```bash
-git remote add github git@github.com:sumarahmed/AINotesBuddy.git
-git push -u github main
+git clone https://github.com/sumarahmed/AINotesBuddy.git
 ```
 
 Verify both remotes:
@@ -34,9 +31,9 @@ Future source updates can be pushed independently:
 git push github main
 ```
 
-The managed Sites remote uses short-lived deployment credentials. Continue to
-publish the deployed site through the connected Sites workflow instead of
-assuming a normal unauthenticated `git push origin` will work.
+The local `sites` remote and `.openai/hosting.json` belong to an earlier
+owner-restricted preview. They are not used by the GitHub Actions workflow.
+Changing or deploying that target is a separate explicit operation.
 
 ## Suggested repository metadata
 
@@ -61,9 +58,8 @@ Suggested topics:
 - Select and add a license.
 - Confirm the project name and branding are approved for public use.
 - Confirm Git history contains no credentials, customer data, or recordings.
-- Confirm the managed Sites remote URL and project metadata may be disclosed.
-- Confirm `.openai/hosting.json` is appropriate to publish.
-- Decide whether the owner-restricted live preview should remain in README.
+- Confirm the legacy Sites remote/project metadata may remain in repository
+  history or remove it in a separate reviewed change.
 - Enable private vulnerability reporting in **Settings > Code security**.
 - Review organization policies, if publishing under a company account.
 
@@ -88,11 +84,12 @@ and `id-token: write`, as required by GitHub Pages.
 Once the license and ownership decisions are complete:
 
 1. Run `npm test`.
-2. Complete the manual checklist in [TESTING.md](TESTING.md).
-3. Update [CHANGELOG.md](../CHANGELOG.md).
-4. Create an annotated tag, for example `v0.1.0`.
-5. Push the tag to the GitHub remote.
-6. Create a GitHub Release using the matching changelog section.
+2. Run the local-companion API tests.
+3. Complete the manual checklist in [TESTING.md](TESTING.md).
+4. Update [CHANGELOG.md](../CHANGELOG.md).
+5. Create an annotated tag, for example `v0.1.0`.
+6. Push the tag to the GitHub remote.
+7. Create a GitHub Release using the matching changelog section.
 
 Example:
 

@@ -1,0 +1,652 @@
+(function initialiseMeetingAudio(globalObject) {
+  "use strict";
+
+  const SPEAKER_COLORS = ["violet", "amber", "coral", "teal"];
+  const RECORDING_SOURCES = ["mixed", "microphone", "meeting"];
+
+  function createId(prefix) {
+    const uniquePart =
+      globalObject.crypto?.randomUUID?.() ||
+      `${Math.random().toString(36).slice(2, 12)}-${Math.random()
+        .toString(36)
+        .slice(2, 12)}`;
+    return `${prefix}-${uniquePart}`;
+  }
+
+  function cleanName(value, fallback = "") {
+    const cleaned = String(value || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 80);
+    return cleaned || fallback;
+  }
+
+  function cleanTranscriptText(value) {
+    return String(value || "")
+      .replace(/\u0000/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\s*\n\s*/g, "\n")
+      .trim();
+  }
+
+  function initialsForName(name) {
+    const words = cleanName(name, "Speaker")
+      .split(/\s+/)
+      .filter(Boolean);
+    const first = words[0]?.[0] || "S";
+    const last =
+      words.length > 1 ? words.at(-1)[0] : words[0]?.[1] || "";
+    return `${first}${last}`.toUpperCase();
+  }
+
+  function parseTimestamp(value) {
+    if (Number.isFinite(value)) return Math.max(0, value);
+    const parts = String(value || "")
+      .split(":")
+      .map((part) => Number(part));
+    if (!parts.length || parts.some((part) => !Number.isFinite(part))) return 0;
+    const seconds =
+      parts.length === 3
+        ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+        : (parts[0] || 0) * 60 + (parts[1] || 0);
+    return Math.max(0, seconds * 1000);
+  }
+
+  function formatTimestamp(milliseconds) {
+    const totalSeconds = Math.max(
+      0,
+      Math.floor((Number(milliseconds) || 0) / 1000),
+    );
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return hours
+      ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+      : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  function slug(value) {
+    return (
+      cleanName(value, "speaker")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "speaker"
+    );
+  }
+
+  function getRecordingAssets(meeting) {
+    const assets = {};
+    for (const source of RECORDING_SOURCES) {
+      const asset = meeting?.recordingAssets?.[source];
+      if (asset?.id) {
+        assets[source] = {
+          id: asset.id,
+          mimeType: asset.mimeType || null,
+          durationMs: Number(asset.durationMs) || 0,
+          fileName: asset.fileName || null,
+        };
+      }
+    }
+    if (!Object.keys(assets).length && meeting?.audioId) {
+      assets.mixed = {
+        id: meeting.audioId,
+        mimeType: meeting.audioType || null,
+        durationMs: Math.max(
+          0,
+          Number(meeting.durationSeconds || 0) * 1000,
+        ),
+        fileName: meeting.audioFileName || null,
+      };
+    }
+    return assets;
+  }
+
+  function recordingAssetIds(meeting) {
+    return Array.from(
+      new Set(
+        [
+          meeting?.audioId,
+          ...Object.values(getRecordingAssets(meeting)).map(
+            (asset) => asset.id,
+          ),
+        ].filter(Boolean),
+      ),
+    );
+  }
+
+  function primaryRecordingSource(meeting, preferredSource) {
+    const assets = getRecordingAssets(meeting);
+    if (preferredSource && assets[preferredSource]) return preferredSource;
+    return RECORDING_SOURCES.find((source) => assets[source]) || null;
+  }
+
+  function recordingAsset(meeting, preferredSource) {
+    const source = primaryRecordingSource(meeting, preferredSource);
+    return source ? { source, ...getRecordingAssets(meeting)[source] } : null;
+  }
+
+  function recordingDownloadName(meeting, source = "mixed") {
+    const asset = getRecordingAssets(meeting)[source];
+    const existingName = asset?.fileName || meeting?.audioFileName;
+    if (existingName && source === "mixed") {
+      return existingName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-");
+    }
+    const type = String(asset?.mimeType || meeting?.audioType || "").toLowerCase();
+    const extension = type.includes("wav")
+      ? "wav"
+      : type.includes("mpeg") || type.includes("mp3")
+        ? "mp3"
+        : type.includes("mp4") || type.includes("m4a")
+          ? "m4a"
+          : type.includes("ogg")
+            ? "ogg"
+            : type.includes("flac")
+              ? "flac"
+              : "webm";
+    const baseName =
+      String(meeting?.title || "recording")
+        .replace(/[^a-z0-9]+/gi, "-")
+        .replace(/^-|-$/g, "")
+        .toLowerCase() || "recording";
+    const suffix = source === "mixed" ? "" : `-${source}`;
+    return `${baseName}${suffix}.${extension}`;
+  }
+
+  function speakerLabel(meeting, speakerId, fallback = "Unknown speaker") {
+    if (speakerId === "local-user") return "You";
+    const speaker = meeting?.speakers?.find((item) => item.id === speakerId);
+    return cleanName(speaker?.displayName, fallback);
+  }
+
+  function ensureMeetingSpeakers(meeting, profile) {
+    if (!meeting || typeof meeting !== "object") return meeting;
+    meeting.recordingAssets = getRecordingAssets(meeting);
+    const existing = new Map(
+      (Array.isArray(meeting.speakers) ? meeting.speakers : [])
+        .filter((speaker) => speaker?.id)
+        .map((speaker) => [speaker.id, { ...speaker }]),
+    );
+    const profileName = cleanName(profile?.name, "You");
+    let remoteIndex = 0;
+    meeting.transcript = Array.isArray(meeting.transcript)
+      ? meeting.transcript
+      : [];
+
+    for (const segment of meeting.transcript) {
+      const legacyName = cleanName(segment.speaker, "");
+      const isLocal =
+        segment.speakerId === "local-user" ||
+        segment.source === "microphone" ||
+        (legacyName &&
+          profileName &&
+          legacyName.toLowerCase() === profileName.toLowerCase());
+      let speakerId = segment.speakerId;
+      if (!speakerId) {
+        if (isLocal) {
+          speakerId = "local-user";
+        } else {
+          remoteIndex += 1;
+          speakerId = `legacy-${slug(legacyName || `speaker-${remoteIndex}`)}`;
+        }
+      }
+      segment.speakerId = speakerId;
+      segment.source =
+        segment.source || (speakerId === "local-user" ? "microphone" : "mixed");
+      segment.startMs = Number.isFinite(segment.startMs)
+        ? Math.max(0, segment.startMs)
+        : parseTimestamp(segment.timestamp);
+      segment.endMs = Number.isFinite(segment.endMs)
+        ? Math.max(segment.startMs, segment.endMs)
+        : segment.startMs;
+      segment.timestamp = segment.timestamp || formatTimestamp(segment.startMs);
+
+      if (!existing.has(speakerId)) {
+        const displayName =
+          speakerId === "local-user"
+            ? profileName
+            : legacyName || `Speaker ${++remoteIndex}`;
+        existing.set(speakerId, {
+          id: speakerId,
+          displayName,
+          source:
+            speakerId === "local-user"
+              ? "microphone"
+              : segment.source || "meeting",
+          color:
+            speakerId === "local-user"
+              ? "teal"
+              : segment.color ||
+                SPEAKER_COLORS[
+                  Math.max(0, remoteIndex - 1) % SPEAKER_COLORS.length
+                ],
+          isLocalUser: speakerId === "local-user",
+        });
+      }
+      const speaker = existing.get(speakerId);
+      segment.speaker =
+        speakerId === "local-user" ? "You" : speaker.displayName;
+      segment.initials =
+        speakerId === "local-user"
+          ? profile?.initials || initialsForName(profileName)
+          : initialsForName(speaker.displayName);
+      segment.color = speaker.color;
+    }
+
+    if (
+      meeting.recordingAssets.microphone &&
+      !existing.has("local-user")
+    ) {
+      existing.set("local-user", {
+        id: "local-user",
+        displayName: profileName,
+        source: "microphone",
+        color: "teal",
+        isLocalUser: true,
+      });
+    }
+
+    meeting.speakers = Array.from(existing.values()).map((speaker) => ({
+      id: speaker.id,
+      displayName:
+        speaker.id === "local-user"
+          ? profileName
+          : cleanName(speaker.displayName, "Unknown speaker"),
+      source:
+        speaker.id === "local-user"
+          ? "microphone"
+          : speaker.source || "meeting",
+      color:
+        speaker.id === "local-user"
+          ? "teal"
+          : speaker.color ||
+            SPEAKER_COLORS[
+              Math.max(
+                0,
+                Array.from(existing.keys()).indexOf(speaker.id) - 1,
+              ) % SPEAKER_COLORS.length
+            ],
+      isLocalUser: speaker.id === "local-user",
+    }));
+    return meeting;
+  }
+
+  function normaliseText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function overlapRatio(first, second) {
+    const start = Math.max(first.startMs || 0, second.startMs || 0);
+    const end = Math.min(first.endMs || first.startMs || 0, second.endMs || second.startMs || 0);
+    const overlap = Math.max(0, end - start);
+    const shortest = Math.max(
+      1,
+      Math.min(
+        Math.max(1, (first.endMs || first.startMs || 0) - (first.startMs || 0)),
+        Math.max(1, (second.endMs || second.startMs || 0) - (second.startMs || 0)),
+      ),
+    );
+    return overlap / shortest;
+  }
+
+  function textSimilarity(first, second) {
+    const firstWords = new Set(normaliseText(first).split(" ").filter(Boolean));
+    const secondWords = new Set(
+      normaliseText(second).split(" ").filter(Boolean),
+    );
+    if (!firstWords.size || !secondWords.size) return 0;
+    const intersection = Array.from(firstWords).filter((word) =>
+      secondWords.has(word),
+    ).length;
+    const union = new Set([...firstWords, ...secondWords]).size;
+    return intersection / Math.max(1, union);
+  }
+
+  function deduplicateEchoSegments(segments) {
+    const sorted = [...segments].sort(
+      (first, second) => first.startMs - second.startMs,
+    );
+    const removed = new Set();
+    for (let firstIndex = 0; firstIndex < sorted.length; firstIndex += 1) {
+      if (removed.has(firstIndex)) continue;
+      const first = sorted[firstIndex];
+      for (
+        let secondIndex = firstIndex + 1;
+        secondIndex < sorted.length;
+        secondIndex += 1
+      ) {
+        if (removed.has(secondIndex)) continue;
+        const second = sorted[secondIndex];
+        if (second.startMs - first.endMs > 1800) break;
+        if (first.source === second.source) continue;
+        if (overlapRatio(first, second) < 0.55) continue;
+        if (textSimilarity(first.text, second.text) < 0.82) continue;
+        const firstIsMicrophone = first.source === "microphone";
+        const secondIsMicrophone = second.source === "microphone";
+        if (firstIsMicrophone !== secondIsMicrophone) {
+          removed.add(firstIsMicrophone ? secondIndex : firstIndex);
+        } else if (
+          (Number(first.confidence) || 0) >=
+          (Number(second.confidence) || 0)
+        ) {
+          removed.add(secondIndex);
+        } else {
+          removed.add(firstIndex);
+        }
+      }
+    }
+    return sorted.filter((_, index) => !removed.has(index));
+  }
+
+  function normaliseResultSegment(segment, index, profile) {
+    const source =
+      segment.source === "microphone" ? "microphone" : "meeting";
+    const speakerId =
+      source === "microphone"
+        ? "local-user"
+        : cleanName(segment.speakerId, `remote-${index + 1}`);
+    const startMs = Math.max(0, Number(segment.startMs) || 0);
+    const endMs = Math.max(startMs, Number(segment.endMs) || startMs);
+    const displayName =
+      speakerId === "local-user"
+        ? "You"
+        : cleanName(segment.speakerLabel, "");
+    return {
+      id: cleanName(segment.id, "") || createId("speech"),
+      speakerId,
+      speaker: displayName || "",
+      initials:
+        speakerId === "local-user"
+          ? profile?.initials || "U"
+          : initialsForName(displayName || speakerId),
+      color:
+        speakerId === "local-user"
+          ? "teal"
+          : SPEAKER_COLORS[index % SPEAKER_COLORS.length],
+      source,
+      startMs,
+      endMs,
+      timestamp: formatTimestamp(startMs),
+      text: cleanTranscriptText(segment.text),
+      confidence: Number.isFinite(Number(segment.confidence))
+        ? Number(segment.confidence)
+        : null,
+      isDraft: false,
+    };
+  }
+
+  function applyTranscriptionResult(meeting, result, profile) {
+    const rawSegments = Array.isArray(result?.segments) ? result.segments : [];
+    const normalized = rawSegments
+      .map((segment, index) => normaliseResultSegment(segment, index, profile))
+      .filter((segment) => segment.text);
+    const segments = deduplicateEchoSegments(normalized);
+    const existingSpeakers = new Map(
+      (meeting.speakers || []).map((speaker) => [speaker.id, speaker]),
+    );
+    const remoteIds = [];
+    for (const segment of segments) {
+      if (
+        segment.speakerId !== "local-user" &&
+        !remoteIds.includes(segment.speakerId)
+      ) {
+        remoteIds.push(segment.speakerId);
+      }
+    }
+    const speakers = [];
+    if (
+      segments.some((segment) => segment.speakerId === "local-user") ||
+      meeting.recordingAssets?.microphone
+    ) {
+      speakers.push({
+        id: "local-user",
+        displayName: cleanName(profile?.name, "You"),
+        source: "microphone",
+        color: "teal",
+        isLocalUser: true,
+      });
+    }
+    remoteIds.forEach((speakerId, index) => {
+      const existing = existingSpeakers.get(speakerId);
+      const suggestedName = segments.find(
+        (segment) => segment.speakerId === speakerId,
+      )?.speaker;
+      speakers.push({
+        id: speakerId,
+        displayName: cleanName(
+          existing?.displayName || suggestedName,
+          `Speaker ${index + 1}`,
+        ),
+        source: "meeting",
+        color:
+          existing?.color || SPEAKER_COLORS[index % SPEAKER_COLORS.length],
+        isLocalUser: false,
+      });
+    });
+    const speakerMap = new Map(speakers.map((speaker) => [speaker.id, speaker]));
+    for (const segment of segments) {
+      const speaker = speakerMap.get(segment.speakerId);
+      segment.speaker =
+        segment.speakerId === "local-user"
+          ? "You"
+          : speaker?.displayName || "Unknown speaker";
+      segment.initials =
+        segment.speakerId === "local-user"
+          ? profile?.initials || "U"
+          : initialsForName(segment.speaker);
+      segment.color = speaker?.color || segment.color;
+    }
+    meeting.transcript = segments;
+    meeting.speakers = speakers;
+    meeting.transcription = {
+      ...(meeting.transcription || {}),
+      status: "completed",
+      jobId: result?.jobId || meeting.transcription?.jobId || null,
+      language: result?.language || null,
+      completedAt: new Date().toISOString(),
+      error: null,
+      segmentCount: segments.length,
+    };
+    meeting.participants = speakers.map((speaker) => ({
+      name:
+        speaker.id === "local-user"
+          ? cleanName(profile?.name, "You")
+          : speaker.displayName,
+      initials:
+        speaker.id === "local-user"
+          ? profile?.initials || "U"
+          : initialsForName(speaker.displayName),
+      color: speaker.color,
+    }));
+    return meeting;
+  }
+
+  function renameSpeaker(meeting, speakerId, name, profile) {
+    const speaker = meeting?.speakers?.find((item) => item.id === speakerId);
+    if (!speaker) return false;
+    const cleaned = cleanName(name, "");
+    if (!cleaned) return false;
+    if (speakerId === "local-user") {
+      speaker.displayName = cleanName(profile?.name, cleaned);
+    } else {
+      speaker.displayName = cleaned;
+    }
+    for (const segment of meeting.transcript || []) {
+      if (segment.speakerId !== speakerId) continue;
+      segment.speaker = speakerId === "local-user" ? "You" : speaker.displayName;
+      segment.initials =
+        speakerId === "local-user"
+          ? profile?.initials || "U"
+          : initialsForName(speaker.displayName);
+    }
+    meeting.participants = (meeting.speakers || []).map((item) => ({
+      name:
+        item.id === "local-user"
+          ? cleanName(profile?.name, "You")
+          : item.displayName,
+      initials:
+        item.id === "local-user"
+          ? profile?.initials || "U"
+          : initialsForName(item.displayName),
+      color: item.color,
+    }));
+    return true;
+  }
+
+  function buildExtractiveBrief(segments) {
+    const uniqueTexts = [];
+    for (const segment of Array.isArray(segments) ? segments : []) {
+      const text = cleanTranscriptText(segment?.text);
+      if (
+        text &&
+        !uniqueTexts.some(
+          (existing) => normaliseText(existing) === normaliseText(text),
+        )
+      ) {
+        uniqueTexts.push(text);
+      }
+    }
+    if (!uniqueTexts.length) return null;
+    const overviewParts = uniqueTexts.slice(0, 2);
+    return {
+      overview: overviewParts.join(" "),
+      highlights: uniqueTexts.slice(0, 3),
+    };
+  }
+
+  class TranscriptionClient {
+    constructor({ endpoint, token = "", fetchImpl = globalObject.fetch } = {}) {
+      this.endpoint = String(endpoint || "http://127.0.0.1:8765").replace(
+        /\/+$/,
+        "",
+      );
+      this.token = String(token || "");
+      this.fetchImpl =
+        typeof fetchImpl === "function"
+          ? fetchImpl.bind(globalObject)
+          : fetchImpl;
+    }
+
+    headers(extra = {}) {
+      return {
+        ...(this.token
+          ? { "X-NotesBuddy-Pairing-Token": this.token }
+          : {}),
+        ...extra,
+      };
+    }
+
+    async request(path, options = {}) {
+      const response = await this.fetchImpl(`${this.endpoint}${path}`, {
+        ...options,
+        headers: this.headers(options.headers),
+      });
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+      if (!response.ok) {
+        const error = new Error(
+          payload?.detail ||
+            payload?.error ||
+            `Transcription service returned ${response.status}`,
+        );
+        error.status = response.status;
+        throw error;
+      }
+      return payload;
+    }
+
+    health() {
+      return this.request("/v1/health");
+    }
+
+    async createJob({
+      microphoneBlob,
+      meetingBlob,
+      mixedBlob,
+      metadata = {},
+    }) {
+      if (!microphoneBlob && !meetingBlob && !mixedBlob) {
+        throw new Error("At least one recording source is required");
+      }
+      const form = new FormData();
+      if (microphoneBlob) {
+        form.append("microphone", microphoneBlob, "microphone.webm");
+      }
+      if (meetingBlob) {
+        form.append("meeting", meetingBlob, "meeting.webm");
+      }
+      if (mixedBlob) {
+        form.append("mixed", mixedBlob, "mixed.webm");
+      }
+      form.append("metadata", JSON.stringify(metadata));
+      return this.request("/v1/transcriptions", {
+        method: "POST",
+        body: form,
+      });
+    }
+
+    getJob(jobId) {
+      return this.request(
+        `/v1/transcriptions/${encodeURIComponent(jobId)}`,
+      );
+    }
+
+    cancelJob(jobId) {
+      return this.request(
+        `/v1/transcriptions/${encodeURIComponent(jobId)}`,
+        { method: "DELETE" },
+      );
+    }
+
+    async waitForJob(
+      jobId,
+      { intervalMs = 1200, timeoutMs = 30 * 60 * 1000, onProgress, signal } = {},
+    ) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if (signal?.aborted) {
+          throw new DOMException("Transcription cancelled", "AbortError");
+        }
+        const job = await this.getJob(jobId);
+        onProgress?.(job);
+        if (job.status === "completed") return job;
+        if (job.status === "failed" || job.status === "cancelled") {
+          throw new Error(job.error || `Transcription ${job.status}`);
+        }
+        await new Promise((resolve) => globalObject.setTimeout(resolve, intervalMs));
+      }
+      throw new Error("Transcription timed out");
+    }
+  }
+
+  globalObject.NotesBuddyMeetingAudio = Object.freeze({
+    RECORDING_SOURCES,
+    SPEAKER_COLORS,
+    TranscriptionClient,
+    applyTranscriptionResult,
+    buildExtractiveBrief,
+    cleanName,
+    cleanTranscriptText,
+    createId,
+    deduplicateEchoSegments,
+    ensureMeetingSpeakers,
+    formatTimestamp,
+    getRecordingAssets,
+    initialsForName,
+    parseTimestamp,
+    primaryRecordingSource,
+    recordingAsset,
+    recordingAssetIds,
+    recordingDownloadName,
+    renameSpeaker,
+    speakerLabel,
+    textSimilarity,
+  });
+})(globalThis);

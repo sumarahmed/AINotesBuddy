@@ -1,9 +1,9 @@
 # Contributing to NotesBuddy
 
-Thank you for helping improve NotesBuddy. This project is intentionally small,
-dependency-free, and local-first. Changes should preserve those properties
-unless a proposal explicitly explains why a new dependency or service is
-necessary.
+Thank you for helping improve NotesBuddy. The static client is intentionally
+small, dependency-free, and local-first. The optional Python model companion is
+isolated under `services/transcription`. Changes should preserve that boundary
+unless a proposal explains a different privacy and deployment model.
 
 Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -17,8 +17,8 @@ Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup
 
-Node.js 20 or later is required for the development server and build scripts.
-There are no packages to install.
+Node.js 20 or later is required for the static client and build scripts. There
+are no client packages to install.
 
 ```bash
 npm run dev
@@ -39,12 +39,15 @@ This syntax-checks the JavaScript, rebuilds `dist/`, and verifies the generated
 client entry point. Commit generated `dist/` changes whenever source assets
 change.
 
-For recording or playback changes, also complete the manual regression list in
-[docs/TESTING.md](docs/TESTING.md).
+For companion changes, create a Python environment and install
+`services/transcription/requirements-test.txt`. For recording, playback, or
+speaker changes, run the synthetic browser suite and complete the applicable
+real-device regression in [docs/TESTING.md](docs/TESTING.md).
 
 ## Coding guidelines
 
 - Keep the client dependency-free unless a change has been discussed first.
+- Keep model and API dependencies out of the static bundle.
 - Prefer platform APIs and progressive capability detection.
 - Preserve honest data behavior: never fabricate transcript text or imply that
   unsupported processing occurred.
@@ -53,6 +56,8 @@ For recording or playback changes, also complete the manual regression list in
 - Use semantic HTML, accessible labels, keyboard-operable controls, and clear
   unavailable states.
 - Avoid full application re-renders during active recording or playback.
+- Bind the companion to loopback, authenticate every route, and remove job
+  audio in terminal paths.
 - Escape user-controlled content before inserting it into HTML.
 - Keep mobile layouts usable at a 320 px minimum viewport width.
 

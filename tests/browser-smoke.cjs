@@ -1,0 +1,658 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const http = require("node:http");
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+
+let chromium;
+try {
+  ({ chromium } = require("playwright"));
+} catch {
+  console.error(
+    "Playwright is required for this optional browser test. Install it or set NODE_PATH to a runtime containing playwright.",
+  );
+  process.exit(1);
+}
+
+const projectRoot = path.resolve(__dirname, "..");
+const mimeTypes = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+};
+
+function staticServer() {
+  return http.createServer(async (request, response) => {
+    try {
+      const requested = decodeURIComponent(
+        new URL(request.url || "/", "http://127.0.0.1").pathname,
+      );
+      const relative = requested === "/" ? "index.html" : requested.slice(1);
+      const filePath = path.resolve(projectRoot, relative);
+      if (
+        filePath !== projectRoot &&
+        !filePath.startsWith(`${projectRoot}${path.sep}`)
+      ) {
+        response.writeHead(403).end();
+        return;
+      }
+      const content = await fs.readFile(filePath);
+      response.writeHead(200, {
+        "Content-Type":
+          mimeTypes[path.extname(filePath)] || "application/octet-stream",
+        "Cache-Control": "no-store",
+      });
+      response.end(content);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+}
+
+function listen(server) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolve(`http://127.0.0.1:${address.port}`);
+    });
+  });
+}
+
+function close(server) {
+  return new Promise((resolve) => server.close(resolve));
+}
+
+async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
+  await page.addInitScript(
+    ({ shouldDenyMeeting }) => {
+      const resources = [];
+      const captureCalls = [];
+      const makeAudioStream = (frequency) => {
+        const AudioContextClass =
+          globalThis.AudioContext || globalThis.webkitAudioContext;
+        const context = new AudioContextClass();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const destination = context.createMediaStreamDestination();
+        oscillator.frequency.value = frequency;
+        gain.gain.value = 0.06;
+        oscillator.connect(gain);
+        gain.connect(destination);
+        oscillator.start();
+        resources.push({ context, oscillator });
+        return destination.stream;
+      };
+      const makeDisplayStream = () => {
+        if (shouldDenyMeeting) {
+          throw new DOMException("Synthetic share denied", "NotAllowedError");
+        }
+        const audio = makeAudioStream(620);
+        const canvas = document.createElement("canvas");
+        canvas.width = 64;
+        canvas.height = 64;
+        const context = canvas.getContext("2d");
+        let frame = 0;
+        const timer = setInterval(() => {
+          context.fillStyle = frame++ % 2 ? "#176c62" : "#dd6e5c";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+        }, 100);
+        const video = canvas.captureStream(8);
+        const stream = new MediaStream([
+          ...audio.getAudioTracks(),
+          ...video.getVideoTracks(),
+        ]);
+        resources.push({ stream, timer });
+        globalThis.__notesBuddyDisplayStream = stream;
+        return stream;
+      };
+
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: async () => {
+          captureCalls.push("microphone");
+          return makeAudioStream(310);
+        },
+      });
+      Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", {
+        configurable: true,
+        value: async () => {
+          captureCalls.push("meeting");
+          return makeDisplayStream();
+        },
+      });
+      Object.defineProperty(globalThis, "SpeechRecognition", {
+        configurable: true,
+        value: undefined,
+      });
+      Object.defineProperty(globalThis, "webkitSpeechRecognition", {
+        configurable: true,
+        value: undefined,
+      });
+      globalThis.__notesBuddyTestMedia = {
+        captureCalls,
+        stopDisplay() {
+          const tracks =
+            globalThis.__notesBuddyDisplayStream?.getTracks() || [];
+          // MediaStreamTrack.stop() itself does not emit "ended"; browser UI
+          // termination does, so dispatch it to model that external event.
+          tracks
+            .find((track) => track.kind === "video")
+            ?.dispatchEvent(new Event("ended"));
+          tracks.forEach((track) => track.stop());
+        },
+        dispose() {
+          for (const resource of resources) {
+            clearInterval(resource.timer);
+            resource.stream?.getTracks().forEach((track) => track.stop());
+            try {
+              resource.oscillator?.stop();
+            } catch {
+              // Already stopped.
+            }
+            resource.context?.close();
+          }
+        },
+      };
+    },
+    { shouldDenyMeeting: denyMeeting },
+  );
+}
+
+async function completeOnboarding(page, name = "Browser Tester") {
+  const setupName = page.locator("[data-input='profile-setup-name']");
+  if (await setupName.isVisible()) {
+    await setupName.fill(name);
+    await page.locator("[data-form='profile-setup']").evaluate((form) =>
+      form.requestSubmit(),
+    );
+  }
+  await page.locator(".home-view").waitFor();
+}
+
+async function idbAssets(page) {
+  return page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const request = indexedDB.open("notesbuddy-audio", 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction("recordings", "readonly");
+          const store = transaction.objectStore("recordings");
+          const keysRequest = store.getAllKeys();
+          const valuesRequest = store.getAll();
+          transaction.oncomplete = () => {
+            resolve(
+              keysRequest.result.map((key, index) => ({
+                key,
+                size: valuesRequest.result[index]?.size || 0,
+                type: valuesRequest.result[index]?.type || "",
+              })),
+            );
+            database.close();
+          };
+          transaction.onerror = () => reject(transaction.error);
+        };
+      }),
+  );
+}
+
+async function playSelectedRecording(page, source) {
+  await page
+    .locator(`[data-action='select-recording-source'][data-id='${source}']`)
+    .click();
+  const player = page.locator("audio[data-audio-id]");
+  await page.waitForFunction(
+    () => Boolean(document.querySelector("audio[data-audio-id]")?.src),
+  );
+  const result = await player.evaluate(async (audio) => {
+    audio.muted = true;
+    await audio.play();
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    const snapshot = {
+      currentTime: audio.currentTime,
+      paused: audio.paused,
+      error: audio.error?.message || null,
+    };
+    audio.pause();
+    return snapshot;
+  });
+  assert.equal(result.error, null, `${source} recording has a media error`);
+  assert.ok(
+    result.currentTime > 0,
+    `${source} recording should advance during playback`,
+  );
+}
+
+async function runMainWorkflow(browser, baseUrl) {
+  const context = await browser.newContext({ acceptDownloads: true });
+  const page = await context.newPage();
+  const consoleErrors = [];
+  const pageErrors = [];
+  const failedRequests = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("requestfailed", (request) => {
+    if (request.url().includes("127.0.0.1:8765")) {
+      failedRequests.push(
+        `${request.method()} ${request.url()}: ${request.failure()?.errorText}`,
+      );
+    }
+  });
+  await installSyntheticMedia(page);
+
+  let multipartBody = "";
+  let healthRouteCalls = 0;
+  await page.route("**/v1/**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    healthRouteCalls += pathname === "/v1/health" ? 1 : 0;
+    const headers = {
+      "access-control-allow-origin": baseUrl,
+      "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
+      "access-control-allow-headers":
+        "Content-Type,X-NotesBuddy-Pairing-Token",
+      "access-control-allow-private-network": "true",
+      "content-type": "application/json",
+    };
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers, body: "" });
+      return;
+    }
+    if (request.method() === "POST") {
+      multipartBody = request.postData() || "";
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          jobId: "job-browser-smoke",
+          status: "queued",
+          engine: "synthetic-test",
+        }),
+      });
+      return;
+    }
+    if (request.method() === "DELETE") {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          jobId: "job-browser-smoke",
+          status: "cancelled",
+        }),
+      });
+      return;
+    }
+    if (pathname === "/v1/health") {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({ status: "ok", engine: "synthetic-test" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      headers,
+      body: JSON.stringify({
+        jobId: "job-browser-smoke",
+        status: "completed",
+        progress: 1,
+        language: "en",
+        segments: [
+          {
+            id: "local-segment",
+            source: "microphone",
+            speakerId: "local-user",
+            startMs: 0,
+            endMs: 900,
+            text: "I will send the revised proposal.",
+            confidence: 0.96,
+          },
+          {
+            id: "remote-one",
+            source: "meeting",
+            speakerId: "remote-1",
+            startMs: 1000,
+            endMs: 2100,
+            text: "I will review it tomorrow.",
+            confidence: 0.94,
+          },
+          {
+            id: "remote-two",
+            source: "meeting",
+            speakerId: "remote-2",
+            startMs: 2200,
+            endMs: 3400,
+            text: "This complete transcript sentence is intentionally longer than eighty characters to catch unwanted truncation.",
+            confidence: 0.92,
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto(baseUrl);
+  await completeOnboarding(page);
+  await page.locator("[data-action='capture']").first().click();
+  await page.locator("[data-action='start-capture']").click();
+  await page
+    .locator("[data-source-status='mixed']")
+    .filter({ hasText: "recording" })
+    .waitFor();
+  assert.deepEqual(
+    await page.evaluate(() => globalThis.__notesBuddyTestMedia.captureCalls),
+    ["meeting", "microphone"],
+    "display capture must be invoked before awaiting microphone permission",
+  );
+
+  await page.waitForTimeout(400);
+  const dockBefore = await page.locator(".recording-dock").boundingBox();
+  await page.waitForTimeout(1100);
+  const dockAfter = await page.locator(".recording-dock").boundingBox();
+  assert.ok(dockBefore && dockAfter, "recording dock should remain visible");
+  assert.equal(
+    Math.round(dockBefore.y),
+    Math.round(dockAfter.y),
+    "recording controls should not jump while the timer updates",
+  );
+
+  await page.locator(".capture-header [data-action='settings']").click();
+  await page.locator("[data-panel='settings']").waitFor();
+  await page.locator("[data-action='test-transcription-service']").click();
+  const healthToastText = await page
+    .locator(".toast")
+    .last()
+    .textContent({ timeout: 1500 })
+    .catch(() => "");
+  try {
+    await page
+      .locator(".service-check__status--connected")
+      .waitFor({ timeout: 5000 });
+  } catch (error) {
+    const statusText = await page
+      .locator(".service-check__status")
+      .textContent()
+      .catch(() => "missing");
+    const toastText = await page
+      .locator(".toast-region")
+      .textContent()
+      .catch(() => "");
+    const directFetch = await page.evaluate(async () => {
+      const endpoint = document.querySelector(
+        "[data-setting='transcriptionEndpoint']",
+      )?.value;
+      try {
+        const response = await fetch(`${endpoint}/v1/health`);
+        return {
+          endpoint,
+          status: response.status,
+          payload: await response.text(),
+        };
+      } catch (fetchError) {
+        return { endpoint, error: String(fetchError) };
+      }
+    });
+    throw new Error(
+      `Companion health UI did not connect (routes=${healthRouteCalls}, status=${statusText}, initialToast=${healthToastText}, toast=${toastText}, direct=${JSON.stringify(directFetch)}, failed=${failedRequests.join(" | ")}, console=${consoleErrors.join(" | ")}): ${error.message}`,
+    );
+  }
+  await page.locator("[data-action='close-settings']").last().click();
+  await page.locator("[data-source-status='mixed']").waitFor();
+
+  await page.locator("[data-action='pause-capture']").click();
+  await page.locator(".recording-status--paused").waitFor();
+  await page.waitForTimeout(200);
+  await page.locator("[data-action='pause-capture']").click();
+  await page.locator(".recording-status--recording").waitFor();
+  await page.waitForTimeout(900);
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+
+  const assets = await idbAssets(page);
+  assert.equal(assets.length, 3, "three synchronized assets should be stored");
+  assert.ok(assets.every((asset) => asset.size > 0), "assets must contain audio");
+  assert.deepEqual(
+    assets.map((asset) => String(asset.key).split(":").at(-1)).sort(),
+    ["meeting", "microphone", "mixed"],
+  );
+
+  for (const source of ["mixed", "microphone", "meeting"]) {
+    await playSelectedRecording(page, source);
+  }
+
+  await page.reload();
+  await page.locator("[data-action='meeting']").first().click();
+  for (const source of ["mixed", "microphone", "meeting"]) {
+    await playSelectedRecording(page, source);
+  }
+
+  await page.locator("[data-action='tab'][data-id='transcript']").click();
+  await page.locator("[data-action='transcribe-meeting']").click();
+  await page
+    .getByRole("heading", { name: "Speaker transcript ready" })
+    .waitFor({ timeout: 10000 });
+  assert.match(multipartBody, /name="microphone"/);
+  assert.match(multipartBody, /name="meeting"/);
+  assert.match(multipartBody, /name="mixed"/);
+  await page.getByText("You", { exact: true }).first().waitFor();
+  await page.getByText("Speaker 1", { exact: true }).first().waitFor();
+  await page.getByText("Speaker 2", { exact: true }).first().waitFor();
+  await page
+    .getByText(
+      "This complete transcript sentence is intentionally longer than eighty characters to catch unwanted truncation.",
+      { exact: true },
+    )
+    .waitFor();
+
+  await page
+    .locator("[data-action='focus-speaker'][data-id='remote-1']")
+    .first()
+    .click();
+  const firstRemoteInput = page
+    .locator("[data-input='speaker-name'][data-id='remote-1']");
+  assert.equal(
+    await firstRemoteInput.evaluate((input) => input === document.activeElement),
+    true,
+    "clicking a transcript speaker label should focus its rename input",
+  );
+  await firstRemoteInput.fill("Jordan Lee");
+  await page
+    .locator("[data-speaker-label-id='remote-1']")
+    .filter({ hasText: "Jordan Lee" })
+    .waitFor();
+  await page.locator("[data-input='transcript-search']").fill("Jordan Lee");
+  assert.equal(
+    await page.locator(".transcript-row--document").count(),
+    1,
+    "speaker rename should be searchable",
+  );
+  await page.locator("[data-input='transcript-search']").fill("");
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 320, height: 720 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const layout = await page.evaluate(() => ({
+      viewportWidth: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      speakerInputRight: Math.ceil(
+        document
+          .querySelector("[data-input='speaker-name']")
+          ?.getBoundingClientRect().right || 0,
+      ),
+    }));
+    assert.ok(
+      layout.documentWidth <= layout.viewportWidth,
+      `transcript should not overflow at ${viewport.width}px`,
+    );
+    assert.ok(
+      layout.speakerInputRight <= layout.viewportWidth,
+      `speaker rename input should remain within ${viewport.width}px`,
+    );
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("[data-action='export']").first().click();
+  const download = await downloadPromise;
+  const exported = await fs.readFile(await download.path(), "utf8");
+  assert.match(exported, /Jordan Lee/);
+  assert.match(exported, /You/);
+
+  assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
+  assert.deepEqual(
+    consoleErrors.filter(
+      (message) =>
+        !message.includes("favicon") && !message.includes("Failed to load"),
+    ),
+    [],
+    `console errors: ${consoleErrors.join(" | ")}`,
+  );
+  await page.evaluate(() => globalThis.__notesBuddyTestMedia.dispose());
+  await context.close();
+}
+
+async function runMeetingDeniedFallback(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await installSyntheticMedia(page, { denyMeeting: true });
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Fallback Tester");
+  await page.locator("[data-action='capture']").first().click();
+  await page.locator("[data-action='start-capture']").click();
+  await page
+    .locator("[data-source-status='microphone']")
+    .filter({ hasText: "recording" })
+    .waitFor();
+  await page.waitForTimeout(800);
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.locator("[data-action='select-recording-source']").count(),
+    2,
+    "microphone fallback should keep microphone and mixed recordings",
+  );
+  assert.equal(
+    await page
+      .locator("[data-action='select-recording-source'][data-id='meeting']")
+      .count(),
+    0,
+  );
+  await playSelectedRecording(page, "microphone");
+  await context.close();
+}
+
+async function runMeetingOnlyCapture(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await installSyntheticMedia(page);
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Meeting Listener");
+  await page.locator("[data-action='capture']").first().click();
+  await page.locator("[data-action='toggle-mic']").click();
+  await page.locator("[data-action='start-capture']").click();
+  await page
+    .locator("[data-source-status='meeting']")
+    .filter({ hasText: "recording" })
+    .waitFor();
+  await page.waitForTimeout(800);
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  assert.equal(
+    await page
+      .locator("[data-action='select-recording-source'][data-id='microphone']")
+      .count(),
+    0,
+  );
+  assert.equal(
+    await page.locator("[data-action='select-recording-source']").count(),
+    2,
+    "meeting-only capture should retain meeting and mixed assets",
+  );
+  await playSelectedRecording(page, "meeting");
+  await context.close();
+}
+
+async function runUnexpectedMeetingStop(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await installSyntheticMedia(page);
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Continuity Tester");
+  await page.locator("[data-action='capture']").first().click();
+  await page.locator("[data-action='start-capture']").click();
+  await page
+    .locator("[data-source-status='mixed']")
+    .filter({ hasText: "recording" })
+    .waitFor();
+  await page.evaluate(() => globalThis.__notesBuddyTestMedia.stopDisplay());
+  await page
+    .getByText(
+      "Meeting audio sharing stopped. Microphone recording is continuing.",
+      { exact: true },
+    )
+    .waitFor();
+  await page
+    .locator("[data-source-status='microphone']")
+    .filter({ hasText: "recording" })
+    .waitFor();
+  await page.waitForTimeout(500);
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  await playSelectedRecording(page, "microphone");
+  await context.close();
+}
+
+async function runDirectFileLoad(browser) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(pathToFileURL(path.join(projectRoot, "index.html")).href);
+  await completeOnboarding(page, "Direct File Tester");
+  await page
+    .getByRole("heading", { name: /Private meeting memory for Direct/ })
+    .waitFor();
+  assert.equal(
+    await page.locator("link[href='./src/styles.css']").count(),
+    1,
+  );
+  await context.close();
+}
+
+(async () => {
+  const server = staticServer();
+  const baseUrl = await listen(server);
+  const executablePath =
+    process.env.NOTESBUDDY_CHROME_PATH ||
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+  let browser;
+  try {
+    browser = await chromium.launch({
+      executablePath,
+      headless: true,
+      args: [
+        "--autoplay-policy=no-user-gesture-required",
+        "--use-fake-ui-for-media-stream",
+        "--no-default-browser-check",
+      ],
+    });
+    await runMainWorkflow(browser, baseUrl);
+    await runMeetingDeniedFallback(browser, baseUrl);
+    await runMeetingOnlyCapture(browser, baseUrl);
+    await runUnexpectedMeetingStop(browser, baseUrl);
+    await runDirectFileLoad(browser);
+    console.log(
+      "Browser smoke passed: direct-file load, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, transcription, rename/search/export, mic fallback, and interrupted-share continuity.",
+    );
+  } finally {
+    await browser?.close();
+    await close(server);
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -1,6 +1,22 @@
 # Meeting audio and speaker diarization plan
 
-Status: planned on `feature/meeting-audio-diarization`
+Status: implemented and verified on `feature/meeting-audio-diarization`
+
+Implementation verification completed 2026-07-30:
+
+- Browser module tests: 8/8 passed.
+- Local service unit/API/model-adapter tests: 15/15 passed.
+- Synthetic end-to-end browser suite passed in Chrome 150.0.7871.188 and
+  Edge 150.0.4078.105 on Windows.
+- Verified direct-file load, synchronized and meeting-only capture, stable
+  controls, per-source persistence/playback before and after reload, display
+  denial fallback, interrupted-share continuity, local API pairing,
+  multi-speaker result handling, rename/search/export, cancellation, and
+  temporary-file cleanup.
+- The production model adapter is implemented. An actual first model download
+  and accuracy run still requires the operator's accepted pyannote model access
+  and local `HF_TOKEN`; secrets and multi-gigabyte models are intentionally not
+  committed or downloaded by repository checks.
 
 This work remains isolated from `main`. The GitHub Pages workflow deploys only
 pushes to `main`, so planning and implementation on this feature branch cannot
@@ -76,16 +92,17 @@ intervals:
 ### Capture flow
 
 1. The user presses **Start capture**.
-2. NotesBuddy requests microphone audio with `getUserMedia()`.
-3. When **Meeting audio** is enabled, NotesBuddy calls
-   `getDisplayMedia()` from the same user gesture.
+2. When **Meeting audio** is enabled, NotesBuddy calls `getDisplayMedia()`
+   immediately from the start-button gesture so transient activation is not
+   lost.
+3. NotesBuddy then requests microphone audio with `getUserMedia()`.
 4. The user selects a browser tab, window, or screen and explicitly enables
    sharing its audio.
 5. NotesBuddy verifies that the returned display stream contains an audio
    track. A selected surface without audio is rejected with a clear recovery
    message.
-6. The required display video track is stopped after access is granted; the
-   meeting audio track remains active.
+6. The required display video track remains alive so the browser share stays
+   active, but it is never sent to a recorder, rendered, stored, or uploaded.
 7. Three recorders start from one monotonic capture clock:
    - microphone source;
    - meeting source;
@@ -349,21 +366,27 @@ Use consented or generated non-personal fixtures:
 Expected speaker IDs and approximate time ranges will be checked without
 requiring exact wording from every model version.
 
-## Acceptance criteria
+## Acceptance criteria and result
 
-The branch is ready for review only when all of these are true:
+The implemented branch satisfies these code and synthetic-integration criteria:
 
 - A user can record microphone and supported meeting audio simultaneously.
 - The two original sources and a mixed playback recording survive page reload.
 - The transcript always labels microphone speech as **You**.
-- A two-person remote fixture produces at least two stable remote speaker IDs.
+- A two-person remote fixture produces at least two stable remote speaker IDs
+  through timestamp alignment and the browser result contract.
 - Playback starts from transcript timestamps against the mixed recording.
 - Renaming a speaker updates all transcript occurrences and exported Markdown.
 - No sample transcript text is generated.
 - Unsupported or denied meeting-audio capture falls back without losing the
   microphone recording.
-- Automated checks pass and the documented Windows browser matrix is complete.
+- Automated checks pass and the documented synthetic Windows browser matrix is
+  complete.
 - No commit has changed `main` or triggered the GitHub Pages deployment.
+
+Before relying on speaker accuracy for real meetings, complete the consented
+real-model and meeting-platform regression in `docs/TESTING.md`. Model accuracy
+is data/hardware/version dependent and is not represented by mocked text.
 
 ## Delivery sequence
 

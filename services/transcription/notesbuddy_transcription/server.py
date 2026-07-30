@@ -1,0 +1,425 @@
+"""Authenticated localhost API for NotesBuddy transcription jobs."""
+
+from __future__ import annotations
+
+import hmac
+import json
+import os
+import shutil
+import tempfile
+import threading
+import time
+from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated, Any
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+
+from .engine import EngineCancelled, engine_from_environment
+from .security import ensure_pairing_token
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _allowed_origins() -> list[str]:
+    configured = os.getenv("NOTESBUDDY_ALLOWED_ORIGINS", "")
+    if configured.strip():
+        return [
+            origin.strip()
+            for origin in configured.split(",")
+            if origin.strip()
+        ]
+    return [
+        "null",
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
+        "https://sumarahmed.github.io",
+    ]
+
+
+@dataclass(slots=True)
+class Job:
+    id: str
+    work_dir: Path
+    metadata: dict[str, Any]
+    paths: dict[str, Path]
+    engine_name: str
+    status: str = "queued"
+    progress: float = 0.0
+    stage: str = "queued"
+    language: str | None = None
+    segments: list[dict] = field(default_factory=list)
+    error: str | None = None
+    created_at: str = field(default_factory=_now)
+    created_monotonic: float = field(default_factory=time.monotonic)
+    started_at: str | None = None
+    completed_at: str | None = None
+    completed_monotonic: float | None = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def public(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "jobId": self.id,
+                "status": self.status,
+                "progress": self.progress,
+                "stage": self.stage,
+                "engine": self.engine_name,
+                "language": self.language,
+                "segments": list(self.segments),
+                "error": self.error,
+                "createdAt": self.created_at,
+                "startedAt": self.started_at,
+                "completedAt": self.completed_at,
+            }
+
+
+class JobStore:
+    def __init__(self, *, retention_seconds: int, maximum_jobs: int) -> None:
+        self._jobs: dict[str, Job] = {}
+        self._lock = threading.Lock()
+        self._retention_seconds = retention_seconds
+        self._maximum_jobs = maximum_jobs
+
+    def _cleanup_locked(self) -> None:
+        now = time.monotonic()
+        expired = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.completed_monotonic is not None
+            and now - job.completed_monotonic >= self._retention_seconds
+        ]
+        for job_id in expired:
+            self._jobs.pop(job_id, None)
+
+    def add(self, job: Job) -> bool:
+        with self._lock:
+            self._cleanup_locked()
+            if len(self._jobs) >= self._maximum_jobs:
+                completed = sorted(
+                    (
+                        existing
+                        for existing in self._jobs.values()
+                        if existing.completed_monotonic is not None
+                    ),
+                    key=lambda existing: existing.completed_monotonic or 0,
+                )
+                for existing in completed:
+                    self._jobs.pop(existing.id, None)
+                    if len(self._jobs) < self._maximum_jobs:
+                        break
+            if len(self._jobs) >= self._maximum_jobs:
+                return False
+            self._jobs[job.id] = job
+            return True
+
+    def get(self, job_id: str) -> Job | None:
+        with self._lock:
+            self._cleanup_locked()
+            return self._jobs.get(job_id)
+
+
+def _safe_error(error: BaseException, work_dir: Path) -> str:
+    message = str(error).replace(str(work_dir), "[temporary audio]").strip()
+    return (message or error.__class__.__name__)[:1000]
+
+
+def _run_job(job: Job, engine: object) -> None:
+    with job.lock:
+        if job.cancel_event.is_set():
+            job.status = "cancelled"
+            job.stage = "cancelled"
+            job.completed_at = _now()
+            job.completed_monotonic = time.monotonic()
+            shutil.rmtree(job.work_dir, ignore_errors=True)
+            return
+        job.status = "processing"
+        job.stage = "loading local models"
+        job.started_at = _now()
+
+    def progress(value: float, stage: str) -> None:
+        with job.lock:
+            if job.status != "cancelled":
+                job.progress = min(1.0, max(0.0, float(value)))
+                job.stage = str(stage)[:120]
+
+    try:
+        result = engine.process(
+            microphone_path=job.paths.get("microphone"),
+            meeting_path=job.paths.get("meeting"),
+            mixed_path=job.paths.get("mixed"),
+            metadata=job.metadata,
+            cancel_event=job.cancel_event,
+            progress=progress,
+        )
+        with job.lock:
+            if job.cancel_event.is_set():
+                job.status = "cancelled"
+                job.stage = "cancelled"
+            else:
+                job.status = "completed"
+                job.stage = "completed"
+                job.progress = 1.0
+                job.language = result.get("language")
+                job.segments = list(result.get("segments") or [])
+            job.completed_at = _now()
+            job.completed_monotonic = time.monotonic()
+    except EngineCancelled:
+        with job.lock:
+            job.status = "cancelled"
+            job.stage = "cancelled"
+            job.completed_at = _now()
+            job.completed_monotonic = time.monotonic()
+    except Exception as error:  # noqa: BLE001 - model failures become job state
+        with job.lock:
+            job.status = "failed"
+            job.stage = "failed"
+            job.error = _safe_error(error, job.work_dir)
+            job.completed_at = _now()
+            job.completed_monotonic = time.monotonic()
+    finally:
+        shutil.rmtree(job.work_dir, ignore_errors=True)
+
+
+async def _save_upload(
+    upload: UploadFile,
+    *,
+    source: str,
+    work_dir: Path,
+    maximum_bytes: int,
+) -> tuple[Path, int]:
+    suffix = Path(upload.filename or "").suffix.lower()
+    if not suffix or len(suffix) > 10 or not suffix[1:].isalnum():
+        suffix = ".webm"
+    destination = work_dir / f"{source}{suffix}"
+    total = 0
+    with destination.open("xb") as output:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"{source} recording exceeds the configured limit.",
+                )
+            output.write(chunk)
+    await upload.close()
+    if total == 0:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"{source} recording is empty.",
+        )
+    return destination, total
+
+
+def create_app(
+    *,
+    engine: object | None = None,
+    pairing_token: str | None = None,
+    allowed_origins: list[str] | None = None,
+) -> FastAPI:
+    active_engine = engine or engine_from_environment()
+    if pairing_token is None:
+        pairing_token, _token_path, _created = ensure_pairing_token()
+    if len(pairing_token) < 24:
+        raise RuntimeError("The NotesBuddy pairing token is too short.")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    app = FastAPI(
+        title="NotesBuddy local transcription companion",
+        version="1.0.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins or _allowed_origins(),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Content-Type",
+            "X-NotesBuddy-Pairing-Token",
+        ],
+        max_age=600,
+    )
+
+    @app.middleware("http")
+    async def allow_authenticated_local_network_preflight(
+        request: Request,
+        call_next,
+    ):
+        response = await call_next(request)
+        if (
+            request.headers.get("access-control-request-private-network")
+            == "true"
+        ):
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+        return response
+
+    retention_seconds = max(
+        60,
+        min(
+            24 * 60 * 60,
+            int(os.getenv("NOTESBUDDY_JOB_RETENTION_SECONDS", "3600")),
+        ),
+    )
+    maximum_jobs = max(
+        4,
+        min(256, int(os.getenv("NOTESBUDDY_MAX_JOBS", "64"))),
+    )
+    jobs = JobStore(
+        retention_seconds=retention_seconds,
+        maximum_jobs=maximum_jobs,
+    )
+    executor = ThreadPoolExecutor(
+        max_workers=max(
+            1,
+            min(2, int(os.getenv("NOTESBUDDY_MAX_WORKERS", "1"))),
+        ),
+        thread_name_prefix="notesbuddy-transcription",
+    )
+    maximum_source_bytes = max(
+        1024 * 1024,
+        int(os.getenv("NOTESBUDDY_MAX_SOURCE_BYTES", str(2 * 1024**3))),
+    )
+
+    def require_token(
+        supplied: Annotated[
+            str | None,
+            Header(alias="X-NotesBuddy-Pairing-Token"),
+        ] = None,
+    ) -> None:
+        if not supplied or not hmac.compare_digest(supplied, pairing_token):
+            raise HTTPException(
+                status_code=401,
+                detail="Pairing token is missing or invalid.",
+            )
+
+    @app.get("/v1/health", dependencies=[Depends(require_token)])
+    def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "engine": getattr(active_engine, "name", active_engine.__class__.__name__),
+            "modelStatus": "loaded on first job",
+            "storage": "temporary job files only",
+        }
+
+    @app.post("/v1/transcriptions", dependencies=[Depends(require_token)])
+    async def create_transcription(
+        microphone: Annotated[UploadFile | None, File()] = None,
+        meeting: Annotated[UploadFile | None, File()] = None,
+        mixed: Annotated[UploadFile | None, File()] = None,
+        metadata: Annotated[str, Form()] = "{}",
+    ) -> dict[str, Any]:
+        uploads = {
+            source: upload
+            for source, upload in {
+                "microphone": microphone,
+                "meeting": meeting,
+                "mixed": mixed,
+            }.items()
+            if upload is not None
+        }
+        if not uploads:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one recording source is required.",
+            )
+        if len(metadata.encode("utf-8")) > 64 * 1024:
+            raise HTTPException(status_code=413, detail="Metadata is too large.")
+        try:
+            parsed_metadata = json.loads(metadata)
+        except json.JSONDecodeError as error:
+            raise HTTPException(
+                status_code=400,
+                detail="Metadata must be a valid JSON object.",
+            ) from error
+        if not isinstance(parsed_metadata, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Metadata must be a JSON object.",
+            )
+
+        work_dir = Path(tempfile.mkdtemp(prefix="notesbuddy-job-"))
+        paths: dict[str, Path] = {}
+        try:
+            for source, upload in uploads.items():
+                path, _size = await _save_upload(
+                    upload,
+                    source=source,
+                    work_dir=work_dir,
+                    maximum_bytes=maximum_source_bytes,
+                )
+                paths[source] = path
+        except Exception:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise
+
+        job = Job(
+            id=f"job-{uuid4()}",
+            work_dir=work_dir,
+            metadata=parsed_metadata,
+            paths=paths,
+            engine_name=getattr(
+                active_engine,
+                "name",
+                active_engine.__class__.__name__,
+            ),
+        )
+        if not jobs.add(job):
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=429,
+                detail="The local transcription queue is full.",
+            )
+        executor.submit(_run_job, job, active_engine)
+        return job.public()
+
+    @app.get(
+        "/v1/transcriptions/{job_id}",
+        dependencies=[Depends(require_token)],
+    )
+    def get_transcription(job_id: str) -> dict[str, Any]:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job was not found.")
+        return job.public()
+
+    @app.delete(
+        "/v1/transcriptions/{job_id}",
+        dependencies=[Depends(require_token)],
+    )
+    def cancel_transcription(job_id: str) -> dict[str, Any]:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job was not found.")
+        job.cancel_event.set()
+        with job.lock:
+            if job.status in {"queued", "processing"}:
+                job.status = "cancelled"
+                job.stage = "cancellation requested"
+                job.completed_at = _now()
+                job.completed_monotonic = time.monotonic()
+        return job.public()
+
+    return app

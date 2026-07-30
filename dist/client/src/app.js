@@ -1,4 +1,9 @@
 const app = document.getElementById("root");
+const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
+
+if (!MeetingAudio) {
+  throw new Error("NotesBuddy meeting-audio module failed to load.");
+}
 
 const ICONS = {
   mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/><path d="M8 22h8"/>',
@@ -97,20 +102,24 @@ const LEGACY_SEED_MEETING_IDS = new Set([
   "sprint-planning-0725",
 ]);
 const storedMeetings = loadStored("notesbuddy-meetings", []);
-const initialMeetings = Array.isArray(storedMeetings)
+let initialMeetings = Array.isArray(storedMeetings)
   ? storedMeetings.filter((meeting) => !LEGACY_SEED_MEETING_IDS.has(meeting.id))
   : [];
 const initialProfile = normaliseProfile(
   loadStored("notesbuddy-profile", null),
 );
+initialMeetings = initialMeetings.map((meeting) =>
+  MeetingAudio.ensureMeetingSpeakers(meeting, initialProfile),
+);
 
 const defaultSettings = {
-  transcriptionModel: "Browser Speech",
-  summaryModel: "Extractive brief",
   autoSummarize: true,
   keepAudio: true,
   systemAudio: true,
   browserTranscription: true,
+  autoTranscribe: false,
+  transcriptionEndpoint: "http://127.0.0.1:8765",
+  transcriptionToken: "",
 };
 
 const state = {
@@ -129,7 +138,8 @@ const state = {
   mobileNavOpen: false,
   moreOpen: false,
   showAllMeetings: false,
-  regenerating: false,
+  transcriptionServiceStatus: "unknown",
+  playbackSourceByMeeting: {},
   toasts: [],
   capture: {
     title: "Untitled meeting",
@@ -141,16 +151,44 @@ const state = {
     microphoneOn: true,
     systemAudioOn: true,
     permission: "prompt",
+    sourceStatus: {
+      microphone: "idle",
+      meeting: "idle",
+      mixed: "idle",
+    },
+    meetingDisplaySurface: null,
+    meetingAudioEnded: false,
+    captureStartedAt: null,
   },
 };
 
 let captureTimer;
-let mediaStream;
-let mediaRecorder;
-let recordedChunks = [];
+let captureRuntime = createEmptyCaptureRuntime();
 let speechRecognition;
 let activeAudioUrl;
 let toastId = 0;
+const transcriptionControllers = new Map();
+
+function createEmptyCaptureRuntime() {
+  return {
+    streams: {
+      microphone: null,
+      display: null,
+      meeting: null,
+      mixed: null,
+    },
+    recorders: {},
+    chunks: {
+      microphone: [],
+      meeting: [],
+      mixed: [],
+    },
+    audioContext: null,
+    audioNodes: [],
+    captureStartedAt: null,
+    captureStartedAtMonotonic: null,
+  };
+}
 
 function save() {
   localStorage.setItem("notesbuddy-meetings", JSON.stringify(state.meetings));
@@ -211,6 +249,12 @@ async function deleteAudio(id) {
     transaction.onerror = () => reject(transaction.error);
   });
   database.close();
+}
+
+async function deleteMeetingAudio(meeting) {
+  await Promise.allSettled(
+    MeetingAudio.recordingAssetIds(meeting).map((id) => deleteAudio(id)),
+  );
 }
 
 function formatTimer(totalSeconds) {
@@ -277,28 +321,18 @@ function captureDateLabel(date = new Date()) {
   }).format(date);
 }
 
-function recordingDownloadName(meeting) {
-  if (meeting.audioFileName) {
-    return meeting.audioFileName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-");
-  }
-  const type = (meeting.audioType || "").toLowerCase();
-  const extension = type.includes("wav")
-    ? "wav"
-    : type.includes("mpeg") || type.includes("mp3")
-      ? "mp3"
-      : type.includes("mp4") || type.includes("m4a")
-        ? "m4a"
-        : type.includes("ogg")
-          ? "ogg"
-          : type.includes("flac")
-            ? "flac"
-            : "webm";
-  const baseName =
-    meeting.title
-      .replace(/[^a-z0-9]+/gi, "-")
-      .replace(/^-|-$/g, "")
-      .toLowerCase() || "recording";
-  return `${baseName}.${extension}`;
+function selectedPlaybackSource(meeting) {
+  return MeetingAudio.primaryRecordingSource(
+    meeting,
+    state.playbackSourceByMeeting[meeting.id],
+  );
+}
+
+function recordingDownloadName(
+  meeting,
+  source = selectedPlaybackSource(meeting),
+) {
+  return MeetingAudio.recordingDownloadName(meeting, source || "mixed");
 }
 
 function meetingDate(iso) {
@@ -363,6 +397,13 @@ function filteredMeetings() {
       meeting.overview,
       meeting.tags.join(" "),
       meeting.transcript.map((segment) => segment.text).join(" "),
+      (meeting.speakers || [])
+        .map((speaker) =>
+          speaker.id === "local-user"
+            ? `You ${currentUserName()}`
+            : speaker.displayName,
+        )
+        .join(" "),
     ]
       .join(" ")
       .toLowerCase()
@@ -495,11 +536,18 @@ function homeView(meetings) {
 
 function captureView() {
   const capture = state.capture;
+  const meetingCaptureSupported = Boolean(
+    navigator.mediaDevices?.getDisplayMedia,
+  );
   const statusLabel = {
     idle: "Ready",
+    "requesting-microphone": "Requesting microphone",
+    "requesting-meeting-audio": "Requesting meeting audio",
+    ready: "Starting",
     recording: "Recording",
     paused: "Paused",
     processing: "Finishing locally",
+    failed: "Needs attention",
   }[capture.status];
   const idle = capture.status === "idle";
   return `<main class="main-view capture-view">
@@ -519,22 +567,28 @@ function captureView() {
           ? `<div class="capture-ready">
               <div class="capture-ready__visual"><div class="ready-ring ready-ring--outer"></div><div class="ready-ring ready-ring--inner"></div><div class="ready-mic">${icon("mic", 34)}</div></div>
               <h2>Ready for your next conversation</h2>
-              <p>NotesBuddy will record your real microphone audio. Live text appears only when your browser returns recognised speech.</p>
+              <p>Keep your microphone and meeting audio as separate synchronized recordings, with a mixed track for normal playback.</p>
               <div class="source-options">
                 <button type="button" data-action="toggle-mic" class="${capture.microphoneOn ? "source-option--active" : ""}">
-                  <span>${icon("mic", 17)}</span><div><strong>Microphone</strong><small>Default input</small></div><i>${capture.microphoneOn ? icon("check", 13) : ""}</i>
+                  <span>${icon("mic", 17)}</span><div><strong>My microphone</strong><small>${capture.microphoneOn ? "Saved as You" : "Not recorded"}</small></div><i>${capture.microphoneOn ? icon("check", 13) : ""}</i>
                 </button>
-                <button type="button" disabled title="System audio capture requires the desktop application">
-                  <span>${icon("headphones", 17)}</span><div><strong>System audio</strong><small>Desktop app only</small></div><i></i>
+                <button type="button" data-action="toggle-system" class="${capture.systemAudioOn && meetingCaptureSupported ? "source-option--active" : ""}" ${meetingCaptureSupported ? "" : 'disabled title="Meeting audio sharing is unavailable in this browser"'}>
+                  <span>${icon("headphones", 17)}</span><div><strong>Meeting audio</strong><small>${meetingCaptureSupported ? (capture.systemAudioOn ? "Choose a tab, window, or screen" : "Not recorded") : "Browser unavailable"}</small></div><i>${capture.systemAudioOn && meetingCaptureSupported ? icon("check", 13) : ""}</i>
                 </button>
               </div>
               <button type="button" class="start-recording" data-action="start-capture"><span>${icon("mic", 20)}</span>Start capture</button>
-              <div class="prototype-note">${icon("shield", 14)}Audio is saved locally for playback. Browser speech recognition may use your browser provider’s service.</div>
+              <div class="prototype-note">${icon("shield", 14)}When meeting audio is selected, use the browser share dialog and enable <strong>Share audio</strong>. Video is never recorded or stored.</div>
             </div>`
           : `<div class="live-workspace">
               <div class="live-meter">
-                <div class="live-meter__top"><div><span class="live-pill"><i></i>Live</span><span>${capture.permission === "granted" ? "Microphone recording" : "Microphone unavailable"}</span></div><strong data-capture-clock>${formatTimer(capture.elapsed)}</strong></div>
+                <div class="live-meter__top"><div><span class="live-pill"><i></i>Live</span><span>${capture.permission === "granted" ? "Synchronized local recording" : "Capture starting"}</span></div><strong data-capture-clock>${formatTimer(capture.elapsed)}</strong></div>
                 ${waveform(capture.status === "recording", true)}
+                <div class="capture-source-live">
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.microphone}" data-source-status="microphone">${icon("mic", 13)}Microphone <b>${escapeHtml(capture.sourceStatus.microphone)}</b></span>
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.meeting}" data-source-status="meeting">${icon("headphones", 13)}Meeting <b>${escapeHtml(capture.sourceStatus.meeting)}</b></span>
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.mixed}" data-source-status="mixed">${icon("audio", 13)}Mixed <b>${escapeHtml(capture.sourceStatus.mixed)}</b></span>
+                </div>
+                ${capture.meetingAudioEnded ? `<div class="capture-source-warning">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>` : ""}
               </div>
               <div class="live-transcript">
                 <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span><b data-transcription-label>${capture.transcriptionStatus === "listening" ? "Browser speech" : "Audio recording"}</b></span></div>
@@ -587,15 +641,35 @@ function updateCaptureRuntimeUI({ transcript = false } = {}) {
   }
 }
 
-function transcriptRow(segment, documentMode = false, hasRecording = false) {
+function transcriptRow(
+  segment,
+  documentMode = false,
+  hasRecording = false,
+  meeting = null,
+) {
   const timestamp = escapeHtml(segment.timestamp);
+  const speakerName = meeting
+    ? MeetingAudio.speakerLabel(
+        meeting,
+        segment.speakerId,
+        segment.speaker || "Unknown speaker",
+      )
+    : segment.speaker || "Unknown speaker";
   const timestampControl =
     documentMode && hasRecording
       ? `<button type="button" data-action="seek-recording-time" data-time="${timestamp}" aria-label="Seek recording to ${timestamp}">${timestamp}</button>`
       : `<span>${timestamp}</span>`;
+  const canRenameFromLabel =
+    documentMode &&
+    meeting &&
+    segment.speakerId &&
+    segment.speakerId !== "local-user";
+  const speakerControl = canRenameFromLabel
+    ? `<button type="button" class="transcript-speaker-button" data-action="focus-speaker" data-id="${escapeHtml(segment.speakerId)}" data-speaker-label-id="${escapeHtml(segment.speakerId)}" aria-label="Rename ${escapeHtml(speakerName)}">${escapeHtml(speakerName)}</button>`
+    : `<strong data-speaker-label-id="${escapeHtml(segment.speakerId || "")}">${escapeHtml(speakerName)}</strong>`;
   return `<div class="transcript-row ${documentMode ? "transcript-row--document" : ""}">
     ${avatar(segment.initials, segment.color)}
-    <div><div class="transcript-row__meta"><strong>${escapeHtml(segment.speaker)}</strong>${timestampControl}</div><p>${escapeHtml(segment.text)}</p></div>
+    <div><div class="transcript-row__meta">${speakerControl}${timestampControl}</div><p>${escapeHtml(segment.text)}</p></div>
   </div>`;
 }
 
@@ -603,7 +677,7 @@ function summaryView(meeting) {
   return `<div class="summary-layout">
     <div class="summary-main">
       <section class="summary-lead">
-        <div class="summary-lead__heading"><div><span class="eyebrow">Meeting brief</span><h2>The short version</h2></div><button type="button" class="text-button" data-action="regenerate">${icon("refresh", 14, state.regenerating ? "spin" : "")}${state.regenerating ? "Refreshing…" : "Regenerate"}</button></div>
+        <div class="summary-lead__heading"><div><span class="eyebrow">Meeting brief</span><h2>The short version</h2></div><button type="button" class="text-button" data-action="regenerate">${icon("refresh", 14)}Refresh from transcript</button></div>
         <p>${escapeHtml(meeting.overview)}</p>
       </section>
       <section class="summary-section">
@@ -627,10 +701,70 @@ function summaryView(meeting) {
   </div>`;
 }
 
+function transcriptionWorkspace(meeting) {
+  const status = meeting.transcription?.status || "not-requested";
+  const statusLabel = {
+    "not-requested": "Not transcribed",
+    draft: "Browser draft only",
+    queued: "Queued",
+    processing: "Identifying speakers",
+    completed: "Speaker transcript ready",
+    failed: "Transcription failed",
+    cancelled: "Transcription cancelled",
+  }[status] || status;
+  const isRunning = status === "queued" || status === "processing";
+  const hasRecording = Boolean(MeetingAudio.recordingAsset(meeting));
+  const buttonLabel =
+    status === "completed"
+      ? "Re-transcribe speakers"
+      : status === "failed"
+        ? "Retry speaker transcription"
+        : "Transcribe and identify speakers";
+  return `<section class="transcription-workspace transcription-workspace--${escapeHtml(status)}">
+    <div>
+      <span class="eyebrow">Speaker transcription</span>
+      <h3>${escapeHtml(statusLabel)}</h3>
+      <p>${status === "completed" ? `${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"} · ${(meeting.speakers || []).length} speaker${(meeting.speakers || []).length === 1 ? "" : "s"}` : status === "failed" ? escapeHtml(meeting.transcription?.error || "The local companion could not complete this job.") : "Uses the paired local companion. Audio is processed on this computer and temporary service files are removed."}</p>
+    </div>
+    <div class="transcription-workspace__actions">
+      ${isRunning ? `<button type="button" class="button button--quiet" data-action="cancel-transcription">Cancel</button>` : ""}
+      <button type="button" class="button button--primary" data-action="transcribe-meeting" ${hasRecording && !isRunning ? "" : "disabled"}>${isRunning ? `${icon("refresh", 15, "spin")}Processing…` : `${icon("users", 15)}${buttonLabel}`}</button>
+    </div>
+  </section>`;
+}
+
+function speakerRoster(meeting) {
+  const speakers = meeting.speakers || [];
+  if (!speakers.length) return "";
+  return `<section class="speaker-roster">
+    <div class="speaker-roster__heading"><div><span class="eyebrow">Speakers</span><h3>Name the voices in this meeting</h3></div><span>${speakers.length} detected</span></div>
+    <div class="speaker-roster__list">
+      ${speakers
+        .map((speaker) => {
+          const local = speaker.id === "local-user";
+          return `<div class="speaker-card">
+            ${avatar(local ? currentUserInitials() : MeetingAudio.initialsForName(speaker.displayName), speaker.color)}
+            <div><strong>${local ? "You" : escapeHtml(speaker.displayName)}</strong><small>${local ? `${escapeHtml(currentUserName())} · local microphone` : "Detected in meeting audio"}</small></div>
+            ${
+              local
+                ? `<span class="speaker-card__fixed">${icon("lock", 12)}Profile</span>`
+                : `<label><span>Speaker name</span><input data-input="speaker-name" data-id="${escapeHtml(speaker.id)}" value="${escapeHtml(speaker.displayName)}" maxlength="80" aria-label="Rename ${escapeHtml(speaker.displayName)}"></label>`
+            }
+          </div>`;
+        })
+        .join("")}
+    </div>
+  </section>`;
+}
+
 function transcriptView(meeting) {
   const query = state.transcriptQuery || "";
-  const hasRecording = Boolean(meeting.audioId);
+  const hasRecording = Boolean(
+    MeetingAudio.recordingAsset(meeting, selectedPlaybackSource(meeting)),
+  );
   return `<div class="transcript-view">
+    ${transcriptionWorkspace(meeting)}
+    ${speakerRoster(meeting)}
     <div class="transcript-toolbar"><div class="transcript-search">${icon("search", 15)}<input data-input="transcript-search" value="${escapeHtml(query)}" placeholder="Find in transcript" aria-label="Find in transcript"></div><span>${meeting.transcript.length} segments</span></div>
     <div class="transcript-document">
       <div class="transcript-document__rail">
@@ -648,13 +782,29 @@ function transcriptView(meeting) {
 }
 
 function transcriptResultsMarkup(meeting, query = "") {
+  const normalizedQuery = query.toLowerCase();
   const filtered = meeting.transcript.filter(
     (segment) =>
-      segment.text.toLowerCase().includes(query.toLowerCase()) ||
-      segment.speaker.toLowerCase().includes(query.toLowerCase()),
+      segment.text.toLowerCase().includes(normalizedQuery) ||
+      MeetingAudio.speakerLabel(
+        meeting,
+        segment.speakerId,
+        segment.speaker,
+      )
+        .toLowerCase()
+        .includes(normalizedQuery) ||
+      (segment.speakerId === "local-user" &&
+        currentUserName().toLowerCase().includes(normalizedQuery)),
   );
   return `${filtered
-    .map((segment) => transcriptRow(segment, true, Boolean(meeting.audioId)))
+    .map((segment) =>
+      transcriptRow(
+        segment,
+        true,
+        Boolean(MeetingAudio.recordingAsset(meeting)),
+        meeting,
+      ),
+    )
     .join("")}${
     filtered.length
       ? ""
@@ -686,7 +836,29 @@ function notesView(meeting) {
 function meetingView(meeting) {
   const tabButton = (id, label, iconName) =>
     `<button type="button" data-action="tab" data-id="${id}" class="${state.tab === id ? "detail-tab--active" : ""}" role="tab" aria-selected="${state.tab === id}">${icon(iconName, 15)}${label}</button>`;
-  const audioDownloadName = recordingDownloadName(meeting);
+  const recordingAssets = MeetingAudio.getRecordingAssets(meeting);
+  const playbackSource = selectedPlaybackSource(meeting);
+  const selectedAsset = MeetingAudio.recordingAsset(
+    meeting,
+    playbackSource,
+  );
+  const audioDownloadName = recordingDownloadName(
+    meeting,
+    playbackSource,
+  );
+  const sourceLabel = {
+    mixed: "Mixed recording",
+    microphone: "My microphone",
+    meeting: "Meeting audio",
+  };
+  const sourceButtons = MeetingAudio.RECORDING_SOURCES.filter(
+    (source) => recordingAssets[source],
+  )
+    .map(
+      (source) =>
+        `<button type="button" data-action="select-recording-source" data-id="${source}" class="${source === playbackSource ? "recording-source--active" : ""}" aria-pressed="${source === playbackSource}">${escapeHtml(sourceLabel[source])}</button>`,
+    )
+    .join("");
   return `<main class="main-view detail-view">
     <header class="detail-header">
       <div class="detail-header__top">
@@ -700,16 +872,16 @@ function meetingView(meeting) {
         </div>
       </div>
       ${
-        meeting.audioId
+        selectedAsset
           ? `<div class="detail-audio">
               <span class="detail-audio__icon">${icon("audio", 18)}</span>
-              <div><strong>Original recording</strong><small>Stored locally on this device</small></div>
-              <audio controls preload="metadata" data-audio-id="${escapeHtml(meeting.audioId)}"></audio>
-              <a class="audio-download" data-audio-download="${escapeHtml(meeting.audioId)}" download="${escapeHtml(audioDownloadName)}" aria-label="Download recording">${icon("download", 16)}</a>
+              <div class="detail-audio__identity"><strong>${escapeHtml(sourceLabel[playbackSource] || "Original recording")}</strong><small>Stored locally on this device</small><div class="recording-source-switcher">${sourceButtons}</div></div>
+              <audio controls preload="metadata" data-audio-id="${escapeHtml(selectedAsset.id)}" data-recording-source="${escapeHtml(playbackSource)}"></audio>
+              <a class="audio-download" data-audio-download="${escapeHtml(selectedAsset.id)}" download="${escapeHtml(audioDownloadName)}" aria-label="Download ${escapeHtml(sourceLabel[playbackSource] || "recording")}">${icon("download", 16)}</a>
             </div>`
           : ""
       }
-      <div class="detail-tabs" role="tablist" aria-label="Meeting views">${tabButton("summary", "AI summary", "sparkles")}${tabButton("transcript", "Transcript", "file")}${tabButton("notes", "My notes", "notebook")}</div>
+      <div class="detail-tabs" role="tablist" aria-label="Meeting views">${tabButton("summary", "Summary", "sparkles")}${tabButton("transcript", "Transcript", "file")}${tabButton("notes", "My notes", "notebook")}</div>
     </header>
     <div class="detail-content">${state.tab === "summary" ? summaryView(meeting) : state.tab === "transcript" ? transcriptView(meeting) : notesView(meeting)}</div>
   </main>`;
@@ -728,11 +900,13 @@ function settingsPanel() {
         <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
       </section>
       <section class="settings-section">
-        <span class="eyebrow">AI models</span>
-        <label><span>Live transcription</span><select disabled><option>Browser speech recognition</option></select></label>
-        <label><span>Meeting brief</span><select disabled><option>Extractive brief from recognised text</option></select></label>
+        <span class="eyebrow">Local speaker transcription</span>
+        <label><span>Companion URL</span><input data-setting="transcriptionEndpoint" value="${escapeHtml(state.settings.transcriptionEndpoint)}" inputmode="url" spellcheck="false" aria-label="Transcription companion URL"></label>
+        <label><span>Pairing token</span><input data-setting="transcriptionToken" value="${escapeHtml(state.settings.transcriptionToken)}" type="password" autocomplete="off" spellcheck="false" aria-label="Transcription pairing token"></label>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(state.transcriptionServiceStatus)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
+        <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
       </section>
-      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("browserTranscription", "Browser live transcription", "Use recognised speech returned by your browser; never inject sample text.")}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original audio", "Retain audio alongside the meeting record.")}</section>
+      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Ask for a tab, window, or screen audio source when capture starts.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised microphone speech as a draft; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", "Send saved local tracks to the paired localhost companion after capture.")}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
   </div>`;
@@ -1052,11 +1226,7 @@ function refreshToastRegion() {
 function resetCapture() {
   clearInterval(captureTimer);
   stopSpeechRecognition();
-  mediaStream?.getTracks().forEach((track) => track.stop());
-  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-  mediaStream = undefined;
-  mediaRecorder = undefined;
-  recordedChunks = [];
+  cancelCaptureRuntime();
   state.capture = {
     title: "Untitled meeting",
     status: "idle",
@@ -1067,7 +1237,192 @@ function resetCapture() {
     microphoneOn: true,
     systemAudioOn: state.settings.systemAudio,
     permission: "prompt",
+    sourceStatus: {
+      microphone: "idle",
+      meeting: "idle",
+      mixed: "idle",
+    },
+    meetingDisplaySurface: null,
+    meetingAudioEnded: false,
+    captureStartedAt: null,
   };
+}
+
+function stopStream(stream) {
+  stream?.getTracks?.().forEach((track) => {
+    try {
+      track.stop();
+    } catch {
+      // The browser may already have stopped a shared track.
+    }
+  });
+}
+
+function cancelCaptureRuntime() {
+  Object.values(captureRuntime.recorders).forEach((recorder) => {
+    if (recorder?.state && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // A recorder can become inactive when its source ends externally.
+      }
+    }
+  });
+  Object.values(captureRuntime.streams).forEach(stopStream);
+  captureRuntime.audioNodes.forEach((node) => {
+    try {
+      node.disconnect();
+    } catch {
+      // Disconnected audio nodes do not require further cleanup.
+    }
+  });
+  captureRuntime.audioContext?.close?.().catch(() => {});
+  captureRuntime = createEmptyCaptureRuntime();
+}
+
+function setCaptureSourceStatus(source, value) {
+  state.capture.sourceStatus[source] = value;
+  const element = app.querySelector(`[data-source-status="${source}"]`);
+  if (!element) return;
+  Array.from(element.classList)
+    .filter((className) =>
+      className.startsWith("capture-source-live__item--"),
+    )
+    .forEach((className) => element.classList.remove(className));
+  element.classList.add(`capture-source-live__item--${value}`);
+  const label = element.querySelector("b");
+  if (label) label.textContent = value;
+}
+
+function showMeetingAudioEndedWarning() {
+  const sources = app.querySelector(".capture-source-live");
+  if (!sources || app.querySelector(".capture-source-warning")) return;
+  sources.insertAdjacentHTML(
+    "afterend",
+    `<div class="capture-source-warning">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>`,
+  );
+}
+
+function preferredRecordingType() {
+  return [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+  ].find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+function createSourceRecorder(source, stream) {
+  const mimeType = preferredRecordingType();
+  const recorder = new MediaRecorder(
+    stream,
+    mimeType ? { mimeType } : undefined,
+  );
+  captureRuntime.chunks[source] = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data?.size) captureRuntime.chunks[source].push(event.data);
+  };
+  recorder.onerror = () => {
+    if (
+      state.capture.status !== "recording" &&
+      state.capture.status !== "paused"
+    ) {
+      return;
+    }
+    setCaptureSourceStatus(source, "unavailable");
+    showToast(
+      `${source === "meeting" ? "Meeting" : source === "microphone" ? "Microphone" : "Mixed"} recorder stopped`,
+      "Finish the capture to keep any audio chunks the browser produced.",
+    );
+  };
+  captureRuntime.recorders[source] = recorder;
+  return recorder;
+}
+
+function buildMixedStream(sourceStreams) {
+  const audioTracks = sourceStreams.flatMap((stream) =>
+    stream.getAudioTracks(),
+  );
+  if (!audioTracks.length) return null;
+  if (audioTracks.length === 1) {
+    return new MediaStream([audioTracks[0]]);
+  }
+  const AudioContextClass =
+    globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error(
+      "This browser cannot mix microphone and meeting audio locally.",
+    );
+  }
+  const audioContext = new AudioContextClass();
+  const destination = audioContext.createMediaStreamDestination();
+  captureRuntime.audioContext = audioContext;
+  for (const stream of sourceStreams) {
+    const audioOnlyStream = new MediaStream(stream.getAudioTracks());
+    const sourceNode = audioContext.createMediaStreamSource(audioOnlyStream);
+    sourceNode.connect(destination);
+    captureRuntime.audioNodes.push(sourceNode);
+  }
+  return destination.stream;
+}
+
+async function stopRecorderAndCollect(source) {
+  const recorder = captureRuntime.recorders[source];
+  if (!recorder) return null;
+  if (recorder.state !== "inactive") {
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = window.setTimeout(finish, 5000);
+      recorder.addEventListener("stop", finish, { once: true });
+      try {
+        recorder.requestData?.();
+      } catch {
+        // Some browsers reject requestData immediately before stop.
+      }
+      try {
+        recorder.stop();
+      } catch {
+        finish();
+      }
+    });
+  }
+  const chunks = captureRuntime.chunks[source] || [];
+  return chunks.length
+    ? new Blob(chunks, {
+        type: recorder.mimeType || chunks[0]?.type || "audio/webm",
+      })
+    : null;
+}
+
+async function collectCaptureRecordings() {
+  const sources = Object.keys(captureRuntime.recorders);
+  const blobs = await Promise.all(
+    sources.map(async (source) => [
+      source,
+      await stopRecorderAndCollect(source),
+    ]),
+  );
+  return Object.fromEntries(blobs);
+}
+
+async function releaseCaptureRuntime() {
+  Object.values(captureRuntime.streams).forEach(stopStream);
+  captureRuntime.audioNodes.forEach((node) => {
+    try {
+      node.disconnect();
+    } catch {
+      // The node may already be disconnected.
+    }
+  });
+  if (captureRuntime.audioContext?.state !== "closed") {
+    await captureRuntime.audioContext?.close?.().catch(() => {});
+  }
+  captureRuntime = createEmptyCaptureRuntime();
 }
 
 function startCaptureTimer() {
@@ -1119,13 +1474,19 @@ function startSpeechRecognition() {
       const text = result[0]?.transcript?.trim();
       if (!text) continue;
       if (result.isFinal) {
+        const endMs = state.capture.elapsed * 1000;
         state.capture.segments.push({
           id: createId("speech"),
-          speaker: currentUserName(),
+          speakerId: "local-user",
+          speaker: "You",
           initials: currentUserInitials(),
           color: "teal",
           timestamp: formatTimer(state.capture.elapsed),
+          startMs: Math.max(0, endMs - 2500),
+          endMs,
+          source: "microphone",
           text,
+          isDraft: true,
         });
       } else {
         interim = `${interim} ${text}`.trim();
@@ -1171,82 +1532,200 @@ function startSpeechRecognition() {
 }
 
 async function startCapture() {
-  if (
-    !state.capture.microphoneOn ||
-    !navigator.mediaDevices?.getUserMedia ||
-    !globalThis.MediaRecorder
-  ) {
+  if (!globalThis.MediaRecorder || !navigator.mediaDevices) {
     state.capture.permission = "unavailable";
     showToast(
-      "Microphone recording unavailable",
-      "Enable the microphone and use a current Chrome, Edge, or Safari browser.",
+      "Audio recording unavailable",
+      "Use a current Chrome or Edge browser with media permissions enabled.",
+    );
+    return;
+  }
+  if (!state.capture.microphoneOn && !state.capture.systemAudioOn) {
+    showToast(
+      "Choose a recording source",
+      "Enable your microphone, meeting audio, or both.",
+    );
+    return;
+  }
+
+  captureRuntime = createEmptyCaptureRuntime();
+  state.capture.meetingAudioEnded = false;
+
+  // Display capture must be invoked from the original click's transient user
+  // activation. Microphone permission does not have that constraint, so it is
+  // intentionally requested second.
+  if (state.capture.systemAudioOn) {
+    state.capture.status = "requesting-meeting-audio";
+    state.capture.sourceStatus.meeting = "requesting";
+    render();
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: {
+          suppressLocalAudioPlayback: false,
+        },
+        systemAudio: "include",
+        surfaceSwitching: "include",
+        selfBrowserSurface: "exclude",
+      });
+      const meetingTracks = displayStream.getAudioTracks();
+      if (!meetingTracks.length) {
+        stopStream(displayStream);
+        throw new Error("The selected surface did not include audio.");
+      }
+      captureRuntime.streams.display = displayStream;
+      captureRuntime.streams.meeting = new MediaStream(meetingTracks);
+      state.capture.meetingDisplaySurface =
+        displayStream.getVideoTracks()[0]?.getSettings?.().displaySurface ||
+        "shared surface";
+      state.capture.sourceStatus.meeting = "ready";
+      const sharedTrack =
+        displayStream.getVideoTracks()[0] || meetingTracks[0];
+      sharedTrack.addEventListener(
+        "ended",
+        () => {
+          if (
+            state.capture.status !== "recording" &&
+            state.capture.status !== "paused"
+          ) {
+            return;
+          }
+          state.capture.meetingAudioEnded = true;
+          setCaptureSourceStatus("meeting", "ended");
+          showMeetingAudioEndedWarning();
+          showToast(
+            "Meeting audio sharing stopped",
+            "The microphone and mixed recording will continue until you finish.",
+          );
+        },
+        { once: true },
+      );
+    } catch (error) {
+      state.capture.sourceStatus.meeting = "unavailable";
+      showToast(
+        "Meeting audio was not shared",
+        state.capture.microphoneOn
+          ? "NotesBuddy will ask for your microphone and continue without the meeting track."
+          : error?.message || "Choose a surface and enable Share audio.",
+      );
+    }
+  }
+
+  if (state.capture.microphoneOn) {
+    state.capture.status = "requesting-microphone";
+    state.capture.sourceStatus.microphone = "requesting";
+    render();
+    try {
+      captureRuntime.streams.microphone =
+        await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      state.capture.sourceStatus.microphone = "ready";
+    } catch {
+      state.capture.sourceStatus.microphone = "unavailable";
+      showToast(
+        "Microphone was not shared",
+        captureRuntime.streams.meeting
+          ? "NotesBuddy will continue with the shared meeting audio."
+          : "Allow microphone access, then start capture again.",
+      );
+    }
+  }
+
+  const sourceStreams = [
+    captureRuntime.streams.microphone,
+    captureRuntime.streams.meeting,
+  ].filter(Boolean);
+  if (!sourceStreams.length) {
+    state.capture.status = "idle";
+    state.capture.permission = "unavailable";
+    cancelCaptureRuntime();
+    render();
+    showToast(
+      "No audio source is available",
+      "Enable at least one source and grant its browser permission.",
     );
     return;
   }
 
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch {
-    state.capture.permission = "unavailable";
+    captureRuntime.streams.mixed = buildMixedStream(sourceStreams);
+    if (captureRuntime.streams.microphone) {
+      createSourceRecorder(
+        "microphone",
+        captureRuntime.streams.microphone,
+      );
+    }
+    if (captureRuntime.streams.meeting) {
+      createSourceRecorder("meeting", captureRuntime.streams.meeting);
+    }
+    createSourceRecorder("mixed", captureRuntime.streams.mixed);
+  } catch (error) {
     state.capture.status = "idle";
+    cancelCaptureRuntime();
+    render();
     showToast(
-      "Microphone permission is required",
-      "Allow microphone access, then start capture again.",
+      "Audio sources could not start",
+      error?.message || "The browser could not initialize its audio recorders.",
     );
     return;
   }
 
-  recordedChunks = [];
-  const preferredTypes = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/mp4",
-  ];
-  const mimeType = preferredTypes.find((type) =>
-    MediaRecorder.isTypeSupported(type),
-  );
-  mediaRecorder = new MediaRecorder(
-    mediaStream,
-    mimeType ? { mimeType } : undefined,
-  );
-  mediaRecorder.ondataavailable = (event) => {
-    if (event.data?.size) recordedChunks.push(event.data);
-  };
-  mediaRecorder.start(500);
+  captureRuntime.captureStartedAt = new Date().toISOString();
+  captureRuntime.captureStartedAtMonotonic = performance.now();
+  state.capture.captureStartedAt = captureRuntime.captureStartedAt;
+  try {
+    Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
+      recorder.start(500);
+      state.capture.sourceStatus[source] = "recording";
+    });
+  } catch (error) {
+    state.capture.status = "idle";
+    cancelCaptureRuntime();
+    render();
+    showToast(
+      "Audio recording could not start",
+      error?.message || "The browser rejected one of the recording sources.",
+    );
+    return;
+  }
 
   state.capture.permission = "granted";
   state.capture.status = "recording";
-  state.capture.transcriptionStatus = "starting";
-  startSpeechRecognition();
+  state.capture.transcriptionStatus = captureRuntime.streams.microphone
+    ? "starting"
+    : "disabled";
+  if (captureRuntime.streams.microphone) startSpeechRecognition();
   startCaptureTimer();
   render();
 }
 
-function stopAndCollectRecording() {
-  const recorder = mediaRecorder;
-  if (!recorder) return Promise.resolve(null);
-  if (recorder.state === "inactive") {
-    return Promise.resolve(
-      recordedChunks.length
-        ? new Blob(recordedChunks, { type: recorder.mimeType || "audio/webm" })
-        : null,
-    );
-  }
-  return new Promise((resolve) => {
-    recorder.addEventListener(
-      "stop",
-      () =>
-        resolve(
-          recordedChunks.length
-            ? new Blob(recordedChunks, {
-                type: recorder.mimeType || "audio/webm",
-              })
-            : null,
-        ),
-      { once: true },
-    );
-    recorder.stop();
+function pauseCapture() {
+  if (state.capture.status !== "recording") return;
+  state.capture.status = "paused";
+  clearInterval(captureTimer);
+  stopSpeechRecognition();
+  Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
+    if (recorder.state === "recording") recorder.pause();
+    setCaptureSourceStatus(source, "paused");
   });
+  captureRuntime.audioContext?.suspend?.().catch(() => {});
+}
+
+function resumeCapture() {
+  if (state.capture.status !== "paused") return;
+  state.capture.status = "recording";
+  Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
+    if (recorder.state === "paused") recorder.resume();
+    setCaptureSourceStatus(source, "recording");
+  });
+  captureRuntime.audioContext?.resume?.().catch(() => {});
+  if (captureRuntime.streams.microphone) startSpeechRecognition();
+  startCaptureTimer();
 }
 
 async function finishCapture() {
@@ -1257,67 +1736,103 @@ async function finishCapture() {
   const title = state.capture.title.trim() || "Untitled meeting";
   const elapsed = state.capture.elapsed;
   const segments = structuredClone(state.capture.segments);
-  const audioPromise = stopAndCollectRecording();
-  mediaStream?.getTracks().forEach((track) => track.stop());
+  const captureStartedAt = captureRuntime.captureStartedAt;
+  const audioPromise = collectCaptureRecordings();
   render();
-  const [audioBlob] = await Promise.all([
+  const [audioBlobs] = await Promise.all([
     audioPromise,
     new Promise((resolve) => window.setTimeout(resolve, 850)),
   ]);
+  await releaseCaptureRuntime();
 
   const id = createId("meeting");
-  let audioSaved = false;
-  if (audioBlob && state.settings.keepAudio) {
-    try {
-      await storeAudio(id, audioBlob);
-      audioSaved = true;
-    } catch {
-      audioSaved = false;
+  const recordingAssets = {};
+  if (state.settings.keepAudio) {
+    for (const source of ["microphone", "meeting", "mixed"]) {
+      const blob = audioBlobs[source];
+      if (!blob) continue;
+      const assetId = `${id}:${source}`;
+      try {
+        await storeAudio(assetId, blob);
+        recordingAssets[source] = {
+          id: assetId,
+          mimeType: blob.type || null,
+          durationMs: elapsed * 1000,
+        };
+      } catch {
+        // Other source recordings may still save successfully.
+      }
     }
   }
+  const primarySource =
+    ["mixed", "microphone", "meeting"].find(
+      (source) => recordingAssets[source],
+    ) || null;
+  const primaryAsset = primarySource
+    ? recordingAssets[primarySource]
+    : null;
+  const audioSaved = Boolean(primaryAsset);
 
   const transcriptText = segments.map((segment) => segment.text).join(" ");
-  const participants = segments.length
-    ? Array.from(
-        new Map(
-          segments.map((segment) => [
-            segment.speaker,
-            {
-              name: segment.speaker,
-              initials: segment.initials,
-              color: segment.color,
-            },
-          ]),
-        ).values(),
-      )
-    : [
+  const participants = recordingAssets.microphone
+    ? [
         {
           name: currentUserName(),
           initials: currentUserInitials(),
           color: "teal",
         },
-      ];
-  const highlights = segments.length
-    ? segments.slice(0, 3).map((segment) => segment.text)
-    : [
-        "The original microphone audio was recorded for playback.",
-        "Browser speech recognition did not return transcript text.",
-        "No sample or fabricated transcript was added.",
-      ];
+      ]
+    : [];
+  const draftBrief = state.settings.autoSummarize
+    ? MeetingAudio.buildExtractiveBrief(segments)
+    : null;
+  const highlights = draftBrief
+    ? draftBrief.highlights
+    : segments.length
+      ? segments.slice(0, 3).map((segment) => segment.text)
+      : [
+          recordingAssets.meeting
+            ? "Meeting audio was captured as a separate local recording."
+            : "The available audio source was recorded for playback.",
+          recordingAssets.microphone
+            ? "Microphone audio is isolated for reliable You attribution."
+            : "No microphone track was captured.",
+          "No sample or fabricated transcript was added.",
+        ];
   const meeting = {
     id,
-    audioId: audioSaved ? id : null,
-    audioType: audioBlob?.type || null,
+    audioId: primaryAsset?.id || null,
+    audioType: primaryAsset?.mimeType || null,
+    recordingAssets,
+    captureStartedAt,
+    captureClockVersion: 1,
     title,
     dateISO: new Date().toISOString(),
     duration: durationLabel(elapsed),
     durationSeconds: elapsed,
-    source: `Browser microphone${audioSaved ? " · audio saved" : ""}`,
+    source: `${recordingAssets.microphone ? "Microphone" : ""}${recordingAssets.microphone && recordingAssets.meeting ? " + " : ""}${recordingAssets.meeting ? "meeting audio" : ""}${audioSaved ? " · audio saved" : ""}`,
     participants,
-    tags: ["Recorded", "Local audio"],
-    overview: transcriptText
-      ? `This meeting contains real microphone audio and ${segments.length} browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Review the recording alongside the transcript for accuracy.`
-      : "This meeting contains the real microphone recording. Browser speech recognition did not return text, so NotesBuddy did not generate a sample transcript.",
+    speakers: recordingAssets.microphone
+      ? [
+          {
+            id: "local-user",
+            displayName: currentUserName(),
+            source: "microphone",
+            color: "teal",
+            isLocalUser: true,
+          },
+        ]
+      : [],
+    tags: [
+      "Recorded",
+      "Local audio",
+      ...(recordingAssets.meeting ? ["Meeting audio"] : []),
+    ],
+    overview: draftBrief
+      ? draftBrief.overview
+      : transcriptText
+        ? `This meeting contains synchronized local audio and ${segments.length} draft browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Run speaker transcription to create the authoritative diarized transcript.`
+      : "This meeting contains locally stored audio. Speaker transcription has not run, and NotesBuddy did not generate sample transcript text.",
     highlights,
     decisions: [],
     actions: [
@@ -1329,8 +1844,15 @@ async function finishCapture() {
       },
     ],
     transcript: segments,
+    transcription: {
+      status: segments.length ? "draft" : "not-requested",
+      provider: segments.length ? "browser-speech-draft" : null,
+      jobId: null,
+      error: null,
+    },
     notes: "",
   };
+  MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
   state.meetings.unshift(meeting);
   state.selectedMeetingId = id;
   state.view = "meeting";
@@ -1340,9 +1862,12 @@ async function finishCapture() {
   showToast(
     audioSaved ? "Recording saved" : "Meeting saved without audio",
     audioSaved
-      ? "Your real microphone audio is ready to play back."
-      : "The browser could not persist the audio recording.",
+      ? `${Object.keys(recordingAssets).length} synchronized recording source${Object.keys(recordingAssets).length === 1 ? " is" : "s are"} ready to play back.`
+      : "The browser could not persist any audio source.",
   );
+  if (state.settings.autoTranscribe && audioSaved) {
+    startMeetingTranscription(meeting).catch(() => {});
+  }
 }
 
 function meetingMarkdown(meeting) {
@@ -1355,15 +1880,191 @@ function meetingMarkdown(meeting) {
   const transcript = meeting.transcript
     .map(
       (segment) =>
-        `**${segment.speaker} · ${segment.timestamp}**\n${segment.text}`,
+        `**${MeetingAudio.speakerLabel(meeting, segment.speakerId, segment.speaker)} · ${segment.timestamp}**\n${segment.text}`,
     )
     .join("\n\n");
-  return `# ${meeting.title}\n\n${longDate(meeting.dateISO)} · ${meeting.duration}\n\n## Overview\n\n${meeting.overview}\n\n## Highlights\n\n${meeting.highlights.map((item) => `- ${item}`).join("\n")}\n\n## Decisions\n\n${meeting.decisions.map((item) => `- ${item}`).join("\n")}\n\n## Action items\n\n${actionItems}\n\n## Transcript\n\n${transcript}\n\n## My notes\n\n${meeting.notes || "No personal notes."}\n`;
+  const speakers = (meeting.speakers || [])
+    .map(
+      (speaker) =>
+        `- ${speaker.id === "local-user" ? `You (${currentUserName()})` : speaker.displayName}`,
+    )
+    .join("\n");
+  return `# ${meeting.title}\n\n${longDate(meeting.dateISO)} · ${meeting.duration}\n\n## Overview\n\n${meeting.overview}\n\n## Speakers\n\n${speakers || "No speakers identified."}\n\n## Highlights\n\n${meeting.highlights.map((item) => `- ${item}`).join("\n")}\n\n## Decisions\n\n${meeting.decisions.map((item) => `- ${item}`).join("\n")}\n\n## Action items\n\n${actionItems}\n\n## Transcript\n\n${transcript || "No transcript available."}\n\n## My notes\n\n${meeting.notes || "No personal notes."}\n`;
 }
 
 function selectedMeeting() {
   return state.meetings.find(
     (meeting) => meeting.id === state.selectedMeetingId,
+  );
+}
+
+function createTranscriptionClient() {
+  return new MeetingAudio.TranscriptionClient({
+    endpoint: state.settings.transcriptionEndpoint,
+    token: state.settings.transcriptionToken,
+  });
+}
+
+async function loadMeetingRecordingBlobs(meeting) {
+  const assets = MeetingAudio.getRecordingAssets(meeting);
+  const entries = await Promise.all(
+    Object.entries(assets).map(async ([source, asset]) => [
+      source,
+      await getAudio(asset.id),
+    ]),
+  );
+  return Object.fromEntries(entries.filter(([, blob]) => blob));
+}
+
+async function testTranscriptionService() {
+  state.transcriptionServiceStatus = "checking";
+  render();
+  try {
+    const health = await createTranscriptionClient().health();
+    state.transcriptionServiceStatus =
+      health?.status === "ok" ? "connected" : "unavailable";
+    showToast(
+      "Transcription companion connected",
+      `${health?.engine || "Local engine"} is ready on this computer.`,
+    );
+  } catch (error) {
+    state.transcriptionServiceStatus = "unavailable";
+    showToast(
+      "Companion connection failed",
+      error?.message ||
+        "Start the local service and verify its URL and pairing token.",
+    );
+  }
+  render();
+}
+
+async function startMeetingTranscription(meeting = selectedMeeting()) {
+  if (!meeting) return;
+  if (
+    meeting.transcription?.status === "queued" ||
+    meeting.transcription?.status === "processing"
+  ) {
+    return;
+  }
+  if (!MeetingAudio.recordingAsset(meeting)) {
+    showToast(
+      "No recording is available",
+      "Speaker transcription requires a saved audio source.",
+    );
+    return;
+  }
+
+  const controller = new AbortController();
+  transcriptionControllers.set(meeting.id, controller);
+  const client = createTranscriptionClient();
+  meeting.transcription = {
+    ...(meeting.transcription || {}),
+    status: "queued",
+    error: null,
+    progress: 0,
+    requestedAt: new Date().toISOString(),
+  };
+  save();
+  render();
+
+  try {
+    const blobs = await loadMeetingRecordingBlobs(meeting);
+    const created = await client.createJob({
+      microphoneBlob: blobs.microphone,
+      meetingBlob: blobs.meeting,
+      mixedBlob: blobs.mixed,
+      metadata: {
+        meetingId: meeting.id,
+        captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
+        captureClockVersion: meeting.captureClockVersion || 1,
+        localSpeakerName: currentUserName(),
+        durationMs: Math.max(
+          0,
+          Number(meeting.durationSeconds || 0) * 1000,
+        ),
+      },
+    });
+    meeting.transcription = {
+      ...meeting.transcription,
+      status: created.status || "queued",
+      jobId: created.jobId,
+      provider: created.engine || "local-companion",
+    };
+    save();
+    render();
+
+    const completed = await client.waitForJob(created.jobId, {
+      signal: controller.signal,
+      onProgress(job) {
+        meeting.transcription.status = job.status || "processing";
+        meeting.transcription.progress = Number(job.progress) || 0;
+        save();
+      },
+    });
+    MeetingAudio.applyTranscriptionResult(meeting, completed, state.profile);
+    const brief = state.settings.autoSummarize
+      ? MeetingAudio.buildExtractiveBrief(meeting.transcript)
+      : null;
+    meeting.overview = brief
+      ? brief.overview
+      : meeting.transcript.length
+        ? `Speaker transcription identified ${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} across ${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"}.`
+        : "The local transcription companion did not return speech text, so NotesBuddy did not generate a transcript.";
+    meeting.highlights = brief
+      ? brief.highlights
+      : meeting.transcript.length
+        ? meeting.transcript.slice(0, 3).map((segment) => segment.text)
+        : [
+            "The original recordings remain available for playback.",
+            "No speech text was returned by the local companion.",
+            "No sample or fabricated transcript was added.",
+          ];
+    save();
+    render();
+    showToast(
+      "Speaker transcript ready",
+      `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified locally.`,
+    );
+  } catch (error) {
+    const cancelled =
+      error?.name === "AbortError" || controller.signal.aborted;
+    meeting.transcription = {
+      ...(meeting.transcription || {}),
+      status: cancelled ? "cancelled" : "failed",
+      error: cancelled
+        ? null
+        : error?.message || "The local transcription job failed.",
+    };
+    save();
+    render();
+    if (!cancelled) {
+      showToast(
+        "Speaker transcription failed",
+        meeting.transcription.error,
+      );
+    }
+  } finally {
+    transcriptionControllers.delete(meeting.id);
+  }
+}
+
+async function cancelMeetingTranscription(meeting = selectedMeeting()) {
+  if (!meeting) return;
+  transcriptionControllers.get(meeting.id)?.abort();
+  const jobId = meeting.transcription?.jobId;
+  if (jobId) {
+    createTranscriptionClient().cancelJob(jobId).catch(() => {});
+  }
+  meeting.transcription = {
+    ...(meeting.transcription || {}),
+    status: "cancelled",
+    error: null,
+  };
+  save();
+  render();
+  showToast(
+    "Speaker transcription cancelled",
+    "Your browser recordings were not removed.",
   );
 }
 
@@ -1404,11 +2105,30 @@ async function importAudio(file) {
     audioId: audioSaved ? id : null,
     audioType: file.type || null,
     audioFileName: file.name,
+    recordingAssets: audioSaved
+      ? {
+          mixed: {
+            id,
+            mimeType: file.type || null,
+            durationMs: 0,
+            fileName: file.name,
+          },
+        }
+      : {},
     title: file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "),
     dateISO: new Date().toISOString(),
     duration: "Imported",
     source: `${file.type || "Audio file"} · ${(file.size / 1024 / 1024).toFixed(1)} MB`,
-    participants: [{ name: "Speaker 1", initials: "S1", color: "teal" }],
+    participants: [{ name: "Speaker 1", initials: "S1", color: "violet" }],
+    speakers: [
+      {
+        id: "remote-1",
+        displayName: "Speaker 1",
+        source: "meeting",
+        color: "violet",
+        isLocalUser: false,
+      },
+    ],
     tags: ["Imported", "Needs review"],
     overview: audioSaved
       ? "The original audio file was imported and stored locally for playback. No transcript text was invented."
@@ -1427,8 +2147,15 @@ async function importAudio(file) {
       },
     ],
     transcript: [],
+    transcription: {
+      status: "not-requested",
+      provider: null,
+      jobId: null,
+      error: null,
+    },
     notes: "",
   };
+  MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
   state.meetings.unshift(meeting);
   state.selectedMeetingId = id;
   state.view = "meeting";
@@ -1445,12 +2172,29 @@ async function importAudio(file) {
 function updateProfileName(rawName) {
   const name = String(rawName).trim().replace(/\s+/g, " ");
   if (!name) return false;
+  const previousName = state.profile?.name;
   const updatedAt = new Date().toISOString();
   state.profile = normaliseProfile({
     ...state.profile,
     name,
     createdAt: state.profile?.createdAt || updatedAt,
     updatedAt,
+  });
+  state.meetings.forEach((meeting) => {
+    MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
+    MeetingAudio.renameSpeaker(
+      meeting,
+      "local-user",
+      state.profile.name,
+      state.profile,
+    );
+    if (previousName && previousName !== state.profile.name) {
+      for (const action of meeting.actions || []) {
+        if (action.owner === previousName) {
+          action.owner = state.profile.name;
+        }
+      }
+    }
   });
   save();
   return true;
@@ -1503,6 +2247,9 @@ app.addEventListener("click", async (event) => {
       return;
     }
     state.settingsOpen = false;
+  } else if (action === "test-transcription-service") {
+    await testTranscriptionService();
+    return;
   } else if (action === "open-nav") {
     state.mobileNavOpen = true;
   } else if (action === "close-nav") {
@@ -1515,20 +2262,36 @@ app.addEventListener("click", async (event) => {
   } else if (action === "toggle-system") {
     state.capture.systemAudioOn = !state.capture.systemAudioOn;
   } else if (action === "start-capture") {
-    startCapture();
+    await startCapture();
     return;
   } else if (action === "pause-capture") {
     if (state.capture.status === "recording") {
-      state.capture.status = "paused";
-      clearInterval(captureTimer);
-      stopSpeechRecognition();
-      if (mediaRecorder?.state === "recording") mediaRecorder.pause();
+      pauseCapture();
     } else {
-      state.capture.status = "recording";
-      if (mediaRecorder?.state === "paused") mediaRecorder.resume();
-      startSpeechRecognition();
-      startCaptureTimer();
+      resumeCapture();
     }
+  } else if (action === "select-recording-source") {
+    const meeting = selectedMeeting();
+    if (
+      meeting &&
+      MeetingAudio.getRecordingAssets(meeting)[button.dataset.id]
+    ) {
+      state.playbackSourceByMeeting[meeting.id] = button.dataset.id;
+    }
+  } else if (action === "transcribe-meeting") {
+    startMeetingTranscription().catch(() => {});
+    return;
+  } else if (action === "cancel-transcription") {
+    await cancelMeetingTranscription();
+    return;
+  } else if (action === "focus-speaker") {
+    const input = app.querySelector(
+      `[data-input="speaker-name"][data-id="${CSS.escape(button.dataset.id)}"]`,
+    );
+    input?.scrollIntoView({ behavior: "smooth", block: "center" });
+    input?.focus({ preventScroll: true });
+    input?.select();
+    return;
   } else if (action === "toggle-recording-playback") {
     await toggleRecordingPlayback();
     return;
@@ -1539,7 +2302,7 @@ app.addEventListener("click", async (event) => {
     await seekRecordingTime(button.dataset.time);
     return;
   } else if (action === "finish-capture") {
-    finishCapture();
+    await finishCapture();
     return;
   } else if (action === "cancel-capture") {
     resetCapture();
@@ -1549,7 +2312,9 @@ app.addEventListener("click", async (event) => {
     state.transcriptQuery = "";
   } else if (action === "toggle-action") {
     const meeting = selectedMeeting();
-    const item = meeting.actions.find((actionItem) => actionItem.id === button.dataset.id);
+    const item = meeting.actions.find(
+      (actionItem) => actionItem.id === button.dataset.id,
+    );
     if (item) item.done = !item.done;
     save();
   } else if (action === "copy") {
@@ -1562,9 +2327,9 @@ app.addEventListener("click", async (event) => {
     state.moreOpen = !state.moreOpen;
   } else if (action === "delete") {
     const meetingToDelete = selectedMeeting();
-    if (meetingToDelete?.audioId) {
-      deleteAudio(meetingToDelete.audioId).catch(() => {});
-    }
+    await deleteMeetingAudio(meetingToDelete);
+    transcriptionControllers.get(meetingToDelete?.id)?.abort();
+    transcriptionControllers.delete(meetingToDelete?.id);
     state.meetings = state.meetings.filter(
       (meeting) => meeting.id !== state.selectedMeetingId,
     );
@@ -1575,16 +2340,23 @@ app.addEventListener("click", async (event) => {
     showToast("Meeting deleted", "The local meeting record was removed.");
     return;
   } else if (action === "regenerate") {
-    state.regenerating = true;
-    render();
-    window.setTimeout(() => {
-      state.regenerating = false;
+    const meeting = selectedMeeting();
+    const brief = MeetingAudio.buildExtractiveBrief(meeting?.transcript);
+    if (meeting && brief) {
+      meeting.overview = brief.overview;
+      meeting.highlights = brief.highlights;
+      save();
       render();
       showToast(
         "Summary refreshed",
-        "Local structure and action items are up to date.",
+        "The brief was rebuilt only from this meeting’s transcript.",
       );
-    }, 1100);
+    } else {
+      showToast(
+        "No transcript to summarize",
+        "Run speaker transcription first; NotesBuddy will not invent a brief.",
+      );
+    }
     return;
   } else if (action === "setting-toggle") {
     state.settings[button.dataset.id] = !state.settings[button.dataset.id];
@@ -1603,6 +2375,29 @@ app.addEventListener("input", (event) => {
     state.capture.title = input.value;
   } else if (type === "profile-name") {
     updateProfileName(input.value);
+  } else if (type === "speaker-name") {
+    const meeting = selectedMeeting();
+    if (
+      meeting &&
+      MeetingAudio.renameSpeaker(
+        meeting,
+        input.dataset.id,
+        input.value,
+        state.profile,
+      )
+    ) {
+      save();
+      app
+        .querySelectorAll(
+          `[data-speaker-label-id="${CSS.escape(input.dataset.id)}"]`,
+        )
+        .forEach((label) => {
+          label.textContent = MeetingAudio.speakerLabel(
+            meeting,
+            input.dataset.id,
+          );
+        });
+    }
   } else if (type === "profile-setup-name") {
     input.removeAttribute("aria-invalid");
     const error = app.querySelector("[data-profile-error]");
@@ -1657,6 +2452,14 @@ document.addEventListener("keydown", (event) => {
     state.moreOpen = false;
     render();
   }
+});
+
+window.addEventListener("pagehide", () => {
+  clearInterval(captureTimer);
+  stopSpeechRecognition();
+  cancelCaptureRuntime();
+  transcriptionControllers.forEach((controller) => controller.abort());
+  transcriptionControllers.clear();
 });
 
 render();
