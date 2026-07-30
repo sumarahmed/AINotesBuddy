@@ -521,6 +521,10 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
   });
   await page.route(`${unavailableEndpoint}/v1/**`, async (route) => {
     discoveryCalls += 1;
+    if (discoveryCalls > 1) {
+      await route.abort("connectionrefused");
+      return;
+    }
     await route.fulfill({
       status: 503,
       contentType: "application/json",
@@ -566,7 +570,10 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.locator("[data-action='check-companion-setup']").click();
   await page
-    .getByText("Companion is not running.", { exact: true })
+    .getByText(
+      "Start NotesBuddy Companion and allow Local network access for this site in your browser's address-bar site controls, then check again.",
+      { exact: true },
+    )
     .waitFor();
   await page.locator("[data-action='defer-companion-setup']").click();
   await page.locator(".companion-setup-backdrop").waitFor({ state: "detached" });

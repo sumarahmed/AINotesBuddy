@@ -269,6 +269,11 @@ test("desktop connector discovers, pairs, and verifies the local service", async
   );
   assert.equal(calls[1].options.method, "POST");
   assert.equal(calls[2].options.cache, "no-store");
+  assert.ok(
+    calls.every(
+      ({ options }) => options.targetAddressSpace === "loopback",
+    ),
+  );
 });
 
 test("desktop connector rejects incompatible or manually paired services", async () => {
@@ -348,6 +353,7 @@ test("transcription client sends pairing token and all source assets", async () 
     calls[0].options.headers["X-NotesBuddy-Pairing-Token"],
     "pairing-secret",
   );
+  assert.equal(calls[0].options.targetAddressSpace, "loopback");
   assert.deepEqual(
     Array.from(calls[0].options.body.keys()),
     ["microphone", "meeting", "mixed", "metadata"],
@@ -410,6 +416,8 @@ test("hosted transcription client creates an anonymous session automatically", a
     calls[1].options.headers["X-NotesBuddy-Pairing-Token"],
     undefined,
   );
+  assert.equal(calls[0].options.targetAddressSpace, undefined);
+  assert.equal(calls[1].options.targetAddressSpace, undefined);
   assert.equal(sessionValues.size, 1);
 });
 

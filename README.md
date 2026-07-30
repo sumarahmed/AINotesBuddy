@@ -69,6 +69,10 @@ selected surface. Current Chrome or Edge on Windows is recommended.
 For normal Windows users, install the companion from the repository's latest
 GitHub Release, start it, and reopen NotesBuddy. The website pairs
 automatically—there is no Python, model-token, or pairing-token setup per user.
+When Chrome or Edge asks for **Local network access**, choose **Allow** so the
+public HTTPS page can reach the private companion on `127.0.0.1`. If it was
+denied, change that permission in the address-bar site controls and check the
+connection again.
 See the [Desktop Companion guide](docs/DESKTOP_COMPANION.md).
 
 For source development, run the manual CLI on the same computer:

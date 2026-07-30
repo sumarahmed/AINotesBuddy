@@ -1099,7 +1099,7 @@ function companionOnboarding() {
       <ol class="companion-setup__steps">
         <li><span>1</span><div><strong>Download</strong><small>Open Releases and download the newest Windows Setup file.</small></div></li>
         <li><span>2</span><div><strong>Install and start</strong><small>Run the installer, then leave NotesBuddy Companion running in the notification area.</small></div></li>
-        <li><span>3</span><div><strong>Confirm</strong><small>Return here and check the private local connection.</small></div></li>
+        <li><span>3</span><div><strong>Confirm</strong><small>Return here, check the connection, and choose Allow if your browser asks for Local network access.</small></div></li>
       </ol>
       <a class="button button--primary companion-setup__primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 16)}Download Windows installer</a>
       <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-setup" ${checking ? "disabled" : ""}>${checking ? "Checking connection…" : "I've installed it — check connection"}</button>
@@ -2081,11 +2081,17 @@ function selectedMeeting() {
 
 function activateHostedFallback(error = null) {
   if (!usesHybridTranscription()) return;
+  const rawMessage = String(error?.message || "");
+  const connectionBlocked =
+    error?.name === "TypeError" ||
+    /failed to fetch|networkerror|load failed/i.test(rawMessage);
   state.companion = {
     status: "unavailable",
     pairingToken: "",
     metadata: null,
-    error: error?.message || null,
+    error: connectionBlocked
+      ? "Start NotesBuddy Companion and allow Local network access for this site in your browser's address-bar site controls, then check again."
+      : rawMessage || null,
   };
   state.settings.transcriptionMode = "hosted";
   state.settings.transcriptionEndpoint = runtimeHostedTranscriptionEndpoint;

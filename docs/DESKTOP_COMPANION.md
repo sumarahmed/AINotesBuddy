@@ -25,6 +25,10 @@ Windows system audio or join meetings as a bot.
 6. If Chrome or Edge asks whether the site can access devices on the local
    network, allow it. The service remains bound to this computer only.
 
+If that permission was denied, open the site controls beside the browser
+address bar, set **Local network access** to **Allow**, and choose **I've
+installed it — check connection** again.
+
 If the companion is stopped, the site uses the configured hosted service. The
 Settings drawer clearly shows **online fallback**. Start the companion and
 choose **Look for companion** to return to on-device processing.
