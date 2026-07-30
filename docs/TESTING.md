@@ -30,6 +30,8 @@ The JavaScript tests cover:
 - rename propagation to participants;
 - extractive briefs with no invented text;
 - authenticated local multipart client construction;
+- automatic desktop discovery, pairing, token validation, and incompatibility
+  rejection;
 - hosted anonymous-session creation and session-token multipart requests.
 - automatic replacement of hosted sessions lost during scale-to-zero.
 
@@ -50,7 +52,7 @@ python -m pip install -r requirements-test.txt
 python -m unittest discover -s tests -v
 ```
 
-The 20 Python tests cover:
+The Python suite covers:
 
 - greatest-overlap word/speaker assignment;
 - stable first-appearance remote IDs;
@@ -60,6 +62,10 @@ The 20 Python tests cover:
 - cross-source clock merge and echo removal;
 - silence returning no fabricated segments;
 - pairing-token rejection;
+- bounded/expiring browser pairings and exact-origin issuance;
+- safe discovery and hosted/manual-CLI route separation;
+- desktop CLI, loopback, and Windows autostart command construction;
+- bundled offline-model path selection without a per-user model token;
 - allowed/denied CORS origins and private-network preflight;
 - multipart source upload and asynchronous job polling;
 - invalid metadata rejection;
@@ -112,6 +118,12 @@ The workflow verifies:
 - hosted settings without per-user URL/token fields;
 - hosted health checks without consuming a session;
 - automatic anonymous-session creation and session-token job submission;
+- hybrid automatic companion discovery/pairing/health verification;
+- first-entry installer prompt, stable Releases link, successful local
+  API/pairing/model confirmation, persisted completion, and session-only online
+  deferral;
+- hybrid settings without URL/token fields and a Windows download action;
+- visible online fallback when companion discovery fails;
 - **You** plus two remote speakers in a completed result;
 - untruncated transcript text;
 - speaker rename, name search, and Markdown export;
@@ -127,7 +139,8 @@ Synthetic end-to-end suite run on 2026-07-30:
 | Google Chrome | 150.0.7871.188 | Passed |
 | Microsoft Edge | 150.0.4078.105 | Passed |
 
-API/service/adapter suite: 20/20 passed. Browser-module suite: 10/10 passed.
+Update this matrix when a release candidate is verified; test counts are
+reported by the commands and intentionally not hard-coded here.
 
 These runs validate NotesBuddy logic and browser media plumbing with generated
 tracks. They do not replace a real Teams/Zoom/Meet share test because platforms,
@@ -163,8 +176,11 @@ Use headphones to prevent acoustic feedback and a non-confidential source tab.
 
 ### Speaker transcription
 
-- Start the real local companion with an accepted pyannote token/model.
-- Test the pairing token in Settings.
+- Install a model-inclusive Windows release and confirm automatic local
+  connection without entering a model or pairing token.
+- Quit/restart the companion and confirm the page re-pairs.
+- Deny then allow the browser local-network prompt and confirm the online
+  fallback remains clear.
 - Transcribe one local plus one remote speaker.
 - Transcribe one local plus two or three alternating remote speakers.
 - Test silence/background noise and confirm no placeholder text.
@@ -214,3 +230,20 @@ Include:
 - model/device configuration without tokens;
 - confirmation that no confidential audio or credentials were used;
 - confirmation that the feature branch did not deploy `main`.
+
+## Packaged Windows verification
+
+The trusted release workflow must:
+
+1. run all Python service tests;
+2. prepare both offline model directories and a revision manifest;
+3. build the PyInstaller one-directory application;
+4. run `NotesBuddyCompanion.exe --self-test`;
+5. compile the Inno Setup installer;
+6. install it as a non-administrator test user;
+7. start from the Start menu and Windows sign-in entry;
+8. pair from the deployed HTTPS site and complete a real two-speaker
+   transcription;
+9. uninstall and confirm the program/autostart entry is removed.
+
+Do not publish a model-free packaging smoke artifact as a working product.

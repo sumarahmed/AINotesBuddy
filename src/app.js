@@ -64,6 +64,26 @@ function loadStored(key, fallback) {
   }
 }
 
+function loadSessionFlag(key) {
+  try {
+    return sessionStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function storeSessionFlag(key, enabled) {
+  try {
+    if (enabled) {
+      sessionStorage.setItem(key, "true");
+    } else {
+      sessionStorage.removeItem(key);
+    }
+  } catch {
+    // The in-memory state still works when sessionStorage is unavailable.
+  }
+}
+
 function createId(prefix) {
   const uniquePart =
     globalThis.crypto?.randomUUID?.() ||
@@ -113,14 +133,32 @@ initialMeetings = initialMeetings.map((meeting) =>
   MeetingAudio.ensureMeetingSpeakers(meeting, initialProfile),
 );
 
-const runtimeTranscriptionMode =
-  runtimeConfig.transcriptionMode === "hosted" ? "hosted" : "local";
-const runtimeTranscriptionEndpoint = String(
-  runtimeConfig.transcriptionEndpoint ||
-    (runtimeTranscriptionMode === "hosted"
-      ? ""
-      : "http://127.0.0.1:8765"),
+const runtimeTranscriptionMode = ["hosted", "hybrid"].includes(
+  runtimeConfig.transcriptionMode,
+)
+  ? runtimeConfig.transcriptionMode
+  : "local";
+const runtimeLocalCompanionEndpoint = String(
+  runtimeConfig.localCompanionEndpoint ||
+    (runtimeTranscriptionMode === "local"
+      ? runtimeConfig.transcriptionEndpoint
+      : "") ||
+    "http://127.0.0.1:8765",
 ).replace(/\/+$/, "");
+const runtimeHostedTranscriptionEndpoint = String(
+  runtimeTranscriptionMode === "local"
+    ? ""
+    : runtimeConfig.transcriptionEndpoint || "",
+).replace(/\/+$/, "");
+const runtimeTranscriptionEndpoint =
+  runtimeTranscriptionMode === "local"
+    ? runtimeLocalCompanionEndpoint
+    : runtimeHostedTranscriptionEndpoint;
+const companionDownloadUrl = String(
+  runtimeConfig.companionDownloadUrl ||
+    "https://github.com/sumarahmed/AINotesBuddy/releases",
+);
+const companionSetupSessionKey = "notesbuddy-companion-setup-deferred";
 const storedSettings = loadStored("notesbuddy-settings", {});
 const defaultSettings = {
   autoSummarize: true,
@@ -128,21 +166,30 @@ const defaultSettings = {
   systemAudio: true,
   browserTranscription: true,
   autoTranscribe: false,
-  transcriptionMode: runtimeTranscriptionMode,
+  transcriptionMode:
+    runtimeTranscriptionMode === "hybrid"
+      ? "hosted"
+      : runtimeTranscriptionMode,
   transcriptionEndpoint: runtimeTranscriptionEndpoint,
   transcriptionToken: "",
+  companionSetupCompleted: false,
 };
 const initialSettings = {
   ...defaultSettings,
   ...storedSettings,
-  transcriptionMode: runtimeTranscriptionMode,
+  transcriptionMode:
+    runtimeTranscriptionMode === "hybrid"
+      ? "hosted"
+      : runtimeTranscriptionMode,
   transcriptionEndpoint:
-    runtimeTranscriptionMode === "hosted"
+    runtimeTranscriptionMode === "hosted" ||
+    runtimeTranscriptionMode === "hybrid"
       ? runtimeTranscriptionEndpoint
       : storedSettings.transcriptionEndpoint ||
         defaultSettings.transcriptionEndpoint,
   transcriptionToken:
-    runtimeTranscriptionMode === "hosted"
+    runtimeTranscriptionMode === "hosted" ||
+    runtimeTranscriptionMode === "hybrid"
       ? ""
       : storedSettings.transcriptionToken || "",
 };
@@ -161,6 +208,17 @@ const state = {
   moreOpen: false,
   showAllMeetings: false,
   transcriptionServiceStatus: "unknown",
+  companionSetupOpen:
+    runtimeTranscriptionMode === "hybrid" &&
+    !initialSettings.companionSetupCompleted &&
+    !loadSessionFlag(companionSetupSessionKey),
+  preferHostedForSession: loadSessionFlag(companionSetupSessionKey),
+  companion: {
+    status: runtimeTranscriptionMode === "hybrid" ? "checking" : "disabled",
+    pairingToken: "",
+    metadata: null,
+    error: null,
+  },
   playbackSourceByMeeting: {},
   toasts: [],
   capture: {
@@ -189,6 +247,7 @@ let captureRuntime = createEmptyCaptureRuntime();
 let speechRecognition;
 let activeAudioUrl;
 let toastId = 0;
+let companionConnectionPromise;
 const transcriptionControllers = new Map();
 
 function createEmptyCaptureRuntime() {
@@ -214,7 +273,19 @@ function createEmptyCaptureRuntime() {
 
 function save() {
   localStorage.setItem("notesbuddy-meetings", JSON.stringify(state.meetings));
-  localStorage.setItem("notesbuddy-settings", JSON.stringify(state.settings));
+  const settingsToStore =
+    runtimeTranscriptionMode === "hybrid"
+      ? {
+          ...state.settings,
+          transcriptionMode: "hosted",
+          transcriptionEndpoint: runtimeHostedTranscriptionEndpoint,
+          transcriptionToken: "",
+        }
+      : state.settings;
+  localStorage.setItem(
+    "notesbuddy-settings",
+    JSON.stringify(settingsToStore),
+  );
   if (state.profile) {
     localStorage.setItem("notesbuddy-profile", JSON.stringify(state.profile));
   }
@@ -322,6 +393,10 @@ function currentUserFirstName() {
 
 function usesHostedTranscription() {
   return state.settings.transcriptionMode === "hosted";
+}
+
+function usesHybridTranscription() {
+  return runtimeTranscriptionMode === "hybrid";
 }
 
 function greetingForTime(date = new Date()) {
@@ -923,20 +998,38 @@ function settingsPanel() {
   const toggle = (key, title, description) =>
     `<button type="button" class="setting-toggle" data-action="setting-toggle" data-id="${key}" aria-pressed="${state.settings[key]}"><div><strong>${title}</strong><span>${description}</span></div><i class="${state.settings[key] ? "toggle--on" : ""}"><span></span></i></button>`;
   const hosted = usesHostedTranscription();
+  const hybrid = usesHybridTranscription();
+  const hybridConnected = hybrid && !hosted;
+  const statusText = {
+    unknown: "not tested",
+    checking: "checking",
+    connected: hybridConnected ? "local connected" : "connected",
+    fallback: "online fallback",
+    unavailable: "unavailable",
+  }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus;
   const privacyMessage = hosted
-    ? "Recordings stay in this browser until transcription is requested. Selected audio is then sent securely to the public service and removed from its temporary storage after processing."
+    ? hybrid
+      ? "Recordings stay in this browser. While the desktop companion is unavailable, requested transcription uses the temporary online service."
+      : "Recordings stay in this browser until transcription is requested. Selected audio is then sent securely to the public service and removed from its temporary storage after processing."
     : "Audio and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.";
-  const transcriptionSettings = hosted
+  const transcriptionSettings = hybrid
     ? `<section class="settings-section">
+        <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
+        <p class="settings-help">${hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is processing audio privately on this computer. Pairing is automatic and expires when the companion restarts.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
+        <div class="companion-actions"><button type="button" class="button button--quiet" data-action="show-companion-setup">Setup guide</button><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}Windows downloads</a></div>
+      </section>`
+    : hosted
+      ? `<section class="settings-section">
         <span class="eyebrow">Online speaker transcription</span>
-        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(state.transcriptionServiceStatus)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test service</button></div>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test service</button></div>
         <p class="settings-help">No installation or token is required. Anonymous sessions are temporary and public usage limits apply.</p>
       </section>`
-    : `<section class="settings-section">
+      : `<section class="settings-section">
         <span class="eyebrow">Local speaker transcription</span>
         <label><span>Companion URL</span><input data-setting="transcriptionEndpoint" value="${escapeHtml(state.settings.transcriptionEndpoint)}" inputmode="url" spellcheck="false" aria-label="Transcription companion URL"></label>
         <label><span>Pairing token</span><input data-setting="transcriptionToken" value="${escapeHtml(state.settings.transcriptionToken)}" type="password" autocomplete="off" spellcheck="false" aria-label="Transcription pairing token"></label>
-        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(state.transcriptionServiceStatus)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
+        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
         <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
       </section>`;
   const autoTranscribeDescription = hosted
@@ -945,7 +1038,7 @@ function settingsPanel() {
   return `<div class="drawer-backdrop" data-action="close-settings">
     <aside class="settings-drawer" data-panel="settings">
       <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
-      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>${hosted ? "Local recording · online transcription" : "Local recording"}</strong><p>${privacyMessage}</p></div></section>
+      <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>${hosted ? "Local recording · online transcription" : "Local recording · on-device transcription"}</strong><p>${privacyMessage}</p></div></section>
       <section class="settings-section">
         <span class="eyebrow">Local profile</span>
         <label><span>Your name</span><input data-input="profile-name" value="${escapeHtml(currentUserName())}" maxlength="80" autocomplete="name" aria-label="Your name"></label>
@@ -972,6 +1065,47 @@ function profileOnboarding() {
         <button type="submit" class="button button--primary">Create local workspace ${icon("chevronRight", 16)}</button>
       </form>
       <small>${icon("lock", 13)}No account is created. This profile and its meetings remain local to this browser.</small>
+    </section>
+  </div>`;
+}
+
+function companionOnboarding() {
+  const connected =
+    state.companion.status === "connected" && !usesHostedTranscription();
+  const checking = state.companion.status === "checking";
+  if (connected) {
+    return `<div class="companion-setup-backdrop">
+      <section class="companion-setup-card companion-setup-card--success" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
+        <div class="companion-setup__success-icon">${icon("checkCircle", 30)}</div>
+        <span class="eyebrow">Connection confirmed</span>
+        <h1 id="companion-setup-title">Desktop companion is working</h1>
+        <p>${escapeHtml(state.companion.metadata?.version ? `NotesBuddy Companion ${state.companion.metadata.version}` : "NotesBuddy Companion")} is running on this computer. Meeting recordings can now be transcribed locally without entering a model or pairing token.</p>
+        <div class="companion-setup__privacy">${icon("shield", 18)}<div><strong>On-device processing active</strong><span>Audio is sent only to the companion on 127.0.0.1 while it remains connected.</span></div></div>
+        <button type="button" class="button button--primary companion-setup__primary" data-action="complete-companion-setup">Continue to NotesBuddy ${icon("chevronRight", 16)}</button>
+      </section>
+    </div>`;
+  }
+  const statusMessage = checking
+    ? "Looking for the desktop companion…"
+    : state.companion.error
+      ? state.companion.error
+      : "Install and start the companion, then confirm the connection.";
+  return `<div class="companion-setup-backdrop">
+    <section class="companion-setup-card" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
+      ${brand()}
+      <span class="eyebrow">Private speaker transcription</span>
+      <h1 id="companion-setup-title">Install the Windows companion</h1>
+      <p>The small desktop app runs speech-to-text and speaker detection on this computer. You install it once—no Python, Hugging Face account, or token is required.</p>
+      <ol class="companion-setup__steps">
+        <li><span>1</span><div><strong>Download</strong><small>Open Releases and download the newest Windows Setup file.</small></div></li>
+        <li><span>2</span><div><strong>Install and start</strong><small>Run the installer, then leave NotesBuddy Companion running in the notification area.</small></div></li>
+        <li><span>3</span><div><strong>Confirm</strong><small>Return here and check the private local connection.</small></div></li>
+      </ol>
+      <a class="button button--primary companion-setup__primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 16)}Download Windows installer</a>
+      <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-setup" ${checking ? "disabled" : ""}>${checking ? "Checking connection…" : "I've installed it — check connection"}</button>
+      <div class="companion-setup__status companion-setup__status--${checking ? "checking" : "waiting"}" aria-live="polite"><i></i>${escapeHtml(statusMessage)}</div>
+      <button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>
+      <small class="companion-setup__note">${icon("lock", 13)}Windows 10/11 · Per-user installation · No administrator access required</small>
     </section>
   </div>`;
 }
@@ -1010,6 +1144,7 @@ function render(focusTarget = "") {
     <input class="visually-hidden" data-input="file" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac">
     ${state.settingsOpen ? settingsPanel() : ""}
     ${state.profileOnboardingOpen ? profileOnboarding() : ""}
+    ${state.companionSetupOpen && !state.profileOnboardingOpen ? companionOnboarding() : ""}
     ${toastRegion()}
   </div>`;
 
@@ -1944,13 +2079,107 @@ function selectedMeeting() {
   );
 }
 
+function activateHostedFallback(error = null) {
+  if (!usesHybridTranscription()) return;
+  state.companion = {
+    status: "unavailable",
+    pairingToken: "",
+    metadata: null,
+    error: error?.message || null,
+  };
+  state.settings.transcriptionMode = "hosted";
+  state.settings.transcriptionEndpoint = runtimeHostedTranscriptionEndpoint;
+  state.settings.transcriptionToken = "";
+  state.transcriptionServiceStatus = "fallback";
+}
+
+function setHostedSessionPreference(enabled) {
+  state.preferHostedForSession = enabled;
+  storeSessionFlag(companionSetupSessionKey, enabled);
+}
+
+async function connectLocalCompanion({
+  silent = false,
+  force = false,
+} = {}) {
+  if (!usesHybridTranscription()) return false;
+  if (force) {
+    setHostedSessionPreference(false);
+  } else if (state.preferHostedForSession) {
+    return false;
+  }
+  if (!force && state.companion.status === "connected") return true;
+  if (companionConnectionPromise) return companionConnectionPromise;
+
+  state.companion.status = "checking";
+  state.companion.error = null;
+  state.transcriptionServiceStatus = "checking";
+  render();
+
+  const attempt = (async () => {
+    try {
+      const connection = await new MeetingAudio.CompanionConnector({
+        endpoint: runtimeLocalCompanionEndpoint,
+      }).connect();
+      if (state.preferHostedForSession && !force) {
+        activateHostedFallback();
+        save();
+        render();
+        return false;
+      }
+      state.companion = {
+        status: "connected",
+        pairingToken: connection.token,
+        metadata: connection.companion,
+        expiresAt: connection.expiresAt,
+        error: null,
+      };
+      state.settings.transcriptionMode = "local";
+      state.settings.transcriptionEndpoint = connection.endpoint;
+      state.settings.transcriptionToken = "";
+      state.transcriptionServiceStatus = "connected";
+      save();
+      render();
+      if (!silent) {
+        showToast(
+          "Desktop companion connected",
+          `${connection.health?.engine || "Local transcription"} will process audio on this computer.`,
+        );
+      }
+      return true;
+    } catch (error) {
+      activateHostedFallback(error);
+      save();
+      render();
+      if (!silent) {
+        showToast(
+          "Using online transcription",
+          error?.message ||
+            "Start the desktop companion and choose Look for companion again.",
+        );
+      }
+      return false;
+    }
+  })();
+  companionConnectionPromise = attempt;
+  try {
+    return await attempt;
+  } finally {
+    if (companionConnectionPromise === attempt) {
+      companionConnectionPromise = null;
+    }
+  }
+}
+
 function createTranscriptionClient() {
   return new MeetingAudio.TranscriptionClient({
     endpoint: state.settings.transcriptionEndpoint,
     mode: state.settings.transcriptionMode,
     token: usesHostedTranscription()
       ? ""
-      : state.settings.transcriptionToken,
+      : usesHybridTranscription()
+        ? state.companion.pairingToken
+        : state.settings.transcriptionToken,
   });
 }
 
@@ -1966,10 +2195,27 @@ async function loadMeetingRecordingBlobs(meeting) {
 }
 
 async function testTranscriptionService() {
+  if (usesHybridTranscription() && usesHostedTranscription()) {
+    await connectLocalCompanion({ silent: false, force: true });
+    return;
+  }
+  const testedLocalHybrid =
+    usesHybridTranscription() && !usesHostedTranscription();
   state.transcriptionServiceStatus = "checking";
   render();
   try {
-    const health = await createTranscriptionClient().health();
+    let health;
+    try {
+      health = await createTranscriptionClient().health();
+    } catch (error) {
+      if (!testedLocalHybrid || error?.status !== 401) throw error;
+      const reconnected = await connectLocalCompanion({
+        silent: true,
+        force: true,
+      });
+      if (!reconnected) throw error;
+      health = await createTranscriptionClient().health();
+    }
     state.transcriptionServiceStatus =
       health?.status === "ok" ? "connected" : "unavailable";
     showToast(
@@ -1981,12 +2227,21 @@ async function testTranscriptionService() {
         : `${health?.engine || "Local engine"} is ready on this computer.`,
     );
   } catch (error) {
-    state.transcriptionServiceStatus = "unavailable";
+    if (testedLocalHybrid) {
+      activateHostedFallback(error);
+      save();
+    } else {
+      state.transcriptionServiceStatus = "unavailable";
+    }
     showToast(
-      usesHostedTranscription()
+      testedLocalHybrid
+        ? "Desktop companion disconnected"
+        : usesHostedTranscription()
         ? "Public transcription service unavailable"
         : "Companion connection failed",
-      error?.message ||
+      testedLocalHybrid
+        ? "Online transcription is available as a fallback. Restart the companion to return to private processing."
+        : error?.message ||
         (usesHostedTranscription()
           ? "Try again shortly. The service may be starting."
           : "Start the local service and verify its URL and pairing token."),
@@ -2013,7 +2268,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
 
   const controller = new AbortController();
   transcriptionControllers.set(meeting.id, controller);
-  const client = createTranscriptionClient();
+  let client = createTranscriptionClient();
   meeting.transcription = {
     ...(meeting.transcription || {}),
     status: "queued",
@@ -2026,23 +2281,39 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
 
   try {
     const blobs = await loadMeetingRecordingBlobs(meeting);
-    const created = await client.createJob({
-      microphoneBlob: blobs.microphone,
-      meetingBlob: blobs.meeting,
-      mixedBlob: blobs.mixed,
-      metadata: {
-        meetingId: meeting.id,
-        captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
-        captureClockVersion: meeting.captureClockVersion || 1,
-        ...(usesHostedTranscription()
-          ? {}
-          : { localSpeakerName: currentUserName() }),
-        durationMs: Math.max(
-          0,
-          Number(meeting.durationSeconds || 0) * 1000,
-        ),
-      },
-    });
+    const createJob = () =>
+      client.createJob({
+        microphoneBlob: blobs.microphone,
+        meetingBlob: blobs.meeting,
+        mixedBlob: blobs.mixed,
+        metadata: {
+          meetingId: meeting.id,
+          captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
+          captureClockVersion: meeting.captureClockVersion || 1,
+          ...(usesHostedTranscription()
+            ? {}
+            : { localSpeakerName: currentUserName() }),
+          durationMs: Math.max(
+            0,
+            Number(meeting.durationSeconds || 0) * 1000,
+          ),
+        },
+      });
+    let created;
+    try {
+      created = await createJob();
+    } catch (error) {
+      if (
+        !usesHybridTranscription() ||
+        usesHostedTranscription() ||
+        error?.status !== 401
+      ) {
+        throw error;
+      }
+      await connectLocalCompanion({ silent: true, force: true });
+      client = createTranscriptionClient();
+      created = await createJob();
+    }
     meeting.transcription = {
       ...meeting.transcription,
       status: created.status || "queued",
@@ -2313,6 +2584,38 @@ app.addEventListener("click", async (event) => {
   } else if (action === "test-transcription-service") {
     await testTranscriptionService();
     return;
+  } else if (action === "connect-companion") {
+    await connectLocalCompanion({ silent: false, force: true });
+    return;
+  } else if (action === "show-companion-setup") {
+    state.companionSetupOpen = true;
+    state.settingsOpen = false;
+  } else if (action === "check-companion-setup") {
+    await connectLocalCompanion({ silent: true, force: true });
+    return;
+  } else if (action === "complete-companion-setup") {
+    if (state.companion.status !== "connected") return;
+    state.settings.companionSetupCompleted = true;
+    state.companionSetupOpen = false;
+    setHostedSessionPreference(false);
+    save();
+    render();
+    showToast(
+      "Desktop companion ready",
+      "Future visits will connect to private on-device transcription automatically.",
+    );
+    return;
+  } else if (action === "defer-companion-setup") {
+    setHostedSessionPreference(true);
+    state.companionSetupOpen = false;
+    activateHostedFallback();
+    save();
+    render();
+    showToast(
+      "Using online transcription",
+      "NotesBuddy will ask about the Windows companion again in a future browser session.",
+    );
+    return;
   } else if (action === "open-nav") {
     state.mobileNavOpen = true;
   } else if (action === "close-nav") {
@@ -2526,3 +2829,11 @@ window.addEventListener("pagehide", () => {
 });
 
 render();
+if (usesHybridTranscription()) {
+  if (state.preferHostedForSession) {
+    activateHostedFallback();
+    render();
+  } else {
+    connectLocalCompanion({ silent: true }).catch(() => {});
+  }
+}

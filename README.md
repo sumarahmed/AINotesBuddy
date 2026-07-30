@@ -6,8 +6,9 @@ tracks, save them in the current browser profile, play each source back, and
 send them to either an optional local companion or a centrally hosted service
 for speech-to-text and speaker diarization.
 
-> **Project status:** Functional prototype. The deployed static client uses the
-> local mode until a hosted API endpoint is activated. NotesBuddy is an
+> **Project status:** Functional prototype. The source client uses a
+> local-first hybrid mode: it prefers the Windows companion and keeps the
+> centrally hosted API as a fallback. NotesBuddy is an
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
@@ -20,6 +21,10 @@ for speech-to-text and speaker diarization.
 - Persistent warning when meeting sharing stops during a recording
 - Optional browser live-speech draft with no inserted sample text
 - Local faster-whisper transcription and pyannote speaker diarization companion
+- Windows tray/control-panel app with automatic short-lived browser pairing
+- Local-first website selection with a disclosed online fallback
+- First-entry Windows setup guide with download, installation, and live
+  connection confirmation
 - Hosted anonymous-session API and browser client with per-session job isolation
 - Serverless GPU deployment package with a persistent model cache
 - Automatic **You** attribution for the isolated microphone track
@@ -61,8 +66,12 @@ selected surface. Current Chrome or Edge on Windows is recommended.
 
 ### Local speaker transcription
 
-The static client cannot safely contain or run the larger speech models. Run
-the companion on the same computer:
+For normal Windows users, install the companion from the repository's latest
+GitHub Release, start it, and reopen NotesBuddy. The website pairs
+automatically—there is no Python, model-token, or pairing-token setup per user.
+See the [Desktop Companion guide](docs/DESKTOP_COMPANION.md).
+
+For source development, run the manual CLI on the same computer:
 
 ```powershell
 cd services\transcription
@@ -107,7 +116,8 @@ operating limits, and future subscription migration.
 | --- | --- |
 | Profile, meeting records, speaker names, transcripts, settings | Browser `localStorage` |
 | Microphone, meeting, and mixed audio Blobs | Browser IndexedDB |
-| Local pairing token | Browser settings and a user-local companion token file |
+| Automatic desktop pairing token | Page memory only; expires and is revoked on companion restart |
+| Manual recovery token | User-local companion token file; browser storage only in manual CLI mode |
 | Transcription job audio | Temporary local/hosted job directory, deleted after terminal state |
 | Hosted anonymous session | Browser `sessionStorage`, expiring |
 | Speech and diarization models | Local or hosted model cache |
@@ -145,11 +155,13 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 ```text
 .
 |-- .github/                       CI and deployment workflows
+|-- desktop/                       Windows packaging, installer, model preparation
 |-- docs/                          Architecture, privacy, and testing guides
 |-- services/transcription/
 |   |-- notesbuddy_transcription/  Local API, model adapter, and alignment core
 |   |-- tests/                     Python unit and API integration tests
 |   |-- modal_app.py               Hosted anonymous GPU API deployment
+|   |-- desktop_app.py             Windows tray/control-panel launcher
 |   `-- run.py                     Local companion launcher
 |-- src/
 |   |-- runtime-config.js          Public local/hosted mode and endpoint
@@ -166,6 +178,8 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Meeting-audio implementation plan](docs/MEETING_AUDIO_DIARIZATION_PLAN.md)
+- [Desktop Companion user and release guide](docs/DESKTOP_COMPANION.md)
+- [Desktop Companion architecture and rollout plan](docs/DESKTOP_COMPANION_PLAN.md)
 - [Local transcription companion](services/transcription/README.md)
 - [Public hosted transcription](docs/HOSTED_TRANSCRIPTION.md)
 - [Configuration and fixed-value audit](docs/CONFIGURATION.md)
@@ -181,8 +195,8 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 - Display-audio capture always requires an explicit browser share prompt.
 - Some surface/browser combinations do not expose audio; there is no silent
   operating-system loopback capture.
-- Initial model installation is large and requires network access and pyannote
-  model access. Processing speed depends on the selected compute.
+- The Windows installer is large because it includes offline models. Publishing
+  it requires a one-time model-license review and gated build secret.
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,

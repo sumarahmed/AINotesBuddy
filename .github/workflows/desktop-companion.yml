@@ -1,0 +1,102 @@
+name: Windows desktop companion
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_models:
+        description: Bundle offline transcription and diarization models
+        required: true
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "companion-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-companion-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      INCLUDE_MODELS: ${{ github.event_name != 'workflow_dispatch' || inputs.include_models }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            services/transcription/requirements-packaging.txt
+            services/transcription/requirements-desktop.txt
+            services/transcription/requirements-models.txt
+
+      - name: Install CPU runtime and packaging dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r services/transcription/requirements-packaging.txt
+
+      - name: Prepare offline models
+        if: env.INCLUDE_MODELS == 'true'
+        shell: pwsh
+        run: |
+          if (-not $env:HF_TOKEN) {
+            throw "Add the gated-model read token as the repository secret HF_TOKEN."
+          }
+          python desktop/prepare_models.py --accept-pyannote-terms
+
+      - name: Run service tests
+        shell: pwsh
+        run: python -m unittest discover -s services/transcription/tests -v
+
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build and self-test Windows installer
+        shell: pwsh
+        run: |
+          $requireModels = $env:INCLUDE_MODELS -eq "true"
+          $version = "${{ github.ref_name }}".Replace("companion-v", "")
+          if (-not $version -or $version -eq "${{ github.ref_name }}") {
+            $version = "0.1.0"
+          }
+          ./desktop/build.ps1 -Python python -Version $version -RequireModels:$requireModels
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: NotesBuddy-Windows-Companion
+          path: desktop/release/NotesBuddyCompanion-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Publish tagged installer
+        if: startsWith(github.ref, 'refs/tags/companion-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $installer = Get-ChildItem -LiteralPath desktop/release -Filter "NotesBuddyCompanion-Setup-*.exe" | Select-Object -First 1
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $installer.FullName --clobber
+          } else {
+            gh release create $tag $installer.FullName --generate-notes --title "NotesBuddy Desktop Companion $tag"
+          }

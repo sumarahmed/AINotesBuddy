@@ -36,8 +36,9 @@ flowchart LR
     BrowserSpeech --> LocalStorage["localStorage meeting record"]
 
     IDB --> Client["NotesBuddy client"]
-    Client -->|"Pairing token"| Companion["127.0.0.1 companion"]
-    Client -->|"Anonymous session + HTTPS"| Hosted["Hosted API (optional)"]
+    Client --> Discovery["Companion discovery + exact-origin pairing"]
+    Discovery -->|"Available: memory-only token"| Companion["127.0.0.1 desktop companion"]
+    Discovery -->|"Unavailable: disclosed fallback"| Hosted["Hosted API (optional)"]
     Companion --> Whisper["faster-whisper words"]
     Hosted --> Whisper
     Companion --> Pyannote["pyannote remote turns"]
@@ -58,8 +59,9 @@ Direct-launch entry point. It loads `src/runtime-config.js`, then
 
 ### `src/runtime-config.js`
 
-Contains public, non-secret deployment configuration: local/hosted mode and the
-transcription endpoint. Credentials must never be placed in this file.
+Contains public, non-secret deployment configuration: local/hosted/hybrid mode,
+the loopback endpoint, hosted fallback, and companion download URL. Credentials
+must never be placed in this file.
 
 ### `src/meeting-audio.js`
 
@@ -71,6 +73,7 @@ Framework-independent browser module containing:
 - cross-source echo de-duplication;
 - speaker rename propagation;
 - extractive brief generation;
+- companion discovery, automatic pairing, and health verification;
 - local-pairing and hosted anonymous-session API client.
 
 The module uses a classic global (`NotesBuddyMeetingAudio`) so direct local-file
@@ -147,7 +150,11 @@ ended, inserts a persistent warning, and keeps the microphone path active.
 | --- | --- |
 | `notesbuddy-profile` | Local profile ID, name, initials, timestamps |
 | `notesbuddy-meetings` | Meetings, asset metadata, speakers, transcript, notes, actions |
-| `notesbuddy-settings` | Capture defaults, service mode/endpoint, local token, processing preferences |
+| `notesbuddy-settings` | Capture defaults, deployment-safe service settings, processing preferences |
+
+Hybrid automatic tokens are never stored. They remain in the current page's
+memory and are revoked on reload, expiry, or companion restart. Explicit manual
+CLI mode can still store a recovery token in browser settings.
 
 ### IndexedDB
 
@@ -171,15 +178,17 @@ ID is not authentication or a server session.
 
 The shared engine and API live under `services/transcription/`.
 
-### Local security boundary
-
 ### Security boundary
 
 - Launcher binds Uvicorn to `127.0.0.1`.
 - CORS allows only configured origins.
 - Modern private-network preflight is supported for trusted origins.
-- Every API endpoint requires `X-NotesBuddy-Pairing-Token`.
-- A persistent 256-bit token is stored under the local OS user profile.
+- Discovery returns only non-secret compatibility metadata.
+- The desktop launcher issues origin-bound, expiring, in-memory browser tokens
+  only after exact-origin validation.
+- Missing, `null`, and unknown origins cannot pair automatically.
+- Protected endpoints require `X-NotesBuddy-Pairing-Token`.
+- A persistent 256-bit manual recovery token remains under the OS user profile.
 - Uvicorn access logs are disabled by the launcher.
 - Normal API responses/logs do not include transcript content or audio paths
   except the transcript returned to the paired requesting client.
@@ -225,9 +234,12 @@ and result storage.
 
 ### Model adapter
 
-`LocalDiarizationEngine` loads faster-whisper and pyannote lazily. `EmptyEngine`
-exists only for API/security smoke tests and returns an empty segment array. It
-never returns demonstration text.
+`LocalDiarizationEngine` loads faster-whisper and pyannote lazily. Packaged
+Windows releases resolve both from the offline `models` directory, so customers
+do not need a model token. The trusted release job uses the publisher's secret
+once, records immutable model revisions, and never includes that secret in the
+artifact. `EmptyEngine` exists only for API/security smoke tests and returns an
+empty segment array. It never returns demonstration text.
 
 ## Speaker model
 
@@ -266,11 +278,14 @@ flowchart LR
     Source["index.html + src/"] --> Build["npm run build"]
     Build --> Client["dist/client"]
     Client --> StaticHost["Any HTTPS static host"]
-    Local["Local Python companion"] -. "local mode" .-> StaticHost
-    Hosted["Hosted Python API"] -. "hosted mode" .-> StaticHost
+    DesktopSource["desktop + transcription service"] --> WindowsBuild["Trusted Windows release workflow"]
+    PublisherToken["Publisher model secret"] -->|"download only"| WindowsBuild
+    WindowsBuild --> Installer["Model-inclusive per-user installer"]
+    Installer -. "hybrid local-first" .-> StaticHost
+    Hosted["Hosted Python API"] -. "optional fallback" .-> StaticHost
 ```
 
-The Python service is never part of the static bundle. Local mode talks only to
-the explicitly paired `127.0.0.1` process. Hosted mode talks to the HTTPS
-endpoint in `runtime-config.js`; the model token remains in the hosting
-provider's secret manager.
+The Python service is never part of the static bundle. Hybrid mode first talks
+to the automatically paired `127.0.0.1` process and does not contact the hosted
+API while that companion is active. If local connection fails, the UI discloses
+the fallback before jobs use the HTTPS endpoint in `runtime-config.js`.

@@ -14,7 +14,11 @@ application's control.
 | Local profile name, initials, ID | Browser `localStorage` | Until site data is cleared |
 | Meeting metadata, speakers, rename mappings | Browser `localStorage` | Until meeting/site data is deleted |
 | Transcript, extractive brief, actions, notes | Browser `localStorage` | Until meeting/site data is deleted |
-| Local companion URL and pairing token | Browser `localStorage` | Until settings/site data is cleared |
+| Hybrid companion endpoint | Static runtime configuration | Deployment controlled |
+| Automatic companion pairing token | Browser page memory | Expiry, reload, or companion restart |
+| Companion setup confirmation | Browser `localStorage` | Until site settings are cleared |
+| Online-for-now setup deferral | Browser `sessionStorage` | Current browser session |
+| Manual CLI URL and recovery token | Browser `localStorage` in explicit local mode | Until settings/site data is cleared |
 | Hosted anonymous session token | Browser `sessionStorage` | Session expiry or tab/session storage deletion |
 | Microphone, meeting, mixed audio | Browser IndexedDB | Until meeting/site data is deleted |
 | Browser live-speech audio | Browser speech provider when enabled | Provider/browser controlled |
@@ -24,7 +28,7 @@ application's control.
 | Hashed hosted client network key | Host process memory | Rate-limit window/session cleanup |
 | Companion pairing token | Local OS user configuration directory | Until token file is deleted |
 | Speech/diarization models | Local or hosted model cache | Until the owner removes the cache |
-| Hugging Face model token | Local process environment or host secret manager | Owner controlled |
+| Hugging Face model token | Source-development environment, host secret manager, or trusted release job | Owner controlled; never included in installer |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
 
 ## Browser capture
@@ -82,12 +86,15 @@ the meeting's stored audio Blobs and posts them to
 `http://127.0.0.1:8765`. This leaves the browser origin but stays on the same
 computer's loopback interface.
 
-The launcher:
+The packaged launcher:
 
 - binds only to `127.0.0.1`;
 - checks a configured browser-origin allowlist;
 - supports required browser private-network preflights;
-- authenticates every endpoint with a random 256-bit pairing token;
+- exposes only non-secret discovery metadata without authentication;
+- issues expiring memory-only browser tokens only to exact trusted origins;
+- rejects automatic pairing from missing, `null`, and unknown origins;
+- authenticates protected endpoints with an automatic or manual random token;
 - disables Uvicorn access logs;
 - does not log transcript text or audio paths at normal level.
 
@@ -99,6 +106,15 @@ The returned transcript is saved in the browser meeting record. The companion
 keeps recent job status/results in process memory for one hour by default (and
 evicts older completed entries when its bounded job table fills). It has no
 job database or cloud synchronization.
+
+The website's default `hybrid` mode attempts this local path first. If the
+companion is absent, incompatible, blocked by browser local-network permission,
+or cannot pair, the UI shows **online fallback** and uses the configured hosted
+service. That fallback crosses the device boundary described below.
+
+First-entry setup is marked complete only after a successful companion health
+check and explicit user confirmation. Choosing the online fallback stores a
+session-only deferral so the installation prompt returns in a future session.
 
 ## Hosted anonymous transcription
 
@@ -136,9 +152,12 @@ is a public prototype boundary only.
 
 ## Model access and caches
 
-The pyannote community model requires a Hugging Face token for initial access.
-That token belongs only in the companion process environment and is not the
-same as the NotesBuddy pairing token.
+The pyannote community model requires gated initial access. For public Windows
+releases, the publisher supplies a read-only token to the trusted release job,
+which downloads immutable model revisions and packages the weights offline.
+Customers do not provide a token. The build token is never written to the
+executable or installer. Source developers and hosted operators may instead
+provide their own process/secret-manager token.
 
 Speech/diarization models are cached locally or in a host-mounted model-cache
 volume. Model cache files contain model weights, not meeting audio. Their size
@@ -167,9 +186,9 @@ downloaded exports separately.
 
 To revoke local-companion access:
 
-1. Delete its pairing token file.
-2. Restart the companion to create a new token.
-3. Clear the old browser pairing token from Settings.
+1. Quit or restart the companion to revoke all automatic page-memory tokens.
+2. For manual CLI/recovery access, delete its persistent token file.
+3. Restart it to create a new manual recovery token.
 
 Stopping the companion prevents further local transcription. Model caches and
 the Hugging Face token environment are managed separately.
@@ -184,8 +203,9 @@ The deployment owner manages host logs, model caches, secrets, and billing.
 - Browser storage is not encrypted by NotesBuddy.
 - Users of the same unlocked device/browser profile may access data.
 - Browser extensions or compromised scripts may inspect page data.
-- A pairing token stored in browser storage can be read by scripts executing in
-  that same origin; use only trusted static hosting.
+- An automatic pairing token is readable by scripts executing in the trusted
+  origin while the page is open; keep the static host dependency-free and
+  protect its supply chain.
 - A hosted anonymous session token can be read by scripts executing in the same
   origin/tab; Content Security Policy and dependency review remain important.
 - Hosted transcription sends meeting audio outside the user's device. The UI

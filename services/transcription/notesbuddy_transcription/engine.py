@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
+from importlib.util import find_spec
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,10 +20,44 @@ class EngineCancelled(RuntimeError):
 ProgressCallback = Callable[[float, str], None]
 
 
+def packaged_models_root() -> Path | None:
+    configured = os.getenv("NOTESBUDDY_MODEL_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    bundle_root = getattr(sys, "_MEIPASS", "")
+    if bundle_root:
+        return Path(bundle_root) / "models"
+    executable_models = Path(sys.executable).resolve().parent / "models"
+    if executable_models.is_dir():
+        return executable_models
+    return None
+
+
+def bundled_model_reference(directory_name: str, fallback: str) -> str:
+    root = packaged_models_root()
+    candidate = root / directory_name if root is not None else None
+    return str(candidate) if candidate is not None and candidate.is_dir() else fallback
+
+
+def module_available(name: str) -> bool:
+    try:
+        return find_spec(name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
 class EmptyEngine:
     """Dependency-light API test engine that never invents transcript text."""
 
     name = "empty-test-engine"
+
+    @staticmethod
+    def configuration_status() -> dict[str, object]:
+        return {
+            "ready": True,
+            "source": "test",
+            "status": "dependency-light test engine",
+        }
 
     def process(
         self,
@@ -58,18 +94,23 @@ class LocalDiarizationEngine:
         diarization_model: str | None = None,
         hugging_face_token: str | None = None,
     ) -> None:
-        self.whisper_model_name = whisper_model or os.getenv(
-            "NOTESBUDDY_WHISPER_MODEL",
-            "small",
+        self.whisper_model_name = (
+            whisper_model
+            or os.getenv("NOTESBUDDY_WHISPER_MODEL", "").strip()
+            or bundled_model_reference("faster-whisper-small", "small")
         )
         self.device = device or os.getenv("NOTESBUDDY_MODEL_DEVICE", "cpu")
         self.compute_type = compute_type or os.getenv(
             "NOTESBUDDY_WHISPER_COMPUTE_TYPE",
             "int8",
         )
-        self.diarization_model_name = diarization_model or os.getenv(
-            "NOTESBUDDY_DIARIZATION_MODEL",
-            "pyannote/speaker-diarization-community-1",
+        self.diarization_model_name = (
+            diarization_model
+            or os.getenv("NOTESBUDDY_DIARIZATION_MODEL", "").strip()
+            or bundled_model_reference(
+                "speaker-diarization-community-1",
+                "pyannote/speaker-diarization-community-1",
+            )
         )
         self.hugging_face_token = hugging_face_token or os.getenv(
             "HF_TOKEN",
@@ -78,6 +119,41 @@ class LocalDiarizationEngine:
         self._whisper = None
         self._diarization = None
         self._load_lock = threading.Lock()
+
+    def configuration_status(self) -> dict[str, object]:
+        dependencies_ready = all(
+            module_available(package)
+            for package in ("faster_whisper", "pyannote.audio", "torch")
+        )
+        bundled_models_ready = all(
+            Path(model).is_dir()
+            for model in (
+                self.whisper_model_name,
+                self.diarization_model_name,
+            )
+        )
+        downloadable_models_ready = bool(self.hugging_face_token)
+        ready = dependencies_ready and (
+            bundled_models_ready or downloadable_models_ready
+        )
+        source = (
+            "bundled"
+            if bundled_models_ready
+            else "configured-download"
+            if downloadable_models_ready
+            else "missing"
+        )
+        return {
+            "ready": ready,
+            "source": source,
+            "status": (
+                "offline models ready"
+                if ready and bundled_models_ready
+                else "model download configured"
+                if ready
+                else "offline models or runtime packages are missing"
+            ),
+        }
 
     def _load_whisper(self):
         if self._whisper is not None:
@@ -101,10 +177,12 @@ class LocalDiarizationEngine:
     def _load_diarization(self):
         if self._diarization is not None:
             return self._diarization
-        if not self.hugging_face_token:
+        local_model = Path(self.diarization_model_name).is_dir()
+        if not self.hugging_face_token and not local_model:
             raise RuntimeError(
                 "HF_TOKEN is required for the pyannote community diarization "
-                "model. Accept the model terms and configure the token locally."
+                "model when it is not bundled with the desktop companion. "
+                "Accept the model terms and configure the token locally."
             )
         with self._load_lock:
             if self._diarization is None:
@@ -116,13 +194,20 @@ class LocalDiarizationEngine:
                         "requirements before identifying speakers."
                     ) from error
                 try:
-                    self._diarization = Pipeline.from_pretrained(
-                        self.diarization_model_name,
-                        token=self.hugging_face_token,
-                    )
+                    if local_model:
+                        self._diarization = Pipeline.from_pretrained(
+                            self.diarization_model_name,
+                        )
+                    else:
+                        self._diarization = Pipeline.from_pretrained(
+                            self.diarization_model_name,
+                            token=self.hugging_face_token,
+                        )
                 except TypeError:
                     # Compatibility with pyannote releases using the previous
                     # Hugging Face keyword.
+                    if local_model:
+                        raise
                     self._diarization = Pipeline.from_pretrained(
                         self.diarization_model_name,
                         use_auth_token=self.hugging_face_token,
