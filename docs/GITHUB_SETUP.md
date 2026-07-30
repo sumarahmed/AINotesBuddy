@@ -1,7 +1,7 @@
 # GitHub publishing checklist
 
 The repository publishes the tested `dist/client` bundle to GitHub Pages at
-<https://sumarahmed.github.io/notesbuddy/>.
+<https://sumarahmed.github.io/AINotesBuddy/>.
 
 ## Important remote configuration
 
@@ -11,14 +11,14 @@ replace or remove it.
 GitHub is configured as a second remote:
 
 ```bash
-git remote add github https://github.com/sumarahmed/notesbuddy.git
+git remote add github https://github.com/sumarahmed/AINotesBuddy.git
 git push -u github main
 ```
 
 For SSH:
 
 ```bash
-git remote add github git@github.com:sumarahmed/notesbuddy.git
+git remote add github git@github.com:sumarahmed/AINotesBuddy.git
 git push -u github main
 ```
 

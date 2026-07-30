@@ -9,7 +9,7 @@ transcripts, notes, and action items.
 > inspired by local-first meeting tools such as Meetily; it is not affiliated
 > with or endorsed by Meetily.
 
-[Open the public GitHub Pages site](https://sumarahmed.github.io/notesbuddy/)
+[Open the public GitHub Pages site](https://sumarahmed.github.io/AINotesBuddy/)
 
 [Owner-restricted Sites deployment](https://notesbuddy-local.sumarahmed.chatgpt.site)
 
