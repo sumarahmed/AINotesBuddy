@@ -23,6 +23,8 @@ for speech-to-text and speaker diarization.
 - Local faster-whisper transcription and pyannote speaker diarization companion
 - Windows tray/control-panel app with automatic short-lived browser pairing
 - Local-first website selection with a disclosed online fallback
+- First-entry Windows setup guide with download, installation, and live
+  connection confirmation
 - Hosted anonymous-session API and browser client with per-session job isolation
 - Serverless GPU deployment package with a persistent model cache
 - Automatic **You** attribution for the isolated microphone track

@@ -159,7 +159,11 @@ async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
   );
 }
 
-async function completeOnboarding(page, name = "Browser Tester") {
+async function completeOnboarding(
+  page,
+  name = "Browser Tester",
+  { handleCompanion = true } = {},
+) {
   const setupName = page.locator("[data-input='profile-setup-name']");
   if (await setupName.isVisible()) {
     await setupName.fill(name);
@@ -168,6 +172,12 @@ async function completeOnboarding(page, name = "Browser Tester") {
     );
   }
   await page.locator(".home-view").waitFor();
+  if (handleCompanion) {
+    const defer = page.locator("[data-action='defer-companion-setup']");
+    if (await defer.isVisible()) {
+      await defer.click();
+    }
+  }
 }
 
 async function idbAssets(page) {
@@ -385,6 +395,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
           apiVersion: 1,
           status: "available",
           browserPairing: true,
+          modelsReady: true,
           engine: "desktop-browser-test",
         }),
       });
@@ -424,12 +435,39 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   });
 
   await page.goto(baseUrl);
-  await completeOnboarding(page, "Hybrid Companion Tester");
+  await completeOnboarding(page, "Hybrid Companion Tester", {
+    handleCompanion: false,
+  });
+  await page
+    .getByRole("heading", { name: "Desktop companion is working" })
+    .waitFor({ timeout: 5000 });
+  await page
+    .getByText("On-device processing active", { exact: true })
+    .waitFor();
+  assert.deepEqual(
+    calls
+      .filter(({ method }) => method !== "OPTIONS")
+      .map(({ pathname }) => pathname),
+    ["/v1/companion", "/v1/pairings", "/v1/health"],
+  );
+  assert.equal(calls.at(-1).token, "automatic-browser-pairing-token-value");
+  await page.locator("[data-action='complete-companion-setup']").click();
+  await page.locator(".companion-setup-backdrop").waitFor({ state: "detached" });
+  let persistedSettings = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("notesbuddy-settings") || "{}"),
+  );
+  assert.equal(persistedSettings.companionSetupCompleted, true);
+  assert.equal(persistedSettings.transcriptionToken, "");
+
+  await page.reload();
+  await page.locator(".home-view").waitFor();
+  assert.equal(
+    await page.locator(".companion-setup-backdrop").count(),
+    0,
+    "confirmed setup must stay dismissed on future visits",
+  );
   await page.locator("[data-action='settings']").first().click();
   await page.locator("[data-panel='settings']").waitFor();
-  await page
-    .locator(".service-check__status--connected")
-    .waitFor({ timeout: 5000 });
   await page
     .locator(".settings-section", {
       hasText: "Desktop speaker transcription",
@@ -452,19 +490,12 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
       .getAttribute("target"),
     "_blank",
   );
-  assert.deepEqual(
-    calls
-      .filter(({ method }) => method !== "OPTIONS")
-      .map(({ pathname }) => pathname),
-    ["/v1/companion", "/v1/pairings", "/v1/health"],
-  );
-  assert.equal(calls.at(-1).token, "automatic-browser-pairing-token-value");
   assert.equal(
     hostedCalls,
     0,
     "a connected companion must not depend on the hosted API",
   );
-  const persistedSettings = await page.evaluate(() =>
+  persistedSettings = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("notesbuddy-settings") || "{}"),
   );
   assert.equal(
@@ -498,7 +529,64 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
   });
 
   await page.goto(baseUrl);
-  await completeOnboarding(page, "Hybrid Fallback Tester");
+  await completeOnboarding(page, "Hybrid Fallback Tester", {
+    handleCompanion: false,
+  });
+  await page
+    .getByRole("heading", { name: "Install the Windows companion" })
+    .waitFor();
+  assert.equal(
+    await page
+      .locator(
+        "a[href='https://github.com/sumarahmed/AINotesBuddy/releases']",
+      )
+      .getAttribute("target"),
+    "_blank",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  const setupLayout = await page.evaluate(() => {
+    const card = document.querySelector(".companion-setup-card");
+    const bounds = card?.getBoundingClientRect();
+    return {
+      viewportWidth: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      cardLeft: Math.floor(bounds?.left || 0),
+      cardRight: Math.ceil(bounds?.right || 0),
+    };
+  });
+  assert.ok(
+    setupLayout.documentWidth <= setupLayout.viewportWidth,
+    "companion onboarding must not overflow a mobile viewport",
+  );
+  assert.ok(
+    setupLayout.cardLeft >= 0 &&
+      setupLayout.cardRight <= setupLayout.viewportWidth,
+    "companion onboarding card must remain fully reachable on mobile",
+  );
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.locator("[data-action='check-companion-setup']").click();
+  await page
+    .getByText("Companion is not running.", { exact: true })
+    .waitFor();
+  await page.locator("[data-action='defer-companion-setup']").click();
+  await page.locator(".companion-setup-backdrop").waitFor({ state: "detached" });
+  const deferred = await page.evaluate(() => ({
+    session:
+      sessionStorage.getItem("notesbuddy-companion-setup-deferred") === "true",
+    completed: JSON.parse(
+      localStorage.getItem("notesbuddy-settings") || "{}",
+    ).companionSetupCompleted,
+  }));
+  assert.equal(deferred.session, true);
+  assert.equal(deferred.completed, false);
+
+  await page.reload();
+  await page.locator(".home-view").waitFor();
+  assert.equal(
+    await page.locator(".companion-setup-backdrop").count(),
+    0,
+    "online-for-now must suppress setup only for this browser session",
+  );
   await page.locator("[data-action='settings']").first().click();
   await page.locator("[data-panel='settings']").waitFor();
   await page
@@ -506,7 +594,7 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
     .waitFor({ timeout: 5000 });
   await page.getByText("The online fallback is active.").waitFor();
 
-  assert.equal(discoveryCalls, 1);
+  assert.equal(discoveryCalls, 2);
   assert.equal(
     await page.locator("[data-setting='transcriptionToken']").count(),
     0,
@@ -949,7 +1037,7 @@ async function runDirectFileLoad(browser) {
     await runHybridCompanionWorkflow(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, first-entry installer onboarding and confirmation, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

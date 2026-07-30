@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+from importlib.util import find_spec
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -38,10 +39,25 @@ def bundled_model_reference(directory_name: str, fallback: str) -> str:
     return str(candidate) if candidate is not None and candidate.is_dir() else fallback
 
 
+def module_available(name: str) -> bool:
+    try:
+        return find_spec(name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
 class EmptyEngine:
     """Dependency-light API test engine that never invents transcript text."""
 
     name = "empty-test-engine"
+
+    @staticmethod
+    def configuration_status() -> dict[str, object]:
+        return {
+            "ready": True,
+            "source": "test",
+            "status": "dependency-light test engine",
+        }
 
     def process(
         self,
@@ -103,6 +119,41 @@ class LocalDiarizationEngine:
         self._whisper = None
         self._diarization = None
         self._load_lock = threading.Lock()
+
+    def configuration_status(self) -> dict[str, object]:
+        dependencies_ready = all(
+            module_available(package)
+            for package in ("faster_whisper", "pyannote.audio", "torch")
+        )
+        bundled_models_ready = all(
+            Path(model).is_dir()
+            for model in (
+                self.whisper_model_name,
+                self.diarization_model_name,
+            )
+        )
+        downloadable_models_ready = bool(self.hugging_face_token)
+        ready = dependencies_ready and (
+            bundled_models_ready or downloadable_models_ready
+        )
+        source = (
+            "bundled"
+            if bundled_models_ready
+            else "configured-download"
+            if downloadable_models_ready
+            else "missing"
+        )
+        return {
+            "ready": ready,
+            "source": source,
+            "status": (
+                "offline models ready"
+                if ready and bundled_models_ready
+                else "model download configured"
+                if ready
+                else "offline models or runtime packages are missing"
+            ),
+        }
 
     def _load_whisper(self):
         if self._whisper is not None:

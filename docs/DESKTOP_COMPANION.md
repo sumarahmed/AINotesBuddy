@@ -12,18 +12,27 @@ Windows system audio or join meetings as a bot.
 
 ## User flow
 
-1. Download `NotesBuddyCompanion-Setup-<version>.exe` from the repository's
-   latest GitHub Release.
-2. Run the per-user installer. Administrator rights are not required.
-3. Leave the companion running in the Windows notification area.
-4. Open NotesBuddy. The website looks for `http://127.0.0.1:8765`, pairs
-   automatically, and shows **local connected** in Settings.
-5. If Chrome or Edge asks whether the site can access devices on the local
+1. Create the local browser profile on the NotesBuddy website.
+2. Follow the displayed **Install the Windows companion** guide and open the
+   repository Releases page.
+3. Download and run `NotesBuddyCompanion-Setup-<version>.exe`. Administrator
+   rights are not required.
+4. Leave the companion running in the Windows notification area.
+5. Return to the website and choose **I've installed it — check connection**.
+   NotesBuddy checks `http://127.0.0.1:8765`, pairs automatically, and verifies
+   the API, secure pairing, offline model bundle, and runtime packages before
+   showing **Desktop companion is working**.
+6. If Chrome or Edge asks whether the site can access devices on the local
    network, allow it. The service remains bound to this computer only.
 
 If the companion is stopped, the site uses the configured hosted service. The
 Settings drawer clearly shows **online fallback**. Start the companion and
 choose **Look for companion** to return to on-device processing.
+
+Choosing **Use online transcription for now** dismisses setup only for the
+current browser session. NotesBuddy asks again in a future session until a
+working local connection is confirmed. Confirmed setup is stored with the
+local browser settings and can be reopened from **Settings → Setup guide**.
 
 Closing the control-panel window hides it in the notification area. Use the
 tray menu's **Quit** command to stop the service. The **Start when I sign in**

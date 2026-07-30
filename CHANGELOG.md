@@ -10,6 +10,10 @@ but does not yet publish semantic-versioned releases.
 ### Added
 
 - Windows desktop companion control panel and notification-area lifecycle
+- First-entry installer onboarding with live companion confirmation and
+  session-only online deferral
+- Model/runtime readiness reporting that prevents incomplete installations
+  from being confirmed as working
 - Exact-origin automatic browser pairing with expiring memory-only tokens
 - Hybrid local-first runtime selection with a visible hosted fallback
 - Offline model preparation, model revision manifest, PyInstaller bundle, Inno

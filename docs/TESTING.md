@@ -119,6 +119,9 @@ The workflow verifies:
 - hosted health checks without consuming a session;
 - automatic anonymous-session creation and session-token job submission;
 - hybrid automatic companion discovery/pairing/health verification;
+- first-entry installer prompt, stable Releases link, successful local
+  API/pairing/model confirmation, persisted completion, and session-only online
+  deferral;
 - hybrid settings without URL/token fields and a Windows download action;
 - visible online fallback when companion discovery fails;
 - **You** plus two remote speakers in a completed result;

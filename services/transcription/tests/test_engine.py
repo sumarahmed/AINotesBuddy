@@ -100,6 +100,13 @@ class BundledModelConfigurationTests(unittest.TestCase):
                 diarization.resolve(),
             )
             self.assertEqual(engine.hugging_face_token, "")
+            with patch(
+                "notesbuddy_transcription.engine.module_available",
+                return_value=True,
+            ):
+                status = engine.configuration_status()
+            self.assertTrue(status["ready"])
+            self.assertEqual(status["source"], "bundled")
 
 
 class FakeTurn:

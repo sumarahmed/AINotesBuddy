@@ -458,6 +458,16 @@ def create_app(
             detail=error.detail,
         ) from error
 
+    def model_configuration() -> dict[str, object]:
+        status_provider = getattr(active_engine, "configuration_status", None)
+        if callable(status_provider):
+            return dict(status_provider())
+        return {
+            "ready": True,
+            "source": "custom",
+            "status": "custom engine configured",
+        }
+
     def require_access(
         request: Request,
         supplied_pairing_token: Annotated[
@@ -518,6 +528,7 @@ def create_app(
         if hosted:
             raise HTTPException(status_code=404, detail="Route was not found.")
         response.headers["Cache-Control"] = "no-store"
+        model_status = model_configuration()
         return {
             "product": "NotesBuddy Desktop Companion",
             "version": companion_version or "development",
@@ -529,6 +540,9 @@ def create_app(
                 "name",
                 active_engine.__class__.__name__,
             ),
+            "modelsReady": bool(model_status.get("ready")),
+            "modelSource": str(model_status.get("source") or "unknown"),
+            "modelStatus": str(model_status.get("status") or "unknown"),
             "storage": "temporary job files only",
         }
 
@@ -560,6 +574,7 @@ def create_app(
     @app.get("/v1/health", dependencies=[Depends(health_access)])
     def health(response: Response) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
+        model_status = model_configuration()
         return {
             "status": "ok",
             "engine": getattr(
@@ -567,7 +582,9 @@ def create_app(
                 "name",
                 active_engine.__class__.__name__,
             ),
-            "modelStatus": "loaded on first job",
+            "modelsReady": bool(model_status.get("ready")),
+            "modelSource": str(model_status.get("source") or "unknown"),
+            "modelStatus": str(model_status.get("status") or "unknown"),
             "storage": "temporary job files only",
             "access": "anonymous-session" if hosted else "local-pairing",
         }

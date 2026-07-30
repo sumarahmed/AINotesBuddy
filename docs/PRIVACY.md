@@ -16,6 +16,8 @@ application's control.
 | Transcript, extractive brief, actions, notes | Browser `localStorage` | Until meeting/site data is deleted |
 | Hybrid companion endpoint | Static runtime configuration | Deployment controlled |
 | Automatic companion pairing token | Browser page memory | Expiry, reload, or companion restart |
+| Companion setup confirmation | Browser `localStorage` | Until site settings are cleared |
+| Online-for-now setup deferral | Browser `sessionStorage` | Current browser session |
 | Manual CLI URL and recovery token | Browser `localStorage` in explicit local mode | Until settings/site data is cleared |
 | Hosted anonymous session token | Browser `sessionStorage` | Session expiry or tab/session storage deletion |
 | Microphone, meeting, mixed audio | Browser IndexedDB | Until meeting/site data is deleted |
@@ -109,6 +111,10 @@ The website's default `hybrid` mode attempts this local path first. If the
 companion is absent, incompatible, blocked by browser local-network permission,
 or cannot pair, the UI shows **online fallback** and uses the configured hosted
 service. That fallback crosses the device boundary described below.
+
+First-entry setup is marked complete only after a successful companion health
+check and explicit user confirmation. Choosing the online fallback stores a
+session-only deferral so the installation prompt returns in a future session.
 
 ## Hosted anonymous transcription
 

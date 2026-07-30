@@ -19,12 +19,15 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | Transcription mode | From `src/runtime-config.js` | `hybrid`, `local`, or centrally managed `hosted` |
 | Companion URL | `http://127.0.0.1:8765` in local mode | Loopback-only local API |
 | Pairing token | Empty in local mode | Must be copied from the local companion |
+| Companion setup completed | Off until local health confirmation | Controls the first-entry Windows installation guide |
 
 In `hybrid` mode, the browser first discovers and pairs with the fixed loopback
 companion. The automatic token remains only in page memory. If discovery or
 pairing fails, the centrally managed endpoint becomes the online fallback.
 Hybrid and hosted users never see URL/token inputs or configure the owner's
 model token. Explicit `local` mode retains manual CLI fields for development.
+Deferring installation sets only a `sessionStorage` flag; it does not
+permanently mark setup complete.
 
 Changing a source toggle while capture is already running does not mutate live
 streams. It applies to the next capture.

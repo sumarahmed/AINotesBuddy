@@ -224,6 +224,7 @@ test("desktop connector discovers, pairs, and verifies the local service", async
             apiVersion: 1,
             status: "available",
             browserPairing: true,
+            modelsReady: true,
           };
         },
       };
@@ -281,6 +282,7 @@ test("desktop connector rejects incompatible or manually paired services", async
           apiVersion: 1,
           status: "available",
           browserPairing: false,
+          modelsReady: true,
         };
       },
     }),
@@ -289,6 +291,29 @@ test("desktop connector rejects incompatible or manually paired services", async
   await assert.rejects(
     connector.connect(),
     /does not support automatic website pairing/,
+  );
+});
+
+test("desktop connector rejects an installation without offline models", async () => {
+  const connector = new MeetingAudio.CompanionConnector({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          product: "NotesBuddy Desktop Companion",
+          apiVersion: 1,
+          status: "available",
+          browserPairing: true,
+          modelsReady: false,
+        };
+      },
+    }),
+  });
+
+  await assert.rejects(
+    connector.connect(),
+    /offline models are missing/,
   );
 });
 

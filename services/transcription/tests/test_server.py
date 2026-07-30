@@ -115,6 +115,7 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(response.headers.get("cache-control"), "no-store")
         self.assertEqual(response.json()["status"], "available")
         self.assertFalse(response.json()["browserPairing"])
+        self.assertTrue(response.json()["modelsReady"])
         self.assertNotIn("token", response.text.lower())
 
     def test_automatic_pairing_is_disabled_for_the_manual_cli(self) -> None:

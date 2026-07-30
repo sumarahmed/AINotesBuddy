@@ -589,6 +589,11 @@
           "The running companion does not support automatic website pairing.",
         );
       }
+      if (companion.modelsReady !== true) {
+        throw new Error(
+          "The desktop companion is running, but its offline models are missing. Install the latest model-inclusive Windows release.",
+        );
+      }
       return companion;
     }
 
