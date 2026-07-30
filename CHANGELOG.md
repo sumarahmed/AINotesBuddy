@@ -71,6 +71,10 @@ but does not yet publish semantic-versioned releases.
   actionable Chrome/Edge site-permission recovery guidance
 - Bundle the SoundFile decoder explicitly and wait for the model-inclusive
   packaged self-test process instead of reading a stale PowerShell exit code
+- Start and probe the packaged loopback API during every Windows build so a
+  desktop installer cannot publish with a broken local server runtime
+- Disable console-dependent Uvicorn logging and start the loopback API before
+  initializing the Windows tray so normal GUI launches can bind port 8765
 - Kept unnecessary Torch source, test, and metadata trees out of the Windows
   installer and verified model-inclusive packages during their self-test
 - Decode meeting audio into an in-memory waveform before diarization so the

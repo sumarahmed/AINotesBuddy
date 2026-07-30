@@ -46,10 +46,13 @@ class DesktopUtilityTests(unittest.TestCase):
         self.assertTrue(parsed.empty_engine)
 
     def test_cli_can_require_models_during_packaged_self_test(self) -> None:
-        parsed = parse_arguments(["--self-test", "--require-models"])
+        parsed = parse_arguments(
+            ["--self-test", "--require-models", "--require-server"]
+        )
 
         self.assertTrue(parsed.self_test)
         self.assertTrue(parsed.require_models)
+        self.assertTrue(parsed.require_server)
 
 
 if __name__ == "__main__":
