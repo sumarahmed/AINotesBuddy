@@ -496,6 +496,247 @@
     return true;
   }
 
+  function transcriptUnits(segments) {
+    const units = [];
+    for (const segment of Array.isArray(segments) ? segments : []) {
+      const text = cleanTranscriptText(segment?.text);
+      if (!text) continue;
+      const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];
+      for (const sentence of sentences) {
+        const cleaned = cleanTranscriptText(sentence);
+        if (cleaned) units.push({ text: cleaned, segment });
+      }
+    }
+    return units;
+  }
+
+  function ownerFromSubject(subject, segment) {
+    const cleaned = cleanName(subject, "");
+    const normalized = cleaned.toLowerCase();
+    if (normalized === "i") {
+      return {
+        ownerSpeakerId: cleanName(segment?.speakerId, "") || null,
+        ownerHint: null,
+      };
+    }
+    if (normalized === "you") {
+      return { ownerSpeakerId: null, ownerHint: "You" };
+    }
+    if (normalized === "we") {
+      return { ownerSpeakerId: null, ownerHint: "Team" };
+    }
+    return {
+      ownerSpeakerId: null,
+      ownerHint: cleaned || null,
+    };
+  }
+
+  function actionDueDetails(value) {
+    let text = cleanTranscriptText(value)
+      .replace(/^(?:and|then)\s+/i, "")
+      .replace(/^(?:basically|just)\s+/i, "")
+      .replace(/^to\s+/i, "")
+      .replace(/[.!?]+$/, "")
+      .trim();
+    const duePattern =
+      /\b((?:(?:by|before|on)\s+)?(?:today|tomorrow|tonight|(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month|quarter)|monday|tuesday|wednesday|thursday|friday|saturday|sunday|(?:the\s+)?end\s+of\s+(?:the\s+)?(?:day|week|month|quarter)|\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+[a-z]+))\b/i;
+    const dueMatch = text.match(duePattern);
+    const due = dueMatch
+      ? dueMatch[1].charAt(0).toUpperCase() + dueMatch[1].slice(1)
+      : null;
+    if (dueMatch) {
+      text = `${text.slice(0, dueMatch.index)} ${text.slice(
+        Number(dueMatch.index) + dueMatch[0].length,
+      )}`
+        .replace(/\s+/g, " ")
+        .replace(/\s+(?:and|then)$/i, "")
+        .trim();
+    }
+    text = text.replace(/\s+(?:and|then)$/i, "").trim();
+    if (text.length < 3) return null;
+    return {
+      text: text.charAt(0).toUpperCase() + text.slice(1),
+      due,
+    };
+  }
+
+  function actionCandidate(value, segment, owner) {
+    const details = actionDueDetails(value);
+    if (!details) return null;
+    return {
+      ...details,
+      ownerSpeakerId:
+        owner?.ownerSpeakerId || cleanName(segment?.speakerId, "") || null,
+      ownerHint: owner?.ownerHint || null,
+      sourceText: cleanTranscriptText(segment?.text),
+    };
+  }
+
+  function enumeratedActions(text, segment) {
+    const markerPattern =
+      /\b(?:the\s+)?(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th))\s*(?:(?:action\s+)?(?:one|item))?\s+(?:is|was|will\s+be)\s+(?:basically\s+|just\s+)?(?:to\s+)?/gi;
+    const markers = Array.from(text.matchAll(markerPattern));
+    if (markers.length < 2) return [];
+
+    const context = text.slice(0, markers[0].index);
+    const ownerMatch = context.match(
+      /\b(I|we|you)\s+(?:need(?:s)?\s+to|have\s+to|will|must|should|am\s+going\s+to)\b/i,
+    );
+    const owner = ownerFromSubject(ownerMatch?.[1] || "I", segment);
+    return markers
+      .map((marker, index) => {
+        const end = markers[index + 1]?.index ?? text.length;
+        const value = text
+          .slice(Number(marker.index) + marker[0].length, end)
+          .replace(/\s+(?:and|then)\s*$/i, "")
+          .trim();
+        return actionCandidate(value, segment, owner);
+      })
+      .filter(Boolean);
+  }
+
+  function extractActions(segments) {
+    const actions = [];
+    const add = (candidate) => {
+      if (
+        candidate &&
+        !actions.some(
+          (existing) =>
+            normaliseText(existing.text) === normaliseText(candidate.text),
+        )
+      ) {
+        actions.push(candidate);
+      }
+    };
+
+    for (const { text, segment } of transcriptUnits(segments)) {
+      const enumerated = enumeratedActions(text, segment);
+      if (enumerated.length) {
+        enumerated.forEach(add);
+        continue;
+      }
+
+      const labelled = text.match(
+        /\b(?:action\s+item|to-?do)\s*(?:is|:|-)\s*(?:to\s+)?(.+)/i,
+      );
+      if (labelled) {
+        add(
+          actionCandidate(
+            labelled[1],
+            segment,
+            ownerFromSubject("I", segment),
+          ),
+        );
+        continue;
+      }
+
+      const pronoun = text.match(
+        /\b(I|we|you)\s+(?:need(?:s)?\s+to|have\s+to|will|must|should|am\s+going\s+to|are\s+going\s+to)\s+(.+)/i,
+      );
+      if (pronoun) {
+        add(
+          actionCandidate(
+            pronoun[2],
+            segment,
+            ownerFromSubject(pronoun[1], segment),
+          ),
+        );
+        continue;
+      }
+
+      const named = text.match(
+        /\b([A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2})\s+(?:will|needs?\s+to|has\s+to|must|should|is\s+going\s+to)\s+(.+)/,
+      );
+      if (named) {
+        add(
+          actionCandidate(
+            named[2],
+            segment,
+            ownerFromSubject(named[1], segment),
+          ),
+        );
+        continue;
+      }
+
+      const request = text.match(/^please\s+(.+)/i);
+      if (request) {
+        add(
+          actionCandidate(
+            request[1],
+            segment,
+            ownerFromSubject("You", segment),
+          ),
+        );
+      }
+    }
+    return actions;
+  }
+
+  function extractDecisions(segments) {
+    const decisions = [];
+    const explicitDecision = [
+      /\b(?:we|i|the\s+team)\s+(?:have\s+)?decided\b/i,
+      /\b(?:we|i|the\s+team)\s+(?:have\s+)?agreed\b/i,
+      /\bit\s+(?:was|is)\s+(?:decided|agreed)\b/i,
+      /\bthe\s+decision\s+(?:is|was)\b/i,
+    ];
+    for (const { text } of transcriptUnits(segments)) {
+      if (
+        explicitDecision.some((pattern) => pattern.test(text)) &&
+        !decisions.some(
+          (existing) => normaliseText(existing) === normaliseText(text),
+        )
+      ) {
+        decisions.push(text);
+      }
+    }
+    return decisions;
+  }
+
+  function resolveActionOwner(meeting, action, profile) {
+    if (action.ownerHint === "You") {
+      return cleanName(profile?.name, "You");
+    }
+    if (action.ownerHint) return cleanName(action.ownerHint, "Unassigned");
+    if (action.ownerSpeakerId === "local-user") {
+      return cleanName(profile?.name, "You");
+    }
+    const speaker = (meeting?.speakers || []).find(
+      (item) => item.id === action.ownerSpeakerId,
+    );
+    return cleanName(speaker?.displayName, "Unassigned");
+  }
+
+  function applyExtractiveBrief(meeting, brief, profile) {
+    if (!meeting) return meeting;
+    const existingActions = new Map(
+      (meeting.actions || []).map((action) => [
+        normaliseText(action.text),
+        action,
+      ]),
+    );
+    if (brief) {
+      meeting.overview = brief.overview;
+      meeting.highlights = [...brief.highlights];
+      meeting.decisions = [...brief.decisions];
+      meeting.actions = brief.actions.map((action) => {
+        const existing = existingActions.get(normaliseText(action.text));
+        return {
+          id: existing?.id || createId("action"),
+          text: action.text,
+          owner: resolveActionOwner(meeting, action, profile),
+          done: Boolean(existing?.done),
+          ...(action.due ? { due: action.due } : {}),
+        };
+      });
+    } else {
+      meeting.decisions = [];
+      meeting.actions = [];
+    }
+    meeting.insightVersion = 1;
+    return meeting;
+  }
+
   function buildExtractiveBrief(segments) {
     const uniqueTexts = [];
     for (const segment of Array.isArray(segments) ? segments : []) {
@@ -514,6 +755,8 @@
     return {
       overview: overviewParts.join(" "),
       highlights: uniqueTexts.slice(0, 3),
+      decisions: extractDecisions(segments),
+      actions: extractActions(segments),
     };
   }
 
@@ -876,6 +1119,7 @@
     SPEAKER_COLORS,
     CompanionConnector,
     TranscriptionClient,
+    applyExtractiveBrief,
     applyTranscriptionResult,
     buildExtractiveBrief,
     cleanName,

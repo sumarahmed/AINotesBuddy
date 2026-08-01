@@ -208,6 +208,101 @@ test("builds an extractive brief only from real transcript text", () => {
     brief.overview,
     "The customer approved the revised scope. Jordan will send the final schedule tomorrow.",
   );
+  assert.deepEqual(brief.decisions, []);
+  assert.deepEqual(
+    brief.actions.map(({ text, ownerHint, due }) => ({
+      text,
+      ownerHint,
+      due,
+    })),
+    [
+      {
+        text: "Send the final schedule",
+        ownerHint: "Jordan",
+        due: "Tomorrow",
+      },
+    ],
+  );
+});
+
+test("extracts enumerated transcript actions instead of a generic fallback", () => {
+  const transcript = [
+    {
+      speakerId: "local-user",
+      text: "hey there are two action items that I need to work on the first one is to complete the jdl and the second one is basically to submit it before Monday",
+    },
+  ];
+  const brief = MeetingAudio.buildExtractiveBrief(transcript);
+
+  assert.deepEqual(
+    brief.actions.map(({ text, due, ownerSpeakerId }) => ({
+      text,
+      due,
+      ownerSpeakerId,
+    })),
+    [
+      {
+        text: "Complete the jdl",
+        due: null,
+        ownerSpeakerId: "local-user",
+      },
+      {
+        text: "Submit it",
+        due: "Before Monday",
+        ownerSpeakerId: "local-user",
+      },
+    ],
+  );
+
+  const meeting = {
+    id: "meeting-1",
+    speakers: [
+      {
+        id: "local-user",
+        displayName: "Alex Morgan",
+      },
+    ],
+    actions: [
+      {
+        id: "legacy-review",
+        text: "Review the recording and transcript",
+        owner: "Alex Morgan",
+        done: false,
+      },
+    ],
+  };
+  MeetingAudio.applyExtractiveBrief(meeting, brief, profile);
+
+  assert.deepEqual(
+    meeting.actions.map(({ text, owner, due }) => ({ text, owner, due })),
+    [
+      { text: "Complete the jdl", owner: "Alex Morgan", due: undefined },
+      {
+        text: "Submit it",
+        owner: "Alex Morgan",
+        due: "Before Monday",
+      },
+    ],
+  );
+  assert.equal(
+    meeting.actions.some(
+      (action) => action.text === "Review the recording and transcript",
+    ),
+    false,
+  );
+});
+
+test("only identifies explicit transcript decisions", () => {
+  const brief = MeetingAudio.buildExtractiveBrief([
+    { text: "The customer discussed the revised scope." },
+    { text: "We decided to use the revised scope." },
+    { text: "It was agreed that the release will move to Friday." },
+  ]);
+
+  assert.deepEqual(brief.decisions, [
+    "We decided to use the revised scope.",
+    "It was agreed that the release will move to Friday.",
+  ]);
 });
 
 test("desktop connector discovers, pairs, and verifies the local service", async () => {

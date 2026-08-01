@@ -173,8 +173,13 @@ async function completeOnboarding(
   }
   await page.locator(".home-view").waitFor();
   if (handleCompanion) {
+    const complete = page.locator(
+      "[data-action='complete-companion-setup']",
+    );
     const defer = page.locator("[data-action='defer-companion-setup']");
-    if (await defer.isVisible()) {
+    if (await complete.isVisible()) {
+      await complete.click();
+    } else if (await defer.isVisible()) {
       await defer.click();
     }
   }
@@ -725,6 +730,15 @@ async function runMainWorkflow(browser, baseUrl) {
             text: "This complete transcript sentence is intentionally longer than eighty characters to catch unwanted truncation.",
             confidence: 0.92,
           },
+          {
+            id: "remote-decision",
+            source: "meeting",
+            speakerId: "remote-2",
+            startMs: 3500,
+            endMs: 4300,
+            text: "We decided to launch the pilot on Friday.",
+            confidence: 0.91,
+          },
         ],
       }),
     });
@@ -842,6 +856,33 @@ async function runMainWorkflow(browser, baseUrl) {
       { exact: true },
     )
     .waitFor();
+
+  await page.locator("[data-action='tab'][data-id='summary']").click();
+  await page
+    .locator(".action-list")
+    .getByText("Send the revised proposal", { exact: true })
+    .waitFor();
+  await page
+    .locator(".action-list")
+    .getByText("Review it", { exact: true })
+    .waitFor();
+  await page
+    .locator(".action-list")
+    .getByText("Tomorrow", { exact: true })
+    .waitFor();
+  await page
+    .locator(".decision-list")
+    .getByText("We decided to launch the pilot on Friday.", { exact: true })
+    .waitFor();
+  assert.equal(
+    await page
+      .locator(".action-list")
+      .getByText("Review the recording and transcript", { exact: true })
+      .count(),
+    0,
+    "summary actions must come from the completed transcript",
+  );
+  await page.locator("[data-action='tab'][data-id='transcript']").click();
 
   await page
     .locator("[data-action='focus-speaker'][data-id='remote-1']")

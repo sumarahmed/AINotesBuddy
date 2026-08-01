@@ -29,6 +29,8 @@ The JavaScript tests cover:
 - **You**, detected, renamed, and unknown speaker labels;
 - rename propagation to participants;
 - extractive briefs with no invented text;
+- explicit decision detection plus enumerated/named action extraction, owner
+  resolution, due phrases, and generic-fallback removal;
 - authenticated local multipart client construction;
 - automatic desktop discovery, pairing, token validation, and incompatibility
   rejection;
@@ -203,6 +205,8 @@ Set timing/speaker-count tolerances rather than asserting exact wording.
 - Confirm separate site origins have separate data.
 - Import WAV/MP3 and transcribe it as a mixed-only remote recording.
 - Refresh a brief with no transcript; confirm no brief is fabricated.
+- State two enumerated action items and verify each appears separately; include
+  an explicit `decided` statement and verify it appears under Decisions.
 - Confirm browser live text is explicitly marked as a draft.
 
 ## Responsive and accessibility checks

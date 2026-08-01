@@ -68,7 +68,7 @@ The local profile:
 
 - personalizes the greeting and initials;
 - identifies isolated microphone speech as **You**;
-- supplies the owner for locally created review actions;
+- supplies the owner for explicit first-person commitments in local speech;
 - updates existing local participants/follow-ups when renamed.
 
 It is not authentication. Different browser profiles/devices/origins have

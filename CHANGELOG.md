@@ -57,6 +57,8 @@ but does not yet publish semantic-versioned releases.
 - Transcription API supports either local pairing or anonymous hosted access
   behind the same job/model contract
 - Meeting briefs are extractive and contain only real transcript segment text
+- Decisions and action items are extracted only from explicit transcript
+  language, including enumerated tasks, named owners, and due phrases
 - Profile renames synchronize local speaker metadata and owned follow-ups
 - Imported mixed audio can be sent to the local companion for diarization
 - Home and capture dates now use the browser's current local date and time
@@ -84,6 +86,8 @@ but does not yet publish semantic-versioned releases.
 - Added modern private-network preflight handling for HTTPS-to-loopback pairing
 - Added the persistent warning when a shared meeting stream ends externally
 - Replaced the no-op summary refresh with honest transcript-only extraction
+- Removed generic review actions from recordings/imports and migrate existing
+  meetings to transcript-grounded decisions and action items
 - Opening Settings from mobile navigation now closes the navigation behind it
 - Empty libraries say `No meetings yet` instead of reporting a search mismatch
 - Removed the repeated full-view fade that made recording and option controls
