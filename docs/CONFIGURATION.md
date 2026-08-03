@@ -48,7 +48,7 @@ streams. It applies to the next capture.
 | Runtime transcription mode | `hybrid` | Public non-secret setting in `src/runtime-config.js` |
 | Local companion endpoint | `http://127.0.0.1:8765` | Fixed loopback discovery/API address |
 | Hosted fallback endpoint | Deployment URL | Used when the companion is unavailable |
-| Companion download URL | Latest GitHub Release | Public Windows installer destination |
+| Companion download URL | Versioned GitHub Release `.exe` asset | Direct public Windows installer download |
 | Storage keys | `notesbuddy-profile`, `notesbuddy-meetings`, `notesbuddy-settings`, `notesbuddy-audio` | Namespace isolation in `src/app.js` |
 | IndexedDB schema | Version 1, `recordings` store | Blob persistence in `openAudioDatabase()` |
 | Recorder preference | Opus WebM, WebM, then MP4 | First browser-supported type in `preferredRecordingType()` |
