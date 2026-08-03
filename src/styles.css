@@ -1474,20 +1474,23 @@ kbd {
 }
 
 .capture-source-live__item--recording,
-.capture-source-live__item--ready {
+.capture-source-live__item--ready,
+.capture-source-live__item--detected {
   color: var(--teal-deep);
   background: var(--teal-pale);
   border-color: #bed8d1;
 }
 
-.capture-source-live__item--requesting {
+.capture-source-live__item--requesting,
+.capture-source-live__item--listening {
   color: var(--amber);
   background: var(--amber-soft);
   border-color: #e5d5b4;
 }
 
 .capture-source-live__item--unavailable,
-.capture-source-live__item--ended {
+.capture-source-live__item--ended,
+.capture-source-live__item--silent {
   color: var(--coral-deep);
   background: var(--coral-soft);
   border-color: #efc8bf;
@@ -2610,6 +2613,14 @@ kbd {
   color: var(--teal-deep);
   background: var(--teal-soft);
   border-radius: 999px;
+}
+
+.speaker-roster__help {
+  max-width: 720px;
+  margin: -4px 0 13px;
+  font-size: 9px;
+  line-height: 1.55;
+  color: var(--ink-faint);
 }
 
 .speaker-roster__list {

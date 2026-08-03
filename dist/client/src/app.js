@@ -238,6 +238,8 @@ const state = {
     },
     meetingDisplaySurface: null,
     meetingAudioEnded: false,
+    meetingAudioSignalDetected: false,
+    meetingAudioWarning: "",
     captureStartedAt: null,
   },
 };
@@ -266,6 +268,7 @@ function createEmptyCaptureRuntime() {
     },
     audioContext: null,
     audioNodes: [],
+    meetingSignalMonitor: null,
     captureStartedAt: null,
     captureStartedAtMonotonic: null,
   };
@@ -678,18 +681,18 @@ function captureView() {
                 </button>
               </div>
               <button type="button" class="start-recording" data-action="start-capture"><span>${icon("mic", 20)}</span>Start capture</button>
-              <div class="prototype-note">${icon("shield", 14)}When meeting audio is selected, use the browser share dialog and enable <strong>Share audio</strong>. Video is never recorded or stored.</div>
+              <div class="prototype-note">${icon("shield", 14)}For Teams on the web, share the <strong>Teams tab</strong> and enable <strong>Also share tab audio</strong>. For the Teams desktop app, sharing <strong>Entire Screen</strong> with <strong>Also share system audio</strong> is the most reliable option. Video is never recorded or stored.</div>
             </div>`
           : `<div class="live-workspace">
               <div class="live-meter">
                 <div class="live-meter__top"><div><span class="live-pill"><i></i>Live</span><span>${capture.permission === "granted" ? "Synchronized local recording" : "Capture starting"}</span></div><strong data-capture-clock>${formatTimer(capture.elapsed)}</strong></div>
                 ${waveform(capture.status === "recording", true)}
                 <div class="capture-source-live">
-                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.microphone}" data-source-status="microphone">${icon("mic", 13)}Microphone <b>${escapeHtml(capture.sourceStatus.microphone)}</b></span>
-                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.meeting}" data-source-status="meeting">${icon("headphones", 13)}Meeting <b>${escapeHtml(capture.sourceStatus.meeting)}</b></span>
-                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.mixed}" data-source-status="mixed">${icon("audio", 13)}Mixed <b>${escapeHtml(capture.sourceStatus.mixed)}</b></span>
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.microphone}" data-source-status="microphone">${icon("mic", 13)}Microphone <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.microphone))}</b></span>
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.meeting}" data-source-status="meeting">${icon("headphones", 13)}Meeting <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.meeting))}</b></span>
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.mixed}" data-source-status="mixed">${icon("audio", 13)}Mixed <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.mixed))}</b></span>
                 </div>
-                ${capture.meetingAudioEnded ? `<div class="capture-source-warning">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>` : ""}
+                ${capture.meetingAudioEnded ? `<div class="capture-source-warning" data-meeting-audio-warning="ended">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>` : capture.meetingAudioWarning ? `<div class="capture-source-warning" data-meeting-audio-warning="signal">${icon("headphones", 14)}${escapeHtml(capture.meetingAudioWarning)}</div>` : ""}
               </div>
               <div class="live-transcript">
                 <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span><b data-transcription-label>${capture.transcriptionStatus === "listening" ? "Browser speech" : "Audio recording"}</b></span></div>
@@ -845,6 +848,7 @@ function speakerRoster(meeting) {
   if (!speakers.length) return "";
   return `<section class="speaker-roster">
     <div class="speaker-roster__heading"><div><span class="eyebrow">Speakers</span><h3>Name the voices in this meeting</h3></div><span>${speakers.length} detected</span></div>
+    <p class="speaker-roster__help">Speaker 1 and Speaker 2 are voice groups detected in this recording, not recognised identities. Rename them here after transcription. Short, overlapping, or missing meeting audio can reduce separation accuracy.</p>
     <div class="speaker-roster__list">
       ${speakers
         .map((speaker) => {
@@ -1425,6 +1429,8 @@ function resetCapture() {
     },
     meetingDisplaySurface: null,
     meetingAudioEnded: false,
+    meetingAudioSignalDetected: false,
+    meetingAudioWarning: "",
     captureStartedAt: null,
   };
 }
@@ -1440,6 +1446,7 @@ function stopStream(stream) {
 }
 
 function cancelCaptureRuntime() {
+  stopMeetingAudioSignalMonitor();
   Object.values(captureRuntime.recorders).forEach((recorder) => {
     if (recorder?.state && recorder.state !== "inactive") {
       try {
@@ -1461,6 +1468,14 @@ function cancelCaptureRuntime() {
   captureRuntime = createEmptyCaptureRuntime();
 }
 
+function captureSourceStatusLabel(status) {
+  return {
+    detected: "sound detected",
+    listening: "waiting for sound",
+    silent: "no sound detected",
+  }[status] || status;
+}
+
 function setCaptureSourceStatus(source, value) {
   state.capture.sourceStatus[source] = value;
   const element = app.querySelector(`[data-source-status="${source}"]`);
@@ -1472,16 +1487,110 @@ function setCaptureSourceStatus(source, value) {
     .forEach((className) => element.classList.remove(className));
   element.classList.add(`capture-source-live__item--${value}`);
   const label = element.querySelector("b");
-  if (label) label.textContent = value;
+  if (label) label.textContent = captureSourceStatusLabel(value);
+}
+
+function replaceMeetingAudioWarning(message, kind = "signal") {
+  state.capture.meetingAudioWarning = kind === "ended" ? "" : message;
+  const current = app.querySelector("[data-meeting-audio-warning]");
+  current?.remove();
+  const sources = app.querySelector(".capture-source-live");
+  if (!sources || !message) return;
+  sources.insertAdjacentHTML(
+    "afterend",
+    `<div class="capture-source-warning" data-meeting-audio-warning="${escapeHtml(kind)}">${icon("headphones", 14)}${escapeHtml(message)}</div>`,
+  );
 }
 
 function showMeetingAudioEndedWarning() {
-  const sources = app.querySelector(".capture-source-live");
-  if (!sources || app.querySelector(".capture-source-warning")) return;
-  sources.insertAdjacentHTML(
-    "afterend",
-    `<div class="capture-source-warning">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>`,
+  replaceMeetingAudioWarning(
+    "Meeting audio sharing stopped. Microphone recording is continuing.",
+    "ended",
   );
+}
+
+function meetingAudioTrackHelp(surface) {
+  if (surface === "browser") {
+    return "No Teams tab audio was received. Share the Teams tab and turn on Also share tab audio.";
+  }
+  if (surface === "window") {
+    return "No audio was received from the shared window. For Teams desktop, choose Entire Screen and turn on Also share system audio.";
+  }
+  if (surface === "monitor") {
+    return "No system audio was received. Share the screen again and turn on Also share system audio.";
+  }
+  return "No meeting audio was received. Share the Teams tab or Entire Screen and enable the audio option in the browser dialog.";
+}
+
+function meetingAudioSilenceHelp(surface) {
+  if (surface === "browser") {
+    return "No sound is arriving from the Teams tab. Check that Also share tab audio is on and ask another participant to speak.";
+  }
+  if (surface === "window") {
+    return "No sound is arriving from the Teams window. Stop capture, choose Entire Screen, and turn on Also share system audio.";
+  }
+  return "No meeting sound has been detected. Check the meeting volume and confirm that Also share system audio is on.";
+}
+
+function stopMeetingAudioSignalMonitor() {
+  if (captureRuntime.meetingSignalMonitor) {
+    window.clearInterval(captureRuntime.meetingSignalMonitor);
+    captureRuntime.meetingSignalMonitor = null;
+  }
+}
+
+function startMeetingAudioSignalMonitor(stream) {
+  stopMeetingAudioSignalMonitor();
+  const AudioContextClass =
+    globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!AudioContextClass || !stream?.getAudioTracks?.().length) return;
+  const audioContext =
+    captureRuntime.audioContext || new AudioContextClass();
+  captureRuntime.audioContext = audioContext;
+  const audioOnlyStream = new MediaStream(stream.getAudioTracks());
+  const sourceNode = audioContext.createMediaStreamSource(audioOnlyStream);
+  const analyser = audioContext.createAnalyser();
+  const silentSink = audioContext.createGain();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.35;
+  silentSink.gain.value = 0;
+  sourceNode.connect(analyser);
+  analyser.connect(silentSink);
+  silentSink.connect(audioContext.destination);
+  captureRuntime.audioNodes.push(sourceNode, analyser, silentSink);
+  audioContext.resume?.().catch(() => {});
+
+  const samples = new Uint8Array(analyser.fftSize);
+  const startedAt = performance.now();
+  let warned = false;
+  captureRuntime.meetingSignalMonitor = window.setInterval(() => {
+    if (state.capture.status !== "recording") return;
+    analyser.getByteTimeDomainData(samples);
+    let sumSquares = 0;
+    for (const value of samples) {
+      const normalized = (value - 128) / 128;
+      sumSquares += normalized * normalized;
+    }
+    const rms = Math.sqrt(sumSquares / samples.length);
+    if (rms >= 0.008) {
+      if (!state.capture.meetingAudioSignalDetected) {
+        state.capture.meetingAudioSignalDetected = true;
+        state.capture.meetingAudioWarning = "";
+        setCaptureSourceStatus("meeting", "detected");
+        app.querySelector('[data-meeting-audio-warning="signal"]')?.remove();
+      }
+      return;
+    }
+    if (!warned && performance.now() - startedAt >= 5000) {
+      warned = true;
+      const message = meetingAudioSilenceHelp(
+        state.capture.meetingDisplaySurface,
+      );
+      setCaptureSourceStatus("meeting", "silent");
+      replaceMeetingAudioWarning(message);
+      showToast("No meeting sound detected", message);
+    }
+  }, 200);
 }
 
 function preferredRecordingType() {
@@ -1592,6 +1701,7 @@ async function collectCaptureRecordings() {
 }
 
 async function releaseCaptureRuntime() {
+  stopMeetingAudioSignalMonitor();
   Object.values(captureRuntime.streams).forEach(stopStream);
   captureRuntime.audioNodes.forEach((node) => {
     try {
@@ -1731,6 +1841,8 @@ async function startCapture() {
 
   captureRuntime = createEmptyCaptureRuntime();
   state.capture.meetingAudioEnded = false;
+  state.capture.meetingAudioSignalDetected = false;
+  state.capture.meetingAudioWarning = "";
 
   // Display capture must be invoked from the original click's transient user
   // activation. Microphone permission does not have that constraint, so it is
@@ -1746,19 +1858,23 @@ async function startCapture() {
           suppressLocalAudioPlayback: false,
         },
         systemAudio: "include",
+        windowAudio: "system",
         surfaceSwitching: "include",
         selfBrowserSurface: "exclude",
+        monitorTypeSurfaces: "include",
       });
-      const meetingTracks = displayStream.getAudioTracks();
-      if (!meetingTracks.length) {
-        stopStream(displayStream);
-        throw new Error("The selected surface did not include audio.");
-      }
-      captureRuntime.streams.display = displayStream;
-      captureRuntime.streams.meeting = new MediaStream(meetingTracks);
       state.capture.meetingDisplaySurface =
         displayStream.getVideoTracks()[0]?.getSettings?.().displaySurface ||
         "shared surface";
+      const meetingTracks = displayStream.getAudioTracks();
+      if (!meetingTracks.length) {
+        stopStream(displayStream);
+        throw new Error(
+          meetingAudioTrackHelp(state.capture.meetingDisplaySurface),
+        );
+      }
+      captureRuntime.streams.display = displayStream;
+      captureRuntime.streams.meeting = new MediaStream(meetingTracks);
       state.capture.sourceStatus.meeting = "ready";
       const sharedTrack =
         displayStream.getVideoTracks()[0] || meetingTracks[0];
@@ -1772,6 +1888,7 @@ async function startCapture() {
             return;
           }
           state.capture.meetingAudioEnded = true;
+          stopMeetingAudioSignalMonitor();
           setCaptureSourceStatus("meeting", "ended");
           showMeetingAudioEndedWarning();
           showToast(
@@ -1783,11 +1900,14 @@ async function startCapture() {
       );
     } catch (error) {
       state.capture.sourceStatus.meeting = "unavailable";
+      state.capture.meetingAudioWarning =
+        error?.name === "NotAllowedError"
+          ? "Meeting audio sharing was cancelled or blocked. Start again and choose a Teams tab or Entire Screen with audio enabled."
+          : error?.message ||
+            meetingAudioTrackHelp(state.capture.meetingDisplaySurface);
       showToast(
         "Meeting audio was not shared",
-        state.capture.microphoneOn
-          ? "NotesBuddy will ask for your microphone and continue without the meeting track."
-          : error?.message || "Choose a surface and enable Share audio.",
+        `${state.capture.meetingAudioWarning}${state.capture.microphoneOn ? " Microphone recording will continue." : ""}`,
       );
     }
   }
@@ -1862,7 +1982,8 @@ async function startCapture() {
   try {
     Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
       recorder.start(500);
-      state.capture.sourceStatus[source] = "recording";
+      state.capture.sourceStatus[source] =
+        source === "meeting" ? "listening" : "recording";
     });
   } catch (error) {
     state.capture.status = "idle";
@@ -1883,6 +2004,9 @@ async function startCapture() {
   if (captureRuntime.streams.microphone) startSpeechRecognition();
   startCaptureTimer();
   render();
+  if (captureRuntime.streams.meeting) {
+    startMeetingAudioSignalMonitor(captureRuntime.streams.meeting);
+  }
 }
 
 function pauseCapture() {
@@ -1902,7 +2026,16 @@ function resumeCapture() {
   state.capture.status = "recording";
   Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
     if (recorder.state === "paused") recorder.resume();
-    setCaptureSourceStatus(source, "recording");
+    setCaptureSourceStatus(
+      source,
+      source === "meeting"
+        ? state.capture.meetingAudioSignalDetected
+          ? "detected"
+          : state.capture.meetingAudioWarning
+            ? "silent"
+            : "listening"
+        : "recording",
+    );
   });
   captureRuntime.audioContext?.resume?.().catch(() => {});
   if (captureRuntime.streams.microphone) startSpeechRecognition();

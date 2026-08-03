@@ -63,12 +63,26 @@ function close(server) {
   return new Promise((resolve) => server.close(resolve));
 }
 
-async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
+async function installSyntheticMedia(
+  page,
+  {
+    denyMeeting = false,
+    meetingAudio = true,
+    meetingSignal = true,
+    displaySurface = "window",
+  } = {},
+) {
   await page.addInitScript(
-    ({ shouldDenyMeeting }) => {
+    ({
+      shouldDenyMeeting,
+      shouldIncludeMeetingAudio,
+      shouldEmitMeetingSignal,
+      selectedDisplaySurface,
+    }) => {
       const resources = [];
       const captureCalls = [];
-      const makeAudioStream = (frequency) => {
+      const displayOptions = [];
+      const makeAudioStream = (frequency, gainValue = 0.06) => {
         const AudioContextClass =
           globalThis.AudioContext || globalThis.webkitAudioContext;
         const context = new AudioContextClass();
@@ -76,7 +90,7 @@ async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
         const gain = context.createGain();
         const destination = context.createMediaStreamDestination();
         oscillator.frequency.value = frequency;
-        gain.gain.value = 0.06;
+        gain.gain.value = gainValue;
         oscillator.connect(gain);
         gain.connect(destination);
         oscillator.start();
@@ -87,7 +101,9 @@ async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
         if (shouldDenyMeeting) {
           throw new DOMException("Synthetic share denied", "NotAllowedError");
         }
-        const audio = makeAudioStream(620);
+        const audio = shouldIncludeMeetingAudio
+          ? makeAudioStream(620, shouldEmitMeetingSignal ? 0.06 : 0)
+          : null;
         const canvas = document.createElement("canvas");
         canvas.width = 64;
         canvas.height = 64;
@@ -98,8 +114,17 @@ async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
           context.fillRect(0, 0, canvas.width, canvas.height);
         }, 100);
         const video = canvas.captureStream(8);
+        const videoTrack = video.getVideoTracks()[0];
+        const originalGetSettings = videoTrack.getSettings.bind(videoTrack);
+        Object.defineProperty(videoTrack, "getSettings", {
+          configurable: true,
+          value: () => ({
+            ...originalGetSettings(),
+            displaySurface: selectedDisplaySurface,
+          }),
+        });
         const stream = new MediaStream([
-          ...audio.getAudioTracks(),
+          ...(audio?.getAudioTracks() || []),
           ...video.getVideoTracks(),
         ]);
         resources.push({ stream, timer });
@@ -116,8 +141,9 @@ async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
       });
       Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", {
         configurable: true,
-        value: async () => {
+        value: async (options) => {
           captureCalls.push("meeting");
+          displayOptions.push(options);
           return makeDisplayStream();
         },
       });
@@ -131,6 +157,7 @@ async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
       });
       globalThis.__notesBuddyTestMedia = {
         captureCalls,
+        displayOptions,
         stopDisplay() {
           const tracks =
             globalThis.__notesBuddyDisplayStream?.getTracks() || [];
@@ -155,7 +182,12 @@ async function installSyntheticMedia(page, { denyMeeting = false } = {}) {
         },
       };
     },
-    { shouldDenyMeeting: denyMeeting },
+    {
+      shouldDenyMeeting: denyMeeting,
+      shouldIncludeMeetingAudio: meetingAudio,
+      shouldEmitMeetingSignal: meetingSignal,
+      selectedDisplaySurface: displaySurface,
+    },
   );
 }
 
@@ -738,11 +770,23 @@ async function runMainWorkflow(browser, baseUrl) {
     .locator("[data-source-status='mixed']")
     .filter({ hasText: "recording" })
     .waitFor();
+  await page
+    .locator("[data-source-status='meeting']")
+    .filter({ hasText: "sound detected" })
+    .waitFor();
   assert.deepEqual(
     await page.evaluate(() => globalThis.__notesBuddyTestMedia.captureCalls),
     ["meeting", "microphone"],
     "display capture must be invoked before awaiting microphone permission",
   );
+  const displayOptions = await page.evaluate(
+    () => globalThis.__notesBuddyTestMedia.displayOptions[0],
+  );
+  assert.equal(displayOptions.audio.suppressLocalAudioPlayback, false);
+  assert.equal(displayOptions.systemAudio, "include");
+  assert.equal(displayOptions.windowAudio, "system");
+  assert.equal(displayOptions.monitorTypeSurfaces, "include");
+  assert.equal(displayOptions.selfBrowserSurface, "exclude");
 
   await page.waitForTimeout(400);
   const dockBefore = await page.locator(".recording-dock").boundingBox();
@@ -953,7 +997,7 @@ async function runMeetingOnlyCapture(browser, baseUrl) {
   await page.locator("[data-action='start-capture']").click();
   await page
     .locator("[data-source-status='meeting']")
-    .filter({ hasText: "recording" })
+    .filter({ hasText: "sound detected" })
     .waitFor();
   await page.waitForTimeout(800);
   await page.locator("[data-action='finish-capture']").click();
@@ -970,6 +1014,86 @@ async function runMeetingOnlyCapture(browser, baseUrl) {
     "meeting-only capture should retain meeting and mixed assets",
   );
   await playSelectedRecording(page, "meeting");
+  await context.close();
+}
+
+async function runMeetingTrackMissing(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await installSyntheticMedia(page, {
+    meetingAudio: false,
+    displaySurface: "window",
+  });
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Missing Audio Tester");
+  await page.locator("[data-action='capture']").first().click();
+  await page.locator("[data-action='start-capture']").click();
+  await page
+    .locator("[data-source-status='microphone']")
+    .filter({ hasText: "recording" })
+    .waitFor();
+  await page
+    .getByText(
+      "No audio was received from the shared window. For Teams desktop, choose Entire Screen and turn on Also share system audio.",
+      { exact: true },
+    )
+    .waitFor();
+  await page
+    .locator("[data-source-status='meeting']")
+    .filter({ hasText: "unavailable" })
+    .waitFor();
+  await page.waitForTimeout(700);
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.locator("[data-action='select-recording-source']").count(),
+    2,
+    "a missing meeting track should preserve microphone and mixed audio",
+  );
+  assert.equal(
+    await page
+      .locator("[data-action='select-recording-source'][data-id='meeting']")
+      .count(),
+    0,
+  );
+  await context.close();
+}
+
+async function runSilentMeetingTrack(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await installSyntheticMedia(page, {
+    meetingSignal: false,
+    displaySurface: "window",
+  });
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Silent Audio Tester");
+  await page.locator("[data-action='capture']").first().click();
+  await page.locator("[data-action='start-capture']").click();
+  await page
+    .locator("[data-source-status='meeting']")
+    .filter({ hasText: "waiting for sound" })
+    .waitFor();
+  await page
+    .locator("[data-source-status='meeting']")
+    .filter({ hasText: "no sound detected" })
+    .waitFor({ timeout: 8000 });
+  await page
+    .locator(".capture-source-warning")
+    .filter({
+      hasText:
+        "No sound is arriving from the Teams window. Stop capture, choose Entire Screen, and turn on Also share system audio.",
+    })
+    .waitFor();
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  assert.equal(
+    await page
+      .locator("[data-action='select-recording-source'][data-id='meeting']")
+      .count(),
+    1,
+    "a silent but valid meeting track should remain available for review",
+  );
   await context.close();
 }
 
@@ -1038,13 +1162,15 @@ async function runDirectFileLoad(browser) {
     await runMainWorkflow(browser, baseUrl);
     await runMeetingDeniedFallback(browser, baseUrl);
     await runMeetingOnlyCapture(browser, baseUrl);
+    await runMeetingTrackMissing(browser, baseUrl);
+    await runSilentMeetingTrack(browser, baseUrl);
     await runUnexpectedMeetingStop(browser, baseUrl);
     await runDirectFileLoad(browser);
     await runHostedClientWorkflow(browser, baseUrl);
     await runHybridCompanionWorkflow(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, first-entry installer onboarding and confirmation, synchronized and meeting-only capture, stable controls, three-source persistence/playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, first-entry installer onboarding and confirmation, synchronized and meeting-only capture, system/window audio request hints, live meeting-sound detection, missing/silent meeting-audio guidance, stable controls, three-source persistence/playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();
