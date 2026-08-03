@@ -36,7 +36,8 @@ for speech-to-text and speaker diarization.
 - Word-level cross-channel echo cleanup that preserves local speech while
   keeping leaked meeting speech under its diarized remote speaker
 - Speaker rename, transcript search, copy, and Markdown export
-- Local profile, notes, action items, and extractive transcript brief
+- Local profile, notes, extractive transcript brief, and transcript-grounded
+  decisions/action items with detected owners and due phrases
 - Backward-compatible playback for legacy single-asset meetings
 - Direct `index.html` launch and a dependency-free static client build
 

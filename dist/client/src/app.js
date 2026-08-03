@@ -133,6 +133,13 @@ const initialProfile = normaliseProfile(
 initialMeetings = initialMeetings.map((meeting) =>
   MeetingAudio.ensureMeetingSpeakers(meeting, initialProfile),
 );
+let extractiveInsightsMigrated = false;
+initialMeetings = initialMeetings.map((meeting) => {
+  if (meeting.insightVersion === 1) return meeting;
+  extractiveInsightsMigrated = true;
+  const brief = MeetingAudio.buildExtractiveBrief(meeting.transcript);
+  return MeetingAudio.applyExtractiveBrief(meeting, brief, initialProfile);
+});
 
 const runtimeTranscriptionMode = ["hosted", "hybrid"].includes(
   runtimeConfig.transcriptionMode,
@@ -304,7 +311,10 @@ function save() {
   }
 }
 
-if (storedMeetings.length !== initialMeetings.length) {
+if (
+  storedMeetings.length !== initialMeetings.length ||
+  extractiveInsightsMigrated
+) {
   localStorage.setItem("notesbuddy-meetings", JSON.stringify(initialMeetings));
 }
 
@@ -837,7 +847,7 @@ function summaryView(meeting) {
       </section>
       <section class="summary-section">
         <div class="summary-section__heading action-heading"><span class="section-icon section-icon--coral">${icon("checkCircle", 17)}</span><div><span class="eyebrow">Keep moving</span><h2>Action items</h2></div><span class="item-count">${meeting.actions.filter((action) => !action.done).length} open</span></div>
-        <div class="action-list">${meeting.actions.map((action) => `<button type="button" data-action="toggle-action" data-id="${action.id}" class="${action.done ? "action-item--done" : ""}"><span class="action-check">${action.done ? icon("check", 13) : ""}</span><span class="action-text">${escapeHtml(action.text)}</span><span class="action-owner">${escapeHtml(action.owner)}</span>${action.due ? `<span class="action-due">${escapeHtml(action.due)}</span>` : ""}</button>`).join("")}</div>
+        <div class="action-list">${meeting.actions.length ? meeting.actions.map((action) => `<button type="button" data-action="toggle-action" data-id="${action.id}" class="${action.done ? "action-item--done" : ""}"><span class="action-check">${action.done ? icon("check", 13) : ""}</span><span class="action-text">${escapeHtml(action.text)}</span><span class="action-owner">${escapeHtml(action.owner)}</span>${action.due ? `<span class="action-due">${escapeHtml(action.due)}</span>` : ""}</button>`).join("") : `<div class="action-list__empty">${icon("check", 15)}<span>No explicit action items were identified.</span></div>`}</div>
       </section>
     </div>
     <aside class="meeting-context">
@@ -2443,14 +2453,7 @@ async function finishCapture() {
       : "This meeting contains locally stored audio. Speaker transcription has not run, and NotesBuddy did not generate sample transcript text.",
     highlights,
     decisions: [],
-    actions: [
-      {
-        id: `${id}-review`,
-        text: "Review the recording and transcript",
-        owner: currentUserName(),
-        done: false,
-      },
-    ],
+    actions: [],
     transcript: segments,
     transcription: {
       status: segments.length ? "draft" : "not-requested",
@@ -2460,6 +2463,7 @@ async function finishCapture() {
     },
     notes: "",
   };
+  MeetingAudio.applyExtractiveBrief(meeting, draftBrief, state.profile);
   MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
   state.meetings.unshift(meeting);
   state.selectedMeetingId = id;
@@ -2786,6 +2790,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
             `No speech text was returned by the ${usesHostedTranscription() ? "public service" : "local companion"}.`,
             "No sample or fabricated transcript was added.",
           ];
+    MeetingAudio.applyExtractiveBrief(meeting, brief, state.profile);
     save();
     render();
     showToast(
@@ -2905,14 +2910,8 @@ async function importAudio(file) {
       "No sample or fabricated transcript was generated.",
     ],
     decisions: [],
-    actions: [
-      {
-        id: `${id}-review`,
-        text: "Review and transcribe imported audio",
-        owner: currentUserName(),
-        done: false,
-      },
-    ],
+    actions: [],
+    insightVersion: 1,
     transcript: [],
     transcription: {
       status: "not-requested",
@@ -3163,8 +3162,7 @@ app.addEventListener("click", async (event) => {
     const meeting = selectedMeeting();
     const brief = MeetingAudio.buildExtractiveBrief(meeting?.transcript);
     if (meeting && brief) {
-      meeting.overview = brief.overview;
-      meeting.highlights = brief.highlights;
+      MeetingAudio.applyExtractiveBrief(meeting, brief, state.profile);
       save();
       render();
       showToast(

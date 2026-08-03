@@ -235,8 +235,13 @@ async function completeOnboarding(
   }
   await page.locator(".home-view").waitFor();
   if (handleCompanion) {
+    const complete = page.locator(
+      "[data-action='complete-companion-setup']",
+    );
     const defer = page.locator("[data-action='defer-companion-setup']");
-    if (await defer.isVisible()) {
+    if (await complete.isVisible()) {
+      await complete.click();
+    } else if (await defer.isVisible()) {
       await defer.click();
     }
   }
@@ -1039,6 +1044,15 @@ async function runMainWorkflow(browser, baseUrl) {
             text: "This complete transcript sentence is intentionally longer than eighty characters to catch unwanted truncation.",
             confidence: 0.92,
           },
+          {
+            id: "remote-decision",
+            source: "meeting",
+            speakerId: "remote-2",
+            startMs: 3500,
+            endMs: 4300,
+            text: "We decided to launch the pilot on Friday.",
+            confidence: 0.91,
+          },
         ],
       }),
     });
@@ -1168,6 +1182,33 @@ async function runMainWorkflow(browser, baseUrl) {
       { exact: true },
     )
     .waitFor();
+
+  await page.locator("[data-action='tab'][data-id='summary']").click();
+  await page
+    .locator(".action-list")
+    .getByText("Send the revised proposal", { exact: true })
+    .waitFor();
+  await page
+    .locator(".action-list")
+    .getByText("Review it", { exact: true })
+    .waitFor();
+  await page
+    .locator(".action-list")
+    .getByText("Tomorrow", { exact: true })
+    .waitFor();
+  await page
+    .locator(".decision-list")
+    .getByText("We decided to launch the pilot on Friday.", { exact: true })
+    .waitFor();
+  assert.equal(
+    await page
+      .locator(".action-list")
+      .getByText("Review the recording and transcript", { exact: true })
+      .count(),
+    0,
+    "summary actions must come from the completed transcript",
+  );
+  await page.locator("[data-action='tab'][data-id='transcript']").click();
 
   await page
     .locator("[data-action='focus-speaker'][data-id='remote-1']")
@@ -1424,6 +1465,106 @@ async function runDirectFileLoad(browser) {
   await context.close();
 }
 
+async function runTranscriptInsightMigration(browser, baseUrl) {
+  const context = await browser.newContext();
+  await context.addInitScript(() => {
+    localStorage.setItem(
+      "notesbuddy-profile",
+      JSON.stringify({
+        id: "profile-migration",
+        name: "Syed Ahmed",
+        initials: "SA",
+      }),
+    );
+    localStorage.setItem(
+      "notesbuddy-settings",
+      JSON.stringify({ companionSetupCompleted: true }),
+    );
+    localStorage.setItem(
+      "notesbuddy-meetings",
+      JSON.stringify([
+        {
+          id: "meeting-insight-migration",
+          title: "Action item migration",
+          dateISO: new Date().toISOString(),
+          duration: "1 min",
+          durationSeconds: 60,
+          source: "Microphone",
+          recordingAssets: {},
+          participants: [
+            { name: "Syed Ahmed", initials: "SA", color: "teal" },
+          ],
+          speakers: [
+            {
+              id: "local-user",
+              displayName: "Syed Ahmed",
+              source: "microphone",
+              color: "teal",
+              isLocalUser: true,
+            },
+          ],
+          tags: ["Recorded"],
+          overview: "Legacy summary",
+          highlights: ["Legacy highlight"],
+          decisions: [],
+          actions: [
+            {
+              id: "legacy-review-action",
+              text: "Review the recording and transcript",
+              owner: "Syed Ahmed",
+              done: false,
+            },
+          ],
+          transcript: [
+            {
+              id: "migration-segment",
+              speakerId: "local-user",
+              speaker: "You",
+              source: "microphone",
+              startMs: 0,
+              endMs: 10000,
+              text: "hey there are two action items that I need to work on the first one is to complete the jdl and the second one is basically to submit it before Monday",
+            },
+          ],
+          transcription: { status: "completed" },
+          notes: "",
+        },
+      ]),
+    );
+  });
+  const page = await context.newPage();
+  await page.goto(baseUrl);
+  await page.locator("[data-action='meeting']").first().click();
+  await page
+    .locator(".action-list")
+    .getByText("Complete the jdl", { exact: true })
+    .waitFor();
+  await page
+    .locator(".action-list")
+    .getByText("Submit it", { exact: true })
+    .waitFor();
+  await page
+    .locator(".action-list")
+    .getByText("Before Monday", { exact: true })
+    .waitFor();
+  assert.equal(
+    await page
+      .locator(".action-list")
+      .getByText("Review the recording and transcript", { exact: true })
+      .count(),
+    0,
+  );
+  const migrated = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("notesbuddy-meetings") || "[]").at(0),
+  );
+  assert.equal(migrated.insightVersion, 1);
+  assert.deepEqual(
+    migrated.actions.map((action) => action.text),
+    ["Complete the jdl", "Submit it"],
+  );
+  await context.close();
+}
+
 (async () => {
   const server = staticServer();
   const baseUrl = await listen(server);
@@ -1442,6 +1583,7 @@ async function runDirectFileLoad(browser) {
       ],
     });
     await runMainWorkflow(browser, baseUrl);
+    await runTranscriptInsightMigration(browser, baseUrl);
     await runMeetingDeniedFallback(browser, baseUrl);
     await runMeetingOnlyCapture(browser, baseUrl);
     await runMeetingTrackMissing(browser, baseUrl);

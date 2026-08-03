@@ -271,6 +271,11 @@ existing local speaker metadata and locally owned follow-ups.
 - Empty model results produce an empty transcript.
 - Unknown assignments remain **Unknown speaker**.
 - Extractive briefs contain only complete transcript segment text.
+- Decisions require explicit transcript language such as `decided` or `agreed`.
+- Actions require explicit commitments, requests, named assignments, or
+  enumerated action-item wording; NotesBuddy does not add generic review tasks.
+- Owners are resolved from the speaking segment or a named subject, and due
+  labels are copied from transcript phrases such as `before Monday`.
 - Refreshing a brief with no transcript shows an unavailable message rather
   than inventing content.
 

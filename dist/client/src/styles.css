@@ -2419,6 +2419,23 @@ kbd {
   gap: 7px;
 }
 
+.action-list__empty {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 5px;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 15px;
+  font-size: 11px;
+  background: white;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.action-list__empty svg {
+  color: var(--teal);
+}
+
 .action-list button {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto auto;
