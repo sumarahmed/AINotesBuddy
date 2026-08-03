@@ -56,13 +56,26 @@ For meeting audio:
 
 1. Leave **Meeting audio** enabled.
 2. Press **Start capture**.
-3. Choose the meeting tab, window, or screen in the browser dialog.
-4. Enable the dialog's **Share audio** option.
+3. For **Teams on the web**, choose the Teams tab and enable **Also share tab
+   audio**.
+4. For the **Teams desktop app**, choose **Entire Screen** and enable **Also
+   share system audio**. This is more reliable than selecting only the Teams
+   window when the browser cannot expose window audio.
+5. Ask another participant to speak and confirm the Meeting badge changes from
+   **Waiting for sound** to **Sound detected** before continuing.
 
 The browser temporarily requires a display video track to maintain the share,
 but NotesBuddy never sends it to `MediaRecorder`, stores it, or displays it.
 Meeting-audio availability depends on the browser, operating system, and
-selected surface. Current Chrome or Edge on Windows is recommended.
+selected surface. Current Chrome or Edge on Windows is recommended. NotesBuddy
+requests window/system audio and warns when the browser returns no audio track
+or when the track remains silent for five seconds.
+
+Speaker separation happens after the recording is transcribed. It can group
+distinct voices as **Speaker 1**, **Speaker 2**, and so on, but it cannot learn
+their real names from Teams. Rename those session-local labels after
+transcription. Very short turns, overlapping speech, low volume, and heavily
+compressed meeting audio can still cause two people to be grouped together.
 
 ### Local speaker transcription
 

@@ -47,6 +47,9 @@ streams. It applies to the next capture.
 | IndexedDB schema | Version 1, `recordings` store | Blob persistence in `openAudioDatabase()` |
 | Recorder preference | Opus WebM, WebM, then MP4 | First browser-supported type in `preferredRecordingType()` |
 | Recorder chunk interval | 500 ms | Incremental data without excessive events |
+| Display-audio hints | System audio included; window audio set to system | Encourages Chrome/Edge to expose Teams desktop sound when supported |
+| Meeting signal threshold | RMS 0.008 over 512 samples | Changes the live badge only after actual meeting sound arrives |
+| Meeting silence warning | 5 seconds | Warns early while allowing quiet meetings to keep recording |
 | Default meeting title | `Untitled meeting` | User-editable safe placeholder |
 | Source IDs | `microphone`, `meeting`, `mixed` | Stable storage/API contract |
 | Local speaker ID | `local-user` | Stable **You** attribution |
