@@ -34,6 +34,18 @@ class FakeWhisper:
                     word="agree.",
                     probability=0.96,
                 ),
+                SimpleNamespace(
+                    start=1.05,
+                    end=1.35,
+                    word="Remote",
+                    probability=0.9,
+                ),
+                SimpleNamespace(
+                    start=1.36,
+                    end=1.72,
+                    word="one.",
+                    probability=0.89,
+                ),
             ]
         else:
             words = [

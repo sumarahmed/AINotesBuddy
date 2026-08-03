@@ -7,6 +7,7 @@ from .core import (
     build_transcript,
     collapse_words,
     deduplicate_echo_segments,
+    remove_microphone_echo_words,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "build_transcript",
     "collapse_words",
     "deduplicate_echo_segments",
+    "remove_microphone_echo_words",
 ]

@@ -352,7 +352,7 @@
         const firstIsMicrophone = first.source === "microphone";
         const secondIsMicrophone = second.source === "microphone";
         if (firstIsMicrophone !== secondIsMicrophone) {
-          removed.add(firstIsMicrophone ? secondIndex : firstIndex);
+          removed.add(firstIsMicrophone ? firstIndex : secondIndex);
         } else if (
           (Number(first.confidence) || 0) >=
           (Number(second.confidence) || 0)

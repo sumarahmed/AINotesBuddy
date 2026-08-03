@@ -8,6 +8,28 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.3 - 2026-08-03
+
+### Added
+
+- Word-level microphone/meeting alignment using synchronized timestamps,
+  normalized text, bounded fuzzy matching, and ordered phrase confirmation
+- Regression coverage for partial echo, ASR variation, capture-clock offsets,
+  short-word coincidences, and multiple diarized remote speakers
+
+### Changed
+
+- Cross-source cleanup removes only matched meeting leakage from microphone
+  words, leaving unmatched local speech attributed to **You**
+- Residual whole-segment duplicates now preserve the meeting-output copy and
+  its pyannote speaker assignment instead of preferring the microphone copy
+
+### Fixed
+
+- Teams prompts or remote voices picked up acoustically by the microphone are
+  no longer automatically retained as **You** when the same speech is present
+  on the synchronized meeting-output track
+
 ## 2026.08.2 - 2026-08-03
 
 ### Added

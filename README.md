@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.08.2` (`Year.Month.MinorRelease`)
+**Current version:** `2026.08.3` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -33,6 +33,8 @@ for speech-to-text and speaker diarization.
 - Automatic **You** attribution for the isolated microphone track
 - Session-local **Speaker 1**, **Speaker 2**, and unknown-speaker labels for
   meeting audio
+- Word-level cross-channel echo cleanup that preserves local speech while
+  keeping leaked meeting speech under its diarized remote speaker
 - Speaker rename, transcript search, copy, and Markdown export
 - Local profile, notes, action items, and extractive transcript brief
 - Backward-compatible playback for legacy single-asset meetings

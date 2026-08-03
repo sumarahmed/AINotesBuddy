@@ -1,6 +1,14 @@
 # Meeting audio and speaker diarization plan
 
-Status: implemented and verified on `feature/meeting-audio-diarization`
+Status: implemented and verified
+
+Update for `2026.08.3`: microphone and meeting transcripts are aligned at
+word level using their synchronized timestamps and normalized text. Only an
+ordered, time-local phrase found in both sources is removed from the microphone
+copy. Unmatched microphone words remain **You**; the meeting copy remains on
+the remote track and keeps its pyannote speaker assignment. This avoids both
+the earlier all-or-nothing segment cleanup and false removal of isolated common
+words.
 
 Update for `2026.08.1`: the Windows companion now provides explicit,
 user-started WASAPI loopback capture. The browser share path described below is

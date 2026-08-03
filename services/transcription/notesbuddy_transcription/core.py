@@ -6,6 +6,7 @@ speaker-assignment rules can be tested quickly and deterministically.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Iterable, Sequence
@@ -40,12 +41,184 @@ class AttributedWord:
     confidence: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _EchoToken:
+    """One display token with its share of the source word's time range."""
+
+    word: Word
+    normalized: str
+
+    @property
+    def midpoint_ms(self) -> int:
+        return self.word.start_ms + ((self.word.end_ms - self.word.start_ms) // 2)
+
+
 def _milliseconds(value: int | float) -> int:
     return max(0, int(round(float(value))))
 
 
 def _clean_text(value: object) -> str:
     return " ".join(str(value or "").replace("\x00", "").split())
+
+
+def _normalised_word(value: object) -> str:
+    return "".join(
+        character.casefold()
+        for character in _clean_text(value)
+        if character.isalnum()
+    )
+
+
+def _echo_tokens(words: Iterable[Word]) -> list[_EchoToken]:
+    """Split segment-level STT fallbacks without losing their time range."""
+
+    tokens: list[_EchoToken] = []
+    for word in sorted(words, key=lambda item: (item.start_ms, item.end_ms)):
+        parts = _clean_text(word.text).split()
+        if not parts:
+            continue
+        start_ms = _milliseconds(word.start_ms)
+        end_ms = max(start_ms + len(parts), _milliseconds(word.end_ms))
+        duration_ms = end_ms - start_ms
+        for index, part in enumerate(parts):
+            token_start = start_ms + ((duration_ms * index) // len(parts))
+            token_end = start_ms + ((duration_ms * (index + 1)) // len(parts))
+            token_word = Word(
+                start_ms=token_start,
+                end_ms=max(token_start + 1, token_end),
+                text=part,
+                confidence=word.confidence,
+            )
+            tokens.append(
+                _EchoToken(
+                    word=token_word,
+                    normalized=_normalised_word(part),
+                )
+            )
+    return tokens
+
+
+def _echo_token_matches(first: _EchoToken, second: _EchoToken) -> bool:
+    if not first.normalized or not second.normalized:
+        return False
+    if first.normalized == second.normalized:
+        return True
+    if min(len(first.normalized), len(second.normalized)) < 5:
+        return False
+    return SequenceMatcher(
+        None,
+        first.normalized,
+        second.normalized,
+    ).ratio() >= 0.86
+
+
+def remove_microphone_echo_words(
+    microphone_words: Iterable[Word],
+    meeting_words: Iterable[Word],
+    *,
+    alignment_window_ms: int = 1600,
+) -> list[Word]:
+    """Remove only meeting-output words that leaked into the microphone.
+
+    A pair is eligible only when its text matches and its word midpoints are
+    close on the synchronized capture clocks. Isolated common words are not
+    removed: matches must form a short ordered phrase containing at least two
+    words and eight normalized characters. Unmatched microphone words remain
+    local-user speech, while the meeting stream is never modified here.
+    """
+
+    microphone = _echo_tokens(microphone_words)
+    meeting = _echo_tokens(meeting_words)
+    if not microphone or not meeting:
+        return [token.word for token in microphone]
+
+    meeting_midpoints = [token.midpoint_ms for token in meeting]
+    used_meeting: set[int] = set()
+    matches: list[tuple[int, int]] = []
+    for microphone_index, microphone_token in enumerate(microphone):
+        lower = bisect_left(
+            meeting_midpoints,
+            microphone_token.midpoint_ms - alignment_window_ms,
+        )
+        upper = bisect_right(
+            meeting_midpoints,
+            microphone_token.midpoint_ms + alignment_window_ms,
+        )
+        candidates = [
+            meeting_index
+            for meeting_index in range(lower, upper)
+            if meeting_index not in used_meeting
+            and _echo_token_matches(microphone_token, meeting[meeting_index])
+        ]
+        if not candidates:
+            continue
+        meeting_index = min(
+            candidates,
+            key=lambda index: (
+                0
+                if meeting[index].normalized == microphone_token.normalized
+                else 1,
+                abs(meeting[index].midpoint_ms - microphone_token.midpoint_ms),
+                index,
+            ),
+        )
+        used_meeting.add(meeting_index)
+        matches.append((microphone_index, meeting_index))
+
+    echo_microphone_indices: set[int] = set()
+    phrase: list[tuple[int, int]] = []
+
+    def accept_phrase() -> None:
+        if len(phrase) < 2:
+            return
+        character_count = sum(
+            len(microphone[microphone_index].normalized)
+            for microphone_index, _meeting_index in phrase
+        )
+        if character_count < 8:
+            return
+        echo_microphone_indices.update(
+            microphone_index for microphone_index, _meeting_index in phrase
+        )
+
+    for pair in matches:
+        if phrase:
+            previous_microphone, previous_meeting = phrase[-1]
+            microphone_gap = pair[0] - previous_microphone
+            meeting_gap = pair[1] - previous_meeting
+            microphone_time_gap = (
+                microphone[pair[0]].midpoint_ms
+                - microphone[previous_microphone].midpoint_ms
+            )
+            meeting_time_gap = (
+                meeting[pair[1]].midpoint_ms
+                - meeting[previous_meeting].midpoint_ms
+            )
+            previous_clock_offset = (
+                microphone[previous_microphone].midpoint_ms
+                - meeting[previous_meeting].midpoint_ms
+            )
+            clock_offset = (
+                microphone[pair[0]].midpoint_ms
+                - meeting[pair[1]].midpoint_ms
+            )
+            if not (
+                1 <= microphone_gap <= 3
+                and 1 <= meeting_gap <= 3
+                and 0 <= microphone_time_gap <= 2500
+                and 0 <= meeting_time_gap <= 2500
+                and abs(clock_offset - previous_clock_offset) <= 500
+            ):
+                accept_phrase()
+                phrase = []
+        phrase.append(pair)
+    accept_phrase()
+
+    return [
+        token.word
+        for index, token in enumerate(microphone)
+        if index not in echo_microphone_indices
+    ]
 
 
 def _intersection_ms(
@@ -282,7 +455,7 @@ def _segment_overlap_ratio(first: dict, second: dict) -> float:
 
 
 def deduplicate_echo_segments(segments: Iterable[dict]) -> list[dict]:
-    """Remove cross-source near-duplicates, preferring isolated microphone."""
+    """Remove residual cross-source duplicates, preserving meeting identity."""
 
     ordered = sorted(
         (dict(segment) for segment in segments if _clean_text(segment.get("text"))),
@@ -313,10 +486,10 @@ def deduplicate_echo_segments(segments: Iterable[dict]) -> list[dict]:
             if similarity < 0.82:
                 continue
             if first.get("source") == "microphone":
-                removed.add(second_index)
-            elif second.get("source") == "microphone":
                 removed.add(first_index)
                 break
+            elif second.get("source") == "microphone":
+                removed.add(second_index)
             elif (first.get("confidence") or 0) >= (
                 second.get("confidence") or 0
             ):
@@ -337,8 +510,13 @@ def build_transcript(
 ) -> list[dict]:
     """Build one clock-ordered transcript from isolated capture sources."""
 
+    normalized_meeting_words = list(meeting_words)
+    cleaned_microphone_words = remove_microphone_echo_words(
+        microphone_words,
+        normalized_meeting_words,
+    )
     combined = [
-        *microphone_segments(microphone_words),
-        *meeting_segments(meeting_words, meeting_turns),
+        *microphone_segments(cleaned_microphone_words),
+        *meeting_segments(normalized_meeting_words, meeting_turns),
     ]
     return deduplicate_echo_segments(combined)
