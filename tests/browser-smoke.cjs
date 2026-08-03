@@ -100,6 +100,7 @@ async function installSyntheticMedia(
     meetingAudio = true,
     meetingSignal = true,
     displaySurface = "window",
+    speechRecognition = false,
   } = {},
 ) {
   await page.addInitScript(
@@ -108,10 +109,13 @@ async function installSyntheticMedia(
       shouldIncludeMeetingAudio,
       shouldEmitMeetingSignal,
       selectedDisplaySurface,
+      shouldEnableSpeechRecognition,
     }) => {
       const resources = [];
       const captureCalls = [];
       const displayOptions = [];
+      let meetingGain = null;
+      let activeRecognition = null;
       const makeAudioStream = (frequency, gainValue = 0.06) => {
         const AudioContextClass =
           globalThis.AudioContext || globalThis.webkitAudioContext;
@@ -121,6 +125,7 @@ async function installSyntheticMedia(
         const destination = context.createMediaStreamDestination();
         oscillator.frequency.value = frequency;
         gain.gain.value = gainValue;
+        if (frequency === 620) meetingGain = gain;
         oscillator.connect(gain);
         gain.connect(destination);
         oscillator.start();
@@ -177,17 +182,46 @@ async function installSyntheticMedia(
           return makeDisplayStream();
         },
       });
+      class SyntheticSpeechRecognition {
+        start() {
+          activeRecognition = this;
+          queueMicrotask(() => this.onstart?.());
+        }
+
+        stop() {
+          if (activeRecognition === this) activeRecognition = null;
+          this.onend?.();
+        }
+
+        abort() {
+          this.stop();
+        }
+      }
+      const RecognitionClass = shouldEnableSpeechRecognition
+        ? SyntheticSpeechRecognition
+        : undefined;
       Object.defineProperty(globalThis, "SpeechRecognition", {
         configurable: true,
-        value: undefined,
+        value: RecognitionClass,
       });
       Object.defineProperty(globalThis, "webkitSpeechRecognition", {
         configurable: true,
-        value: undefined,
+        value: RecognitionClass,
       });
       globalThis.__notesBuddyTestMedia = {
         captureCalls,
         displayOptions,
+        setMeetingSignal(enabled) {
+          if (meetingGain) meetingGain.gain.value = enabled ? 0.06 : 0;
+        },
+        emitSpeech(text, isFinal = true) {
+          if (!activeRecognition) {
+            throw new Error("Synthetic speech recognition is not active.");
+          }
+          const result = [{ transcript: text, confidence: 0.96 }];
+          result.isFinal = isFinal;
+          activeRecognition.onresult?.({ resultIndex: 0, results: [result] });
+        },
         stopDisplay() {
           const tracks =
             globalThis.__notesBuddyDisplayStream?.getTracks() || [];
@@ -217,6 +251,7 @@ async function installSyntheticMedia(
       shouldIncludeMeetingAudio: meetingAudio,
       shouldEmitMeetingSignal: meetingSignal,
       selectedDisplaySurface: displaySurface,
+      shouldEnableSpeechRecognition: speechRecognition,
     },
   );
 }
@@ -1451,6 +1486,98 @@ async function runUnexpectedMeetingStop(browser, baseUrl) {
   await context.close();
 }
 
+async function runLiveGuestAttribution(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await installSyntheticMedia(page, {
+    meetingSignal: false,
+    speechRecognition: true,
+  });
+  await page.route("**/src/runtime-config.js", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript; charset=utf-8",
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.5", transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
+    });
+  });
+
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Live Identity Tester");
+  await page.locator("[data-action='capture']").first().click();
+  await page.locator("[data-action='start-capture']").click();
+  await page.getByText("You + Guest draft", { exact: true }).waitFor();
+
+  await page.evaluate(() =>
+    globalThis.__notesBuddyTestMedia.emitSpeech(
+      "I will open the agenda.",
+    ),
+  );
+  const localRow = page
+    .locator(".transcript-row")
+    .filter({ hasText: "I will open the agenda." });
+  await localRow.getByText("You", { exact: true }).waitFor();
+  assert.equal(
+    await localRow.locator(".provisional-speaker-badge").count(),
+    0,
+    "microphone-only words should remain You",
+  );
+
+  await page.evaluate(() =>
+    globalThis.__notesBuddyTestMedia.setMeetingSignal(true),
+  );
+  await page
+    .locator("[data-source-status='meeting']")
+    .filter({ hasText: "sound detected" })
+    .waitFor({ timeout: 5000 });
+  await page.getByText("Guest speaking", { exact: true }).waitFor();
+  await page.evaluate(() =>
+    globalThis.__notesBuddyTestMedia.emitSpeech(
+      "Can you share the report",
+      false,
+    ),
+  );
+  const interim = page.locator(".interim-transcript");
+  await interim.getByText("Guest", { exact: true }).waitFor();
+  await interim.getByText("draft", { exact: true }).waitFor();
+
+  await page.evaluate(() =>
+    globalThis.__notesBuddyTestMedia.emitSpeech(
+      "Can you share the report?",
+    ),
+  );
+  const guestRow = page
+    .locator(".transcript-row")
+    .filter({ hasText: "Can you share the report?" });
+  await guestRow.getByText("Guest", { exact: true }).waitFor();
+  await guestRow.getByText("draft", { exact: true }).waitFor();
+
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("notesbuddy-meetings") || "[]")[0],
+  );
+  assert.deepEqual(
+    saved.transcript.map(({ speakerId, source, provisional }) => ({
+      speakerId,
+      source,
+      provisional: Boolean(provisional),
+    })),
+    [
+      {
+        speakerId: "local-user",
+        source: "microphone",
+        provisional: false,
+      },
+      {
+        speakerId: "remote-guest",
+        source: "meeting",
+        provisional: true,
+      },
+    ],
+  );
+  await context.close();
+}
+
 async function runLegacyInsightMigration(browser, baseUrl) {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -1584,6 +1711,7 @@ async function runDirectFileLoad(browser) {
     await runMeetingTrackMissing(browser, baseUrl);
     await runSilentMeetingTrack(browser, baseUrl);
     await runUnexpectedMeetingStop(browser, baseUrl);
+    await runLiveGuestAttribution(browser, baseUrl);
     await runLegacyInsightMigration(browser, baseUrl);
     await runDirectFileLoad(browser);
     await runHostedClientWorkflow(browser, baseUrl);
@@ -1591,7 +1719,7 @@ async function runDirectFileLoad(browser) {
     await runExistingUserUpdateNotification(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, signal detection, pause/resume, stable controls, source persistence/default playback, transcript-grounded insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, live You/Guest draft attribution, signal detection, pause/resume, stable controls, source persistence/default playback, transcript-grounded insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

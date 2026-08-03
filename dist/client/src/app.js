@@ -1,8 +1,11 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.4");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.5");
 const SUMMARY_VERSION = 2;
+const MEETING_ACTIVITY_THRESHOLD = 0.008;
+const MEETING_ACTIVITY_LEAD_MS = 250;
+const MEETING_ACTIVITY_HANGOVER_MS = 900;
 
 if (!MeetingAudio) {
   throw new Error("NotesBuddy meeting-audio module failed to load.");
@@ -302,6 +305,7 @@ const state = {
     elapsed: 0,
     segments: [],
     interimTranscript: "",
+    interimSpeakerId: null,
     transcriptionStatus: "idle",
     microphoneOn: true,
     systemAudioOn: true,
@@ -316,6 +320,7 @@ const state = {
     meetingDeviceName: null,
     meetingAudioEnded: false,
     meetingAudioSignalDetected: false,
+    meetingAudioCurrentlyActive: false,
     meetingAudioWarning: "",
     captureStartedAt: null,
   },
@@ -351,6 +356,10 @@ function createEmptyCaptureRuntime() {
     companionCaptureClient: null,
     captureStartedAt: null,
     captureStartedAtMonotonic: null,
+    totalPausedMs: 0,
+    pausedAtMonotonic: null,
+    meetingActivitySpans: [],
+    meetingActivityLastDetectedAtMs: null,
   };
 }
 
@@ -811,7 +820,7 @@ function captureView() {
                 ${capture.meetingAudioEnded ? `<div class="capture-source-warning" data-meeting-audio-warning="ended">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>` : capture.meetingAudioWarning ? `<div class="capture-source-warning" data-meeting-audio-warning="signal">${icon("headphones", 14)}${escapeHtml(capture.meetingAudioWarning)}</div>` : ""}
               </div>
               <div class="live-transcript">
-                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span><b data-transcription-label>${capture.transcriptionStatus === "listening" ? "Browser speech" : "Audio recording"}</b></span></div>
+                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span><b data-transcription-label>${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "You + Guest draft" : "Browser speech" : "Audio recording"}</b></span></div>
                 <div class="live-transcript__scroll" data-live-transcript>${liveTranscriptMarkup(capture)}</div>
               </div>
             </div>`
@@ -834,10 +843,25 @@ function captureView() {
   </main>`;
 }
 
+function liveDraftSpeaker(speakerId) {
+  return speakerId === "remote-guest"
+    ? { name: "Guest", initials: "G", color: "violet", provisional: true }
+    : {
+        name: "You",
+        initials: currentUserInitials(),
+        color: "teal",
+        provisional: false,
+      };
+}
+
 function liveTranscriptMarkup(capture) {
+  const interimSpeaker = liveDraftSpeaker(capture.interimSpeakerId);
+  const waitingForGuestWords =
+    capture.meetingAudioCurrentlyActive && !capture.interimTranscript;
   return `${capture.segments.map(transcriptRow).join("")}
-    ${capture.interimTranscript ? `<div class="interim-transcript">${icon("audio", 18)}<span>${escapeHtml(capture.interimTranscript)}</span></div>` : ""}
-    ${capture.segments.length || capture.interimTranscript ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? "Listening for your voice…" : "Recording audio — live speech text is unavailable in this browser."}</div>`}`;
+    ${capture.interimTranscript ? `<div class="interim-transcript">${avatar(interimSpeaker.initials, interimSpeaker.color)}<div><div class="interim-transcript__speaker"><strong>${interimSpeaker.name}</strong>${interimSpeaker.provisional ? "<span>draft</span>" : ""}</div><p>${escapeHtml(capture.interimTranscript)}</p></div></div>` : ""}
+    ${waitingForGuestWords ? `<div class="guest-speaking-state">${icon("audio", 18)}<span><strong>Guest speaking</strong><small>Matching meeting audio with incoming words…</small></span></div>` : ""}
+    ${capture.segments.length || capture.interimTranscript || waitingForGuestWords ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "Listening for you and meeting guests…" : "Listening for your voice…" : "Recording audio — live speech text is unavailable in this browser."}</div>`}`;
 }
 
 function updateCaptureRuntimeUI({ transcript = false } = {}) {
@@ -849,7 +873,9 @@ function updateCaptureRuntimeUI({ transcript = false } = {}) {
   if (transcriptionLabel) {
     transcriptionLabel.textContent =
       state.capture.transcriptionStatus === "listening"
-        ? "Browser speech"
+        ? state.capture.systemAudioOn
+          ? "You + Guest draft"
+          : "Browser speech"
         : "Audio recording";
   }
   if (transcript) {
@@ -887,9 +913,12 @@ function transcriptRow(
   const speakerControl = canRenameFromLabel
     ? `<button type="button" class="transcript-speaker-button" data-action="focus-speaker" data-id="${escapeHtml(segment.speakerId)}" data-speaker-label-id="${escapeHtml(segment.speakerId)}" aria-label="Rename ${escapeHtml(speakerName)}">${escapeHtml(speakerName)}</button>`
     : `<strong data-speaker-label-id="${escapeHtml(segment.speakerId || "")}">${escapeHtml(speakerName)}</strong>`;
+  const provisionalLabel = segment.provisional
+    ? '<span class="provisional-speaker-badge">draft</span>'
+    : "";
   return `<div class="transcript-row ${documentMode ? "transcript-row--document" : ""}">
     ${avatar(segment.initials, segment.color)}
-    <div><div class="transcript-row__meta">${speakerControl}${timestampControl}</div><p>${escapeHtml(segment.text)}</p></div>
+    <div><div class="transcript-row__meta">${speakerControl}${provisionalLabel}${timestampControl}</div><p>${escapeHtml(segment.text)}</p></div>
   </div>`;
 }
 
@@ -1173,7 +1202,7 @@ function settingsPanel() {
         <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
       </section>
       ${transcriptionSettings}
-      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised microphone speech as a draft; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
+      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
   </div>`;
@@ -1576,6 +1605,7 @@ function resetCapture() {
     elapsed: 0,
     segments: [],
     interimTranscript: "",
+    interimSpeakerId: null,
     transcriptionStatus: "idle",
     microphoneOn: true,
     systemAudioOn: state.settings.systemAudio,
@@ -1590,6 +1620,7 @@ function resetCapture() {
     meetingDeviceName: null,
     meetingAudioEnded: false,
     meetingAudioSignalDetected: false,
+    meetingAudioCurrentlyActive: false,
     meetingAudioWarning: "",
     captureStartedAt: null,
   };
@@ -1705,6 +1736,57 @@ function meetingAudioSilenceHelp(surface) {
   return "No meeting sound has been detected. Check the meeting volume and confirm that Also share system audio is on.";
 }
 
+function captureClockMs() {
+  if (captureRuntime.captureStartedAtMonotonic === null) {
+    return Math.max(0, Number(state.capture.elapsed) || 0) * 1000;
+  }
+  const now = performance.now();
+  const currentPauseMs = captureRuntime.pausedAtMonotonic === null
+    ? 0
+    : Math.max(0, now - captureRuntime.pausedAtMonotonic);
+  return Math.max(
+    0,
+    now -
+      captureRuntime.captureStartedAtMonotonic -
+      captureRuntime.totalPausedMs -
+      currentPauseMs,
+  );
+}
+
+function setMeetingAudioCurrentlyActive(active) {
+  const next = Boolean(active);
+  if (state.capture.meetingAudioCurrentlyActive === next) return;
+  state.capture.meetingAudioCurrentlyActive = next;
+  updateCaptureRuntimeUI({ transcript: true });
+}
+
+function recordMeetingAudioActivity(active, atMs = captureClockMs()) {
+  const safeAtMs = Math.max(0, Number(atMs) || 0);
+  if (active && state.capture.status === "recording") {
+    const spans = captureRuntime.meetingActivitySpans;
+    const nextStartMs = Math.max(0, safeAtMs - MEETING_ACTIVITY_LEAD_MS);
+    const nextEndMs = safeAtMs + MEETING_ACTIVITY_HANGOVER_MS;
+    const previous = spans.at(-1);
+    if (previous && nextStartMs <= previous.endMs + MEETING_ACTIVITY_LEAD_MS) {
+      previous.endMs = Math.max(previous.endMs, nextEndMs);
+    } else {
+      spans.push({ startMs: nextStartMs, endMs: nextEndMs });
+    }
+    captureRuntime.meetingActivityLastDetectedAtMs = safeAtMs;
+  }
+  const lastDetectedAtMs = captureRuntime.meetingActivityLastDetectedAtMs;
+  setMeetingAudioCurrentlyActive(
+    state.capture.status === "recording" &&
+      lastDetectedAtMs !== null &&
+      safeAtMs - lastDetectedAtMs <= MEETING_ACTIVITY_HANGOVER_MS,
+  );
+}
+
+function clearCurrentMeetingAudioActivity() {
+  captureRuntime.meetingActivityLastDetectedAtMs = null;
+  setMeetingAudioCurrentlyActive(false);
+}
+
 function stopMeetingAudioSignalMonitor() {
   if (captureRuntime.meetingSignalMonitor) {
     window.clearInterval(captureRuntime.meetingSignalMonitor);
@@ -1714,6 +1796,7 @@ function stopMeetingAudioSignalMonitor() {
     window.clearInterval(captureRuntime.companionStatusTimer);
     captureRuntime.companionStatusTimer = null;
   }
+  clearCurrentMeetingAudioActivity();
 }
 
 function startMeetingAudioSignalMonitor(stream) {
@@ -1749,7 +1832,9 @@ function startMeetingAudioSignalMonitor(stream) {
       sumSquares += normalized * normalized;
     }
     const rms = Math.sqrt(sumSquares / samples.length);
-    if (rms >= 0.008) {
+    const signalActive = rms >= MEETING_ACTIVITY_THRESHOLD;
+    recordMeetingAudioActivity(signalActive);
+    if (signalActive) {
       if (!state.capture.meetingAudioSignalDetected) {
         state.capture.meetingAudioSignalDetected = true;
         state.capture.meetingAudioWarning = "";
@@ -1793,6 +1878,10 @@ function startCompanionMeetingAudioStatusMonitor() {
       if (status.status === "failed") {
         throw new Error(status.error || "Windows audio capture stopped.");
       }
+      recordMeetingAudioActivity(
+        Number(status.level) >= MEETING_ACTIVITY_THRESHOLD,
+        status.durationMs,
+      );
       if (status.signalDetected) {
         state.capture.meetingAudioSignalDetected = true;
         state.capture.meetingAudioWarning = "";
@@ -2037,34 +2126,57 @@ function startSpeechRecognition() {
   };
   recognition.onresult = (event) => {
     let interim = "";
+    let interimSpeakerId = null;
     for (let index = event.resultIndex; index < event.results.length; index += 1) {
       const result = event.results[index];
       const text = result[0]?.transcript?.trim();
       if (!text) continue;
       if (result.isFinal) {
-        const endMs = state.capture.elapsed * 1000;
+        const endMs = captureClockMs();
+        const estimatedDurationMs = Math.min(
+          6000,
+          Math.max(800, text.split(/\s+/).length * 420),
+        );
+        const startMs = Math.max(0, endMs - estimatedDurationMs);
+        const draftSpeaker = MeetingAudio.provisionalDraftSpeaker({
+          startMs,
+          endMs,
+          meetingActivitySpans: captureRuntime.meetingActivitySpans,
+        });
         state.capture.segments.push({
           id: createId("speech"),
-          speakerId: "local-user",
-          speaker: "You",
-          initials: currentUserInitials(),
-          color: "teal",
+          speakerId: draftSpeaker.speakerId,
+          speaker: draftSpeaker.speaker,
+          initials:
+            draftSpeaker.speakerId === "local-user"
+              ? currentUserInitials()
+              : draftSpeaker.initials,
+          color: draftSpeaker.color,
           timestamp: formatTimer(state.capture.elapsed),
-          startMs: Math.max(0, endMs - 2500),
+          startMs,
           endMs,
-          source: "microphone",
+          source: draftSpeaker.source,
           text,
           isDraft: true,
+          provisional: draftSpeaker.provisional,
         });
       } else {
         interim = `${interim} ${text}`.trim();
+        const endMs = captureClockMs();
+        interimSpeakerId = MeetingAudio.provisionalDraftSpeaker({
+          startMs: Math.max(0, endMs - 1400),
+          endMs,
+          meetingActivitySpans: captureRuntime.meetingActivitySpans,
+        }).speakerId;
       }
     }
     state.capture.interimTranscript = interim;
+    state.capture.interimSpeakerId = interim ? interimSpeakerId : null;
     updateCaptureRuntimeUI({ transcript: true });
   };
   recognition.onerror = (event) => {
     state.capture.interimTranscript = "";
+    state.capture.interimSpeakerId = null;
     if (event.error === "no-speech" || event.error === "aborted") return;
     state.capture.transcriptionStatus = "unavailable";
     updateCaptureRuntimeUI({ transcript: true });
@@ -2124,8 +2236,10 @@ async function startCapture() {
   }
 
   captureRuntime = createEmptyCaptureRuntime();
+  state.capture.interimSpeakerId = null;
   state.capture.meetingAudioEnded = false;
   state.capture.meetingAudioSignalDetected = false;
+  state.capture.meetingAudioCurrentlyActive = false;
   state.capture.meetingAudioWarning = "";
   state.capture.meetingCaptureMode = null;
   state.capture.meetingDeviceName = null;
@@ -2334,7 +2448,9 @@ async function startCapture() {
 
 async function pauseCapture() {
   if (state.capture.status !== "recording") return;
+  captureRuntime.pausedAtMonotonic = performance.now();
   state.capture.status = "paused";
+  clearCurrentMeetingAudioActivity();
   clearInterval(captureTimer);
   stopSpeechRecognition();
   Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
@@ -2363,6 +2479,13 @@ async function pauseCapture() {
 
 async function resumeCapture() {
   if (state.capture.status !== "paused") return;
+  if (captureRuntime.pausedAtMonotonic !== null) {
+    captureRuntime.totalPausedMs += Math.max(
+      0,
+      performance.now() - captureRuntime.pausedAtMonotonic,
+    );
+    captureRuntime.pausedAtMonotonic = null;
+  }
   state.capture.status = "recording";
   Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
     if (recorder.state === "paused") recorder.resume();
@@ -2412,6 +2535,8 @@ async function finishCapture() {
   stopSpeechRecognition();
   state.capture.status = "processing";
   state.capture.interimTranscript = "";
+  state.capture.interimSpeakerId = null;
+  state.capture.meetingAudioCurrentlyActive = false;
   const title = state.capture.title.trim() || "Untitled meeting";
   const elapsed = state.capture.elapsed;
   const segments = structuredClone(state.capture.segments);

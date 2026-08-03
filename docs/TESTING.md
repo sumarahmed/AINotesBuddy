@@ -216,6 +216,13 @@ Set timing/speaker-count tolerances rather than asserting exact wording.
   is replaced by transcript-grounded results while completed matching actions
   remain completed.
 - Confirm browser live text is explicitly marked as a draft.
+- With meeting output silent, emit microphone speech and confirm the live row is
+  **You** with no provisional badge.
+- Make meeting output active, confirm **Guest speaking**, and verify returned
+  live words are labeled **Guest / draft**.
+- Process that meeting and confirm the provisional `remote-guest` row is
+  replaced by pyannote `remote-1`, `remote-2`, and so on rather than retained or
+  duplicated.
 
 ## Responsive and accessibility checks
 

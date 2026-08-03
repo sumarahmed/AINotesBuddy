@@ -92,7 +92,8 @@ Owns:
 - template rendering and event delegation;
 - microphone, companion-loopback, and display-fallback permission flow;
 - coordinated browser `MediaRecorder` instances plus companion WAV transfer;
-- optional browser speech-recognition draft;
+- optional browser speech-recognition draft with timestamp-aligned provisional
+  **You**/**Guest** attribution;
 - IndexedDB storage and `localStorage` metadata;
 - audio hydration, playback, seeking, source download;
 - transcription job lifecycle and cancellation;
@@ -133,13 +134,21 @@ and validated against source by `npm test`.
    a mixed Web Audio stream; companion capture preserves separate microphone
    and Windows-output tracks.
 5. Start browser recorders together and collect chunks every 500 ms. Poll the
-   companion for real output-signal status.
-6. Pause/resume browser recorders, mixer, and companion capture together.
-7. On finish, stop browser recorders and download the companion WAV before
+   companion for current output level, or analyze the browser meeting track,
+   and merge active samples into capture-clock meeting-activity spans.
+6. Label browser speech outside those spans as **You** and overlapping speech
+   as provisional **Guest**. This is source/timing attribution, not biometrics.
+7. Pause/resume browser recorders, mixer, and companion capture together.
+8. On finish, stop browser recorders and download the companion WAV before
    stopping local tracks. The companion deletes its temporary file after the
    response.
-8. Persist each non-empty Blob independently, prefer Windows output for playback
+9. Persist each non-empty Blob independently, prefer Windows output for playback
    when no mixed track exists, then store the meeting/source metadata.
+
+Final transcription is authoritative: `applyTranscriptionResult()` replaces
+the whole capture-time draft and roster. It never appends pyannote speakers to
+the provisional **Guest**, so post-processing produces one reconciled timeline
+without duplicate rows.
 
 If companion or display capture fails, microphone capture continues.
 If the user ends sharing during a meeting, the UI marks the meeting source

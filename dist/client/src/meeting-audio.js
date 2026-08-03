@@ -87,6 +87,47 @@
       : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
 
+  function provisionalDraftSpeaker({
+    startMs = 0,
+    endMs = startMs,
+    meetingActivitySpans = [],
+  } = {}) {
+    const safeStartMs = Math.max(0, Number(startMs) || 0);
+    const safeEndMs = Math.max(safeStartMs, Number(endMs) || safeStartMs);
+    const alignmentStartMs = Math.max(safeStartMs, safeEndMs - 1400) - 250;
+    const alignmentEndMs = safeEndMs + 250;
+    const meetingWasActive = (Array.isArray(meetingActivitySpans)
+      ? meetingActivitySpans
+      : []
+    ).some((span) => {
+      const spanStartMs = Math.max(0, Number(span?.startMs) || 0);
+      const spanEndMs = Math.max(
+        spanStartMs,
+        Number(span?.endMs) || spanStartMs,
+      );
+      return (
+        spanStartMs <= alignmentEndMs && spanEndMs >= alignmentStartMs
+      );
+    });
+    return meetingWasActive
+      ? {
+          speakerId: "remote-guest",
+          speaker: "Guest",
+          initials: "G",
+          color: "violet",
+          source: "meeting",
+          provisional: true,
+        }
+      : {
+          speakerId: "local-user",
+          speaker: "You",
+          initials: "U",
+          color: "teal",
+          source: "microphone",
+          provisional: false,
+        };
+  }
+
   function slug(value) {
     return (
       cleanName(value, "speaker")
@@ -1186,6 +1227,7 @@
     isVersionOutdated,
     parseTimestamp,
     primaryRecordingSource,
+    provisionalDraftSpeaker,
     recordingAsset,
     recordingAssetIds,
     recordingDownloadName,

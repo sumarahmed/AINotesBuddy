@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.08.4` (`Year.Month.MinorRelease`)
+**Current version:** `2026.08.5` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -21,7 +21,8 @@ for speech-to-text and speaker diarization.
 - Pause, resume, playback, seeking, source switching, download, and reload
 - Microphone-only fallback if meeting sharing is cancelled or unsupported
 - Persistent warning when meeting sharing stops during a recording
-- Optional browser live-speech draft with no inserted sample text
+- Optional browser live-speech draft showing **You** and provisional **Guest**
+  labels from synchronized meeting-output activity, with no inserted sample text
 - Local faster-whisper transcription and pyannote speaker diarization companion
 - Windows tray/control-panel app with automatic short-lived browser pairing
 - Existing-user website warnings and daily desktop checks for companion updates
@@ -85,6 +86,15 @@ distinct voices as **Speaker 1**, **Speaker 2**, and so on, but it cannot learn
 their real names from Teams. Rename those session-local labels after
 transcription. Very short turns, overlapping speech, low volume, and heavily
 compressed meeting audio can still cause two people to be grouped together.
+
+During capture, NotesBuddy can distinguish the isolated microphone as **You**
+and active Windows/shared output as a provisional **Guest**. The live Guest
+label is a timing hint, not voice recognition. Browser Speech Recognition still
+listens to the microphone, so Guest words appear live only when that service
+hears the remote voice; with headphones it may show **Guest speaking** without
+words. After processing, the saved draft is replaced by the synchronized
+microphone transcript plus pyannote's **Speaker 1**, **Speaker 2**, and other
+remote groups.
 
 ### Local speaker transcription
 
