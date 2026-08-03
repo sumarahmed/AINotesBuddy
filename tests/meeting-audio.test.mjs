@@ -82,6 +82,114 @@ test("prefers companion Windows output when microphone and meeting tracks are se
   );
 });
 
+test("labels live browser words as Guest only when meeting output overlaps", () => {
+  const spans = [{ startMs: 2800, endMs: 4700 }];
+  assert.deepEqual(
+    MeetingAudio.provisionalDraftSpeaker({
+      startMs: 500,
+      endMs: 1700,
+      meetingActivitySpans: spans,
+    }),
+    {
+      speakerId: "local-user",
+      speaker: "You",
+      initials: "U",
+      color: "teal",
+      source: "microphone",
+      provisional: false,
+    },
+  );
+  assert.equal(
+    MeetingAudio.provisionalDraftSpeaker({
+      startMs: 2900,
+      endMs: 4100,
+      meetingActivitySpans: spans,
+    }).speakerId,
+    "remote-guest",
+  );
+});
+
+test("final diarization replaces provisional Guest rows instead of duplicating them", () => {
+  const meeting = {
+    recordingAssets: {
+      microphone: { id: "mic" },
+      meeting: { id: "remote" },
+    },
+    speakers: [
+      { id: "local-user", displayName: "Alex Morgan" },
+      { id: "remote-guest", displayName: "Guest" },
+    ],
+    transcript: [
+      {
+        id: "draft-local",
+        speakerId: "local-user",
+        source: "microphone",
+        text: "I will open the agenda.",
+        isDraft: true,
+      },
+      {
+        id: "draft-guest",
+        speakerId: "remote-guest",
+        source: "meeting",
+        text: "Can you share the report?",
+        isDraft: true,
+        provisional: true,
+      },
+    ],
+  };
+
+  MeetingAudio.applyTranscriptionResult(
+    meeting,
+    {
+      segments: [
+        {
+          id: "final-local",
+          source: "microphone",
+          startMs: 0,
+          endMs: 1200,
+          text: "I will open the agenda.",
+        },
+        {
+          id: "final-remote-one",
+          source: "meeting",
+          speakerId: "remote-1",
+          startMs: 1500,
+          endMs: 2600,
+          text: "Can you share the report?",
+        },
+        {
+          id: "final-remote-two",
+          source: "meeting",
+          speakerId: "remote-2",
+          startMs: 3000,
+          endMs: 3900,
+          text: "I can send it today.",
+        },
+      ],
+    },
+    profile,
+  );
+
+  assert.deepEqual(
+    meeting.transcript.map((segment) => segment.id),
+    ["final-local", "final-remote-one", "final-remote-two"],
+  );
+  assert.deepEqual(
+    meeting.transcript.map((segment) => segment.speakerId),
+    ["local-user", "remote-1", "remote-2"],
+  );
+  assert.equal(
+    meeting.transcript.some(
+      (segment) => segment.isDraft || segment.provisional,
+    ),
+    false,
+  );
+  assert.equal(
+    meeting.speakers.some((speaker) => speaker.id === "remote-guest"),
+    false,
+  );
+});
+
 test("keeps complete transcript text instead of applying name length limits", () => {
   const longText =
     "This sentence deliberately exceeds eighty characters so a complete spoken thought remains intact in the saved transcript.";

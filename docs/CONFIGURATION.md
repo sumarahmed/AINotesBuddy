@@ -6,7 +6,7 @@ the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
 The published version uses `Year.Month.MinorRelease`. The current release is
-`2026.08.4`; `package.json` represents it as `2026.8.4` for semantic-version
+`2026.08.5`; `package.json` represents it as `2026.8.5` for semantic-version
 compatibility.
 
 ## Browser settings
@@ -16,7 +16,7 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | Meeting audio | On | Capture default Windows output through a compatible companion; otherwise ask for a browser tab/window/screen audio source |
-| Browser live transcript draft | On | Use browser speech recognition for microphone draft text when supported |
+| Browser live transcript draft | On | Use browser speech recognition for draft text and meeting-output timestamps for provisional **You**/**Guest** attribution when supported |
 | Automatically identify speakers | Off | Start the paired local job after saving a recording |
 | Create meeting brief | On | Build deduplicated highlights, explicit decisions, and assigned actions only from returned transcript sentences |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
@@ -41,7 +41,7 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
-| Product version | `2026.08.4` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
+| Product version | `2026.08.5` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
 | Latest companion version | `2026.08.3` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
@@ -56,10 +56,12 @@ streams. It applies to the next capture.
 | Display-audio hints | System audio included; window audio set to system | Encourages Chrome/Edge to expose Teams desktop sound when supported |
 | Preferred meeting capture | Windows WASAPI loopback | Used when companion discovery reports `systemAudioCapture`; avoids silent Teams-window browser tracks |
 | Meeting signal threshold | RMS 0.008 over 512 samples | Changes the live badge only after actual meeting sound arrives |
+| Meeting activity hangover | 900 ms | Keeps short gaps in one remote turn aligned with a provisional **Guest** draft |
 | Meeting silence warning | 5 seconds | Warns early while allowing quiet meetings to keep recording |
 | Default meeting title | `Untitled meeting` | User-editable safe placeholder |
 | Source IDs | `microphone`, `meeting`, `mixed` | Stable storage/API contract |
 | Local speaker ID | `local-user` | Stable **You** attribution |
+| Provisional remote ID | `remote-guest` | Capture-time **Guest** hint; removed when final diarization replaces the draft |
 | Remote speaker IDs | `remote-1`, `remote-2`, ... | Session-local, first-appearance ordering |
 | Echo thresholds | 55% time overlap, 82% text similarity | Conservative duplicate suppression in browser/service core |
 | Unknown timing tolerance | 350 ms | Handles timestamp rounding without distant identity guesses |

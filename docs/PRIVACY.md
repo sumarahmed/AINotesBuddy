@@ -86,7 +86,19 @@ the browser provider.
 
 Users can disable **Browser live transcript draft** in Settings. MediaRecorder
 continues independently. NotesBuddy stores only results returned by the API,
-marks them as draft, and never inserts sample transcript text.
+marks them as draft, and never inserts sample transcript text. While capture is
+active, NotesBuddy also keeps in-memory timestamp spans for detected
+Windows/shared-output activity. A returned phrase overlapping those spans is
+shown as provisional **Guest**; other returned phrases remain **You**. The
+spans contain timing only, not voiceprints or names. Final local/hosted
+transcription replaces these provisional rows with synchronized source and
+pyannote speaker results.
+
+Browser Speech Recognition accepts the microphone chosen by the browser; it
+does not consume the isolated Windows-output track. Consequently the UI may
+detect **Guest speaking** from system output without receiving live Guest
+words, especially when headphones prevent acoustic leakage. The stored meeting
+track remains available for the authoritative post-recording transcription.
 
 ## Local transcription companion
 
