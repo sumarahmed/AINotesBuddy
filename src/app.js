@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.1");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.2");
 
 if (!MeetingAudio) {
   throw new Error("NotesBuddy meeting-audio module failed to load.");
@@ -159,6 +159,9 @@ const companionDownloadUrl = String(
   runtimeConfig.companionDownloadUrl ||
     "https://github.com/sumarahmed/AINotesBuddy/releases",
 );
+const latestCompanionVersion = String(
+  runtimeConfig.latestCompanionVersion || APP_VERSION,
+);
 const companionSetupSessionKey = "notesbuddy-companion-setup-deferred";
 const storedSettings = loadStored("notesbuddy-settings", {});
 const defaultSettings = {
@@ -220,6 +223,7 @@ const state = {
     metadata: null,
     error: null,
   },
+  companionUpdateDismissed: false,
   playbackSourceByMeeting: {},
   toasts: [],
   capture: {
@@ -415,6 +419,17 @@ function companionSystemAudioAvailable() {
       state.companion.status === "connected" &&
       state.companion.pairingToken &&
       state.companion.metadata?.systemAudioCapture === true,
+  );
+}
+
+function companionUpdateRequired() {
+  return Boolean(
+    state.companion.status === "connected" &&
+      state.companion.metadata?.version &&
+      MeetingAudio.isVersionOutdated(
+        state.companion.metadata.version,
+        latestCompanionVersion,
+      ),
   );
 }
 
@@ -1032,13 +1047,16 @@ function settingsPanel() {
   const hosted = usesHostedTranscription();
   const hybrid = usesHybridTranscription();
   const hybridConnected = hybrid && !hosted;
-  const statusText = {
-    unknown: "not tested",
-    checking: "checking",
-    connected: hybridConnected ? "local connected" : "connected",
-    fallback: "online fallback",
-    unavailable: "unavailable",
-  }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus;
+  const updateRequired = hybridConnected && companionUpdateRequired();
+  const statusText = updateRequired
+    ? "update required"
+    : ({
+        unknown: "not tested",
+        checking: "checking",
+        connected: hybridConnected ? "local connected" : "connected",
+        fallback: "online fallback",
+        unavailable: "unavailable",
+      }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus);
   const privacyMessage = hosted
     ? hybrid
       ? "Recordings stay in this browser. While the desktop companion is unavailable, requested transcription uses the temporary online service."
@@ -1047,9 +1065,9 @@ function settingsPanel() {
   const transcriptionSettings = hybrid
     ? `<section class="settings-section">
         <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
-        <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
-        <p class="settings-help">${hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is processing audio privately on this computer. Pairing is automatic and expires when the companion restarts.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
-        <div class="companion-actions"><button type="button" class="button button--quiet" data-action="show-companion-setup">Setup guide</button><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}Windows downloads</a></div>
+        <div class="service-check"><span class="service-check__status service-check__status--${updateRequired ? "update" : escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
+        <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} to receive the latest capture and security fixes.` : hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is processing audio privately on this computer. Pairing is automatic and expires when the companion restarts.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
+        <div class="companion-actions"><button type="button" class="button button--quiet" data-action="show-companion-setup">Setup guide</button><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}${updateRequired ? "Download update" : "Windows downloads"}</a></div>
       </section>`
     : hosted
       ? `<section class="settings-section">
@@ -1105,6 +1123,20 @@ function companionOnboarding() {
   const connected =
     state.companion.status === "connected" && !usesHostedTranscription();
   const checking = state.companion.status === "checking";
+  if (connected && companionUpdateRequired()) {
+    return `<div class="companion-setup-backdrop">
+      <section class="companion-setup-card companion-setup-card--update" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
+        <div class="companion-setup__update-icon">${icon("download", 28)}</div>
+        <span class="eyebrow">Update available</span>
+        <h1 id="companion-setup-title">Update the desktop companion</h1>
+        <p>Version ${escapeHtml(state.companion.metadata?.version || "unknown")} is installed. NotesBuddy Companion ${escapeHtml(latestCompanionVersion)} is available with the latest recording and security fixes.</p>
+        <a class="button button--primary companion-setup__primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 16)}Download update ${escapeHtml(latestCompanionVersion)}</a>
+        <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-update">I've updated it — check again</button>
+        <button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>
+        <small class="companion-setup__note">${icon("shield", 13)}Quit the old companion before running the update if Windows asks.</small>
+      </section>
+    </div>`;
+  }
   if (connected) {
     return `<div class="companion-setup-backdrop">
       <section class="companion-setup-card companion-setup-card--success" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
@@ -1142,6 +1174,25 @@ function companionOnboarding() {
   </div>`;
 }
 
+function companionUpdateNotice() {
+  if (
+    !companionUpdateRequired() ||
+    state.companionUpdateDismissed ||
+    state.profileOnboardingOpen ||
+    state.companionSetupOpen
+  ) {
+    return "";
+  }
+  const installedVersion = state.companion.metadata?.version || "unknown";
+  return `<section class="companion-update-banner" role="alert" aria-live="assertive">
+    <span class="companion-update-banner__icon">${icon("download", 18)}</span>
+    <div><strong>Companion update available</strong><p>You have ${escapeHtml(installedVersion)}. Update to ${escapeHtml(latestCompanionVersion)} for the latest recording and security fixes.</p></div>
+    <a class="button button--primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">Download update</a>
+    <button type="button" class="button button--quiet" data-action="check-companion-update">Check again</button>
+    <button type="button" class="companion-update-banner__dismiss" data-action="dismiss-companion-update" aria-label="Remind me about the companion update next time">Remind me later</button>
+  </section>`;
+}
+
 function toastRegion() {
   return `<div class="toast-region" aria-live="polite">${state.toasts.map((toast) => `<div class="toast"><span>${icon("check", 14)}</span><div><strong>${escapeHtml(toast.title)}</strong>${toast.description ? `<p>${escapeHtml(toast.description)}</p>` : ""}</div></div>`).join("")}</div>`;
 }
@@ -1173,6 +1224,7 @@ function render(focusTarget = "") {
       <div class="mobile-bar">${iconButton("open-nav", "Open navigation", "menu")}${brand(true)}${iconButton("capture", "Start capture", "mic")}</div>
       ${content}
     </div>
+    ${companionUpdateNotice()}
     <input class="visually-hidden" data-input="file" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac">
     ${state.settingsOpen ? settingsPanel() : ""}
     ${state.profileOnboardingOpen ? profileOnboarding() : ""}
@@ -2967,6 +3019,27 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "connect-companion") {
     await connectLocalCompanion({ silent: false, force: true });
+    return;
+  } else if (action === "check-companion-update") {
+    state.companionUpdateDismissed = false;
+    const connected = await connectLocalCompanion({ silent: true, force: true });
+    if (connected && companionUpdateRequired()) {
+      showToast(
+        "Update still required",
+        `Companion ${state.companion.metadata?.version || "unknown"} is still running. Install ${latestCompanionVersion}, then check again.`,
+      );
+    } else if (connected) {
+      state.companionSetupOpen = false;
+      showToast(
+        "Companion is up to date",
+        `NotesBuddy Companion ${state.companion.metadata?.version || latestCompanionVersion} is connected.`,
+      );
+    }
+    render();
+    return;
+  } else if (action === "dismiss-companion-update") {
+    state.companionUpdateDismissed = true;
+    render();
     return;
   } else if (action === "show-companion-setup") {
     state.companionSetupOpen = true;

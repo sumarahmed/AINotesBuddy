@@ -8,6 +8,22 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.2 - 2026-08-03
+
+### Added
+
+- Persistent, screen-reader-announced website warning when an existing browser
+  profile connects to an outdated desktop companion
+- Daily non-blocking companion release check with a Windows notification-area
+  alert and an explicit **Download update** action
+
+### Fixed
+
+- Connected legacy companions are no longer shown as fully healthy without an
+  upgrade notice; Settings now reports **update required** with both versions
+- Update-check network failures cannot prevent local recording or companion
+  startup
+
 ## 2026.08.1 - 2026-08-03
 
 ### Added

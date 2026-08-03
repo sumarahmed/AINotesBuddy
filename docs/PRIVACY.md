@@ -28,6 +28,7 @@ application's control.
 | Hosted job status/result | Host process memory | One hour by default or until process eviction |
 | Hashed hosted client network key | Host process memory | Rate-limit window/session cleanup |
 | Companion pairing token | Local OS user configuration directory | Until token file is deleted |
+| Companion update response | Companion process memory | Until the next check or application exit |
 | Speech/diarization models | Local or hosted model cache | Until the owner removes the cache |
 | Hugging Face model token | Source-development environment, host secret manager, or trusted release job | Owner controlled; never included in installer |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
@@ -88,6 +89,13 @@ continues independently. NotesBuddy stores only results returned by the API,
 marks them as draft, and never inserts sample transcript text.
 
 ## Local transcription companion
+
+The installed companion makes a non-authenticated request to GitHub's public
+latest-release API shortly after startup and every 24 hours. The request sends
+the companion version in its `User-Agent`; it does not contain profile names,
+meeting metadata, recordings, transcripts, pairing tokens, or model tokens.
+GitHub may process network and request metadata under its own policies. An
+update must be downloaded and installed by the user.
 
 When the user chooses **Transcribe and identify speakers**, the browser reads
 the meeting's stored audio Blobs and posts them to

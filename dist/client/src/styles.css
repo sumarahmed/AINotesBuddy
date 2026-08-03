@@ -3188,6 +3188,17 @@ kbd {
   border-radius: 17px;
 }
 
+.companion-setup__update-icon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  margin-bottom: 24px;
+  color: var(--amber);
+  place-items: center;
+  background: var(--amber-soft);
+  border-radius: 17px;
+}
+
 .companion-setup__privacy {
   display: grid;
   grid-template-columns: 23px minmax(0, 1fr);
@@ -3457,6 +3468,76 @@ kbd {
   color: var(--teal);
 }
 
+.service-check__status--update {
+  color: var(--coral-deep);
+  background: var(--coral-soft);
+  border-color: #efc8bf;
+}
+
+.companion-update-banner {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  left: 294px;
+  z-index: 70;
+  display: grid;
+  grid-template-columns: 34px minmax(180px, 1fr) auto auto auto;
+  gap: 12px;
+  align-items: center;
+  max-width: 920px;
+  min-height: 70px;
+  padding: 12px 14px;
+  margin-left: auto;
+  color: var(--ink);
+  background: rgba(255, 250, 241, 0.98);
+  border: 1px solid #e8c9a8;
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(14px);
+}
+
+.companion-update-banner__icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: var(--amber);
+  place-items: center;
+  background: var(--amber-soft);
+  border-radius: 9px;
+}
+
+.companion-update-banner strong,
+.companion-update-banner p {
+  display: block;
+}
+
+.companion-update-banner strong {
+  font-size: 12px;
+}
+
+.companion-update-banner p {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+.companion-update-banner .button {
+  min-height: 34px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.companion-update-banner__dismiss {
+  font-size: 10px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+}
+
 .toast-region {
   position: fixed;
   right: 22px;
@@ -3598,6 +3679,14 @@ kbd {
     padding-top: 56px;
   }
 
+  .companion-update-banner {
+    top: 68px;
+    right: 16px;
+    left: 16px;
+    grid-template-columns: 34px minmax(180px, 1fr) auto auto auto;
+    max-width: none;
+  }
+
   .mobile-bar {
     position: fixed;
     top: 0;
@@ -3662,6 +3751,20 @@ kbd {
 }
 
 @media (max-width: 700px) {
+  .companion-update-banner {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 9px;
+    align-items: start;
+    max-height: calc(100vh - 84px);
+    overflow-y: auto;
+  }
+
+  .companion-update-banner .button,
+  .companion-update-banner__dismiss {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
   .home-view {
     padding: 28px 18px 55px;
   }
