@@ -7,8 +7,8 @@ const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const profile = { name: "Alex Morgan", initials: "AM" };
 
 test("compares Year.Month.MinorRelease versions including legacy companions", () => {
-  assert.equal(MeetingAudio.compareVersions("2026.08.1", "2026.08.2"), -1);
-  assert.equal(MeetingAudio.compareVersions("2026.8.2", "2026.08.2"), 0);
+  assert.equal(MeetingAudio.compareVersions("2026.08.2", "2026.08.3"), -1);
+  assert.equal(MeetingAudio.compareVersions("2026.8.3", "2026.08.3"), 0);
   assert.equal(
     MeetingAudio.compareVersions(
       "companion-v2027.01.0",
@@ -16,10 +16,10 @@ test("compares Year.Month.MinorRelease versions including legacy companions", ()
     ),
     1,
   );
-  assert.equal(MeetingAudio.compareVersions("unknown", "2026.08.2"), null);
-  assert.equal(MeetingAudio.isVersionOutdated("0.1.2", "2026.08.2"), true);
+  assert.equal(MeetingAudio.compareVersions("unknown", "2026.08.3"), null);
+  assert.equal(MeetingAudio.isVersionOutdated("0.1.2", "2026.08.3"), true);
   assert.equal(
-    MeetingAudio.isVersionOutdated("2026.08.2", "2026.08.2"),
+    MeetingAudio.isVersionOutdated("2026.08.3", "2026.08.3"),
     false,
   );
 });
@@ -111,7 +111,7 @@ test("keeps complete transcript text instead of applying name length limits", ()
   assert.ok(meeting.transcript[0].text.length > 80);
 });
 
-test("deduplicates microphone echo from the remote meeting track", () => {
+test("preserves meeting identity when removing residual microphone echo", () => {
   const deduplicated = MeetingAudio.deduplicateEchoSegments([
     {
       id: "mic",
@@ -144,7 +144,7 @@ test("deduplicates microphone echo from the remote meeting track", () => {
 
   assert.deepEqual(
     deduplicated.map((segment) => segment.id),
-    ["mic", "remote"],
+    ["echo", "remote"],
   );
 });
 

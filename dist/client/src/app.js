@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.2");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.3");
 
 if (!MeetingAudio) {
   throw new Error("NotesBuddy meeting-audio module failed to load.");

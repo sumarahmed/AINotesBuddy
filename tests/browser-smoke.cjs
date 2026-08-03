@@ -416,7 +416,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   const localEndpoint = "http://127.0.0.1:8765";
   const hostedEndpoint = "https://transcribe.notesbuddy.test";
   const downloadUrl =
-    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe";
+    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.3/NotesBuddyCompanion-Setup-2026.08.3.exe";
   const calls = [];
   let hostedCalls = 0;
   const systemAudioWav = syntheticWavBuffer();
@@ -427,7 +427,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.2", latestCompanionVersion: "2026.08.2", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "${hostedEndpoint}", companionDownloadUrl: "${downloadUrl}" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.3", latestCompanionVersion: "2026.08.3", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "${hostedEndpoint}", companionDownloadUrl: "${downloadUrl}" });`,
     });
   });
   await page.route(`${localEndpoint}/v1/**`, async (route) => {
@@ -456,7 +456,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
         headers,
         body: JSON.stringify({
           product: "NotesBuddy Desktop Companion",
-          version: "2026.08.2",
+          version: "2026.08.3",
           apiVersion: 1,
           status: "available",
           browserPairing: true,
@@ -580,7 +580,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   assert.equal(calls.at(-1).token, "automatic-browser-pairing-token-value");
   await page.locator("[data-action='complete-companion-setup']").click();
   await page.locator(".companion-setup-backdrop").waitFor({ state: "detached" });
-  await page.getByText("Version 2026.08.2", { exact: true }).waitFor();
+  await page.getByText("Version 2026.08.3", { exact: true }).waitFor();
   assert.equal(
     await page.locator(".companion-update-banner").count(),
     0,
@@ -679,7 +679,7 @@ async function runExistingUserUpdateNotification(browser, baseUrl) {
   const page = await context.newPage();
   const localEndpoint = "http://127.0.0.1:8765";
   const downloadUrl =
-    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe";
+    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.3/NotesBuddyCompanion-Setup-2026.08.3.exe";
 
   await page.addInitScript(() => {
     localStorage.setItem(
@@ -706,7 +706,7 @@ async function runExistingUserUpdateNotification(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.2", latestCompanionVersion: "2026.08.2", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "${downloadUrl}" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.3", latestCompanionVersion: "2026.08.3", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "${downloadUrl}" });`,
     });
   });
   await page.route(`${localEndpoint}/v1/**`, async (route) => {
@@ -764,7 +764,7 @@ async function runExistingUserUpdateNotification(browser, baseUrl) {
   const banner = page.locator(".companion-update-banner");
   await banner.waitFor({ timeout: 5000 });
   await banner.getByText("Companion update available", { exact: true }).waitFor();
-  await banner.getByText(/You have 0\.1\.2\. Update to 2026\.08\.2/).waitFor();
+  await banner.getByText(/You have 0\.1\.2\. Update to 2026\.08\.3/).waitFor();
   assert.equal(await banner.getAttribute("role"), "alert");
   assert.equal(await banner.getAttribute("aria-live"), "assertive");
   const desktopBannerLayout = await banner.evaluate((element) => {
@@ -830,7 +830,7 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${unavailableEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${unavailableEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.3/NotesBuddyCompanion-Setup-2026.08.3.exe" });`,
     });
   });
   await page.route(`${unavailableEndpoint}/v1/**`, async (route) => {
@@ -856,7 +856,7 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
   assert.equal(
     await page
       .locator(
-        "a[href='https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe']",
+        "a[href='https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.3/NotesBuddyCompanion-Setup-2026.08.3.exe']",
       )
       .getAttribute("target"),
     "_blank",

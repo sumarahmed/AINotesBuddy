@@ -17,6 +17,11 @@ GitHub Release shortly after startup and every 24 hours, then shows a tray
 notification and enables **Download update**. It never downloads or installs an
 update without the user's choice, and a failed check does not affect recording.
 
+Version `2026.08.3` aligns microphone and meeting-output words before building
+speaker segments. Matching meeting speech that leaked into the microphone is
+removed word by word, while unmatched microphone speech remains **You** and the
+meeting copy retains its pyannote speaker assignment.
+
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
@@ -99,7 +104,7 @@ In GitHub:
    read-only, gated-model token.
 3. Run **Windows desktop companion** from the Actions tab with
    `include_models` enabled to test a build.
-4. When ready, create and push a tag such as `companion-v2026.08.2`.
+4. When ready, create and push a tag such as `companion-v2026.08.3`.
 
 The tag workflow runs service tests, prepares pinned offline models, builds a
 PyInstaller one-directory application, executes the packaged `--self-test`,
@@ -120,7 +125,7 @@ python -m pip install torch torchaudio --index-url https://download.pytorch.org/
 python -m pip install -r services\transcription\requirements-packaging.txt
 $env:HF_TOKEN = "publisher-build-token"
 python desktop\prepare_models.py --accept-pyannote-terms
-.\desktop\build.ps1 -Python python -Version 2026.08.2 -RequireModels
+.\desktop\build.ps1 -Python python -Version 2026.08.3 -RequireModels
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -129,7 +134,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.2 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.3 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 
