@@ -186,6 +186,13 @@ test("applies local and remote speaker labels and persists a rename", () => {
 
   assert.equal(MeetingAudio.speakerLabel(meeting, "local-user"), "You");
   assert.equal(MeetingAudio.speakerLabel(meeting, "remote-1"), "Speaker 1");
+  meeting.actions = [
+    {
+      text: "I will send the schedule tomorrow.",
+      owner: "Speaker 1",
+      sourceSpeakerId: "remote-1",
+    },
+  ];
   assert.equal(
     MeetingAudio.renameSpeaker(meeting, "remote-1", "Jamie Lee", profile),
     true,
@@ -193,6 +200,7 @@ test("applies local and remote speaker labels and persists a rename", () => {
   assert.equal(MeetingAudio.speakerLabel(meeting, "remote-1"), "Jamie Lee");
   assert.equal(meeting.transcript[1].speaker, "Jamie Lee");
   assert.equal(meeting.participants[1].name, "Jamie Lee");
+  assert.equal(meeting.actions[0].owner, "Jamie Lee");
 });
 
 test("preserves an explicitly unknown diarization assignment", () => {
@@ -225,22 +233,134 @@ test("preserves an explicitly unknown diarization assignment", () => {
   );
 });
 
-test("builds an extractive brief only from real transcript text", () => {
+test("builds highlights, decisions, and actions only from transcript evidence", () => {
   assert.equal(MeetingAudio.buildExtractiveBrief([]), null);
 
+  const transcript = [
+    {
+      id: "decision",
+      speakerId: "remote-1",
+      speaker: "Speaker 1",
+      startMs: 1000,
+      text: "The customer approved the revised scope.",
+    },
+    {
+      id: "jordan-action",
+      speakerId: "remote-1",
+      speaker: "Speaker 1",
+      startMs: 3000,
+      text: "Jordan will send the final schedule by Friday.",
+    },
+    {
+      id: "local-action",
+      speakerId: "local-user",
+      speaker: "You",
+      startMs: 5000,
+      text: "I need to confirm the email mapping tomorrow.",
+    },
+    {
+      id: "pending",
+      speakerId: "remote-2",
+      speaker: "Speaker 2",
+      startMs: 7000,
+      text: "We still need to decide which archive to use.",
+    },
+    {
+      id: "duplicate",
+      speakerId: "remote-1",
+      speaker: "Speaker 1",
+      startMs: 9000,
+      text: "Jordan will send the final schedule by Friday.",
+    },
+  ];
+  const brief = MeetingAudio.buildExtractiveBrief(transcript, {
+    localOwnerName: "Alex Morgan",
+  });
+
+  assert.deepEqual(brief.decisions, [
+    "The customer approved the revised scope.",
+  ]);
+  assert.deepEqual(
+    brief.actions.map(({ text, owner, due }) => ({ text, owner, due })),
+    [
+      {
+        text: "Jordan will send the final schedule by Friday.",
+        owner: "Jordan",
+        due: "by Friday",
+      },
+      {
+        text: "I need to confirm the email mapping tomorrow.",
+        owner: "Alex Morgan",
+        due: "tomorrow",
+      },
+      {
+        text: "We still need to decide which archive to use.",
+        owner: "Team",
+        due: null,
+      },
+    ],
+  );
+  const transcriptText = transcript.map((segment) => segment.text).join(" ");
+  for (const text of [
+    ...brief.highlights,
+    ...brief.decisions,
+    ...brief.actions.map((action) => action.text),
+  ]) {
+    assert.ok(transcriptText.includes(text), `${text} must exist in transcript`);
+  }
+  assert.equal(new Set(brief.highlights).size, brief.highlights.length);
+});
+
+test("does not invent decisions or generic review actions", () => {
   const brief = MeetingAudio.buildExtractiveBrief([
-    { text: "The customer approved the revised scope." },
-    { text: "Jordan will send the final schedule tomorrow." },
-    { text: "The customer approved the revised scope." },
+    {
+      id: "status",
+      speakerId: "remote-1",
+      speaker: "Speaker 1",
+      text: "The ingestion flow currently processes email records.",
+    },
   ]);
 
+  assert.deepEqual(brief.decisions, []);
+  assert.deepEqual(brief.actions, []);
   assert.deepEqual(brief.highlights, [
-    "The customer approved the revised scope.",
-    "Jordan will send the final schedule tomorrow.",
+    "The ingestion flow currently processes email records.",
   ]);
   assert.equal(
-    brief.overview,
-    "The customer approved the revised scope. Jordan will send the final schedule tomorrow.",
+    brief.highlights.includes("Review the recording and transcript"),
+    false,
+  );
+});
+
+test("deduplicates overlapping transcript text and extracts unassigned work", () => {
+  const brief = MeetingAudio.buildExtractiveBrief([
+    {
+      id: "first",
+      speakerId: "remote-1",
+      speaker: "Speaker 1",
+      text: "Job configuration is set up. We need someone to do the ingestion channel because we have not done emails yet.",
+    },
+    {
+      id: "overlap",
+      speakerId: "remote-1",
+      speaker: "Speaker 1",
+      text: "Job configuration is set up. We need someone to do the ingestion channel because we have not done emails yet.",
+    },
+  ]);
+
+  assert.equal(
+    brief.highlights.filter((text) => text === "Job configuration is set up.")
+      .length,
+    1,
+  );
+  assert.deepEqual(
+    brief.actions.map(({ text, owner }) => ({ text, owner })),
+    [
+      {
+        text: "We need someone to do the ingestion channel because we have not done emails yet.",
+        owner: "Unassigned",
+      },
+    ],
   );
 });
 

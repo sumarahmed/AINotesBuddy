@@ -6,7 +6,7 @@ the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
 The published version uses `Year.Month.MinorRelease`. The current release is
-`2026.08.3`; `package.json` represents it as `2026.8.3` for semantic-version
+`2026.08.4`; `package.json` represents it as `2026.8.4` for semantic-version
 compatibility.
 
 ## Browser settings
@@ -18,7 +18,7 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | Meeting audio | On | Capture default Windows output through a compatible companion; otherwise ask for a browser tab/window/screen audio source |
 | Browser live transcript draft | On | Use browser speech recognition for microphone draft text when supported |
 | Automatically identify speakers | Off | Start the paired local job after saving a recording |
-| Create meeting brief | On | Build an extractive brief only from returned transcript segments |
+| Create meeting brief | On | Build deduplicated highlights, explicit decisions, and assigned actions only from returned transcript sentences |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
 | Transcription mode | From `src/runtime-config.js` | `hybrid`, `local`, or centrally managed `hosted` |
 | Companion URL | `http://127.0.0.1:8765` in local mode | Loopback-only local API |
@@ -41,7 +41,7 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
-| Product version | `2026.08.3` | `Year.Month.MinorRelease` in `src/runtime-config.js` and the companion launcher |
+| Product version | `2026.08.4` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
 | Latest companion version | `2026.08.3` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
@@ -78,7 +78,7 @@ The local profile:
 
 - personalizes the greeting and initials;
 - identifies isolated microphone speech as **You**;
-- supplies the owner for locally created review actions;
+- supplies the owner when local speech explicitly states an action;
 - updates existing local participants/follow-ups when renamed.
 
 It is not authentication. Different browser profiles/devices/origins have

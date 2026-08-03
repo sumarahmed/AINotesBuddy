@@ -207,6 +207,14 @@ Set timing/speaker-count tolerances rather than asserting exact wording.
 - Confirm separate site origins have separate data.
 - Import WAV/MP3 and transcribe it as a mixed-only remote recording.
 - Refresh a brief with no transcript; confirm no brief is fabricated.
+- Confirm every highlight, decision, and action sentence can be found verbatim
+  in the transcript.
+- Confirm overlapping transcript text does not create duplicate highlights or
+  actions.
+- Confirm pending-decision wording is not shown as a completed decision.
+- Open a meeting saved by an older build and confirm the generic review action
+  is replaced by transcript-grounded results while completed matching actions
+  remain completed.
 - Confirm browser live text is explicitly marked as a draft.
 
 ## Responsive and accessibility checks

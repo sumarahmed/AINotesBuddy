@@ -427,7 +427,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.3", latestCompanionVersion: "2026.08.3", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "${hostedEndpoint}", companionDownloadUrl: "${downloadUrl}" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.4", latestCompanionVersion: "2026.08.3", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "${hostedEndpoint}", companionDownloadUrl: "${downloadUrl}" });`,
     });
   });
   await page.route(`${localEndpoint}/v1/**`, async (route) => {
@@ -580,7 +580,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   assert.equal(calls.at(-1).token, "automatic-browser-pairing-token-value");
   await page.locator("[data-action='complete-companion-setup']").click();
   await page.locator(".companion-setup-backdrop").waitFor({ state: "detached" });
-  await page.getByText("Version 2026.08.3", { exact: true }).waitFor();
+  await page.getByText("Version 2026.08.4", { exact: true }).waitFor();
   assert.equal(
     await page.locator(".companion-update-banner").count(),
     0,
@@ -706,7 +706,7 @@ async function runExistingUserUpdateNotification(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.3", latestCompanionVersion: "2026.08.3", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "${downloadUrl}" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.4", latestCompanionVersion: "2026.08.3", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "${downloadUrl}" });`,
     });
   });
   await page.route(`${localEndpoint}/v1/**`, async (route) => {
@@ -1018,7 +1018,7 @@ async function runMainWorkflow(browser, baseUrl) {
             speakerId: "local-user",
             startMs: 0,
             endMs: 900,
-            text: "I will send the revised proposal.",
+            text: "I will send the revised proposal. We agreed to use the revised scope.",
             confidence: 0.96,
           },
           {
@@ -1132,6 +1132,11 @@ async function runMainWorkflow(browser, baseUrl) {
   await page.waitForTimeout(900);
   await page.locator("[data-action='finish-capture']").click();
   await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  assert.equal(
+    await page.getByText("Review the recording and transcript", { exact: true }).count(),
+    0,
+    "a newly recorded meeting must not receive a generic review action",
+  );
 
   const assets = await idbAssets(page);
   assert.equal(assets.length, 3, "three synchronized assets should be stored");
@@ -1192,6 +1197,43 @@ async function runMainWorkflow(browser, baseUrl) {
     "speaker rename should be searchable",
   );
   await page.locator("[data-input='transcript-search']").fill("");
+
+  await page.locator("[data-action='tab'][data-id='summary']").click();
+  await page
+    .locator(".decision-list")
+    .getByText("We agreed to use the revised scope.", { exact: true })
+    .waitFor();
+  assert.equal(
+    await page.locator(".action-list button").count(),
+    2,
+    "only transcript-grounded commitments should become action items",
+  );
+  const actionItems = await page.locator(".action-list button").evaluateAll(
+    (buttons) =>
+      buttons.map((button) => ({
+        text: button.querySelector(".action-text")?.textContent?.trim(),
+        owner: button.querySelector(".action-owner")?.textContent?.trim(),
+        due: button.querySelector(".action-due")?.textContent?.trim() || null,
+      })),
+  );
+  assert.deepEqual(actionItems, [
+    {
+      text: "I will send the revised proposal.",
+      owner: "Browser Tester",
+      due: null,
+    },
+    {
+      text: "I will review it tomorrow.",
+      owner: "Jordan Lee",
+      due: "tomorrow",
+    },
+  ]);
+  assert.equal(
+    await page.getByText("Review the recording and transcript", { exact: true }).count(),
+    0,
+  );
+
+  await page.locator("[data-action='tab'][data-id='transcript']").click();
 
   for (const viewport of [
     { width: 390, height: 844 },
@@ -1409,6 +1451,101 @@ async function runUnexpectedMeetingStop(browser, baseUrl) {
   await context.close();
 }
 
+async function runLegacyInsightMigration(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.route("**/src/runtime-config.js", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript; charset=utf-8",
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
+    });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "notesbuddy-profile",
+      JSON.stringify({
+        id: "legacy-profile",
+        name: "Migration Tester",
+        initials: "MT",
+      }),
+    );
+    localStorage.setItem(
+      "notesbuddy-meetings",
+      JSON.stringify([
+        {
+          id: "legacy-insights",
+          title: "Legacy insights",
+          dateISO: "2026-08-04T00:00:00.000Z",
+          duration: "4 min",
+          source: "Stored meeting",
+          participants: [
+            { name: "Migration Tester", initials: "MT", color: "teal" },
+          ],
+          speakers: [],
+          tags: ["Recorded"],
+          overview: "Old summary",
+          highlights: ["Old placeholder highlight"],
+          decisions: [],
+          actions: [
+            {
+              id: "legacy-review",
+              text: "Review the recording and transcript",
+              owner: "Migration Tester",
+              done: false,
+            },
+            {
+              id: "previous-grounded-action",
+              text: "I will send the configuration tomorrow.",
+              owner: "Migration Tester",
+              done: true,
+            },
+          ],
+          transcript: [
+            {
+              id: "legacy-local",
+              source: "microphone",
+              speakerId: "local-user",
+              speaker: "You",
+              startMs: 1000,
+              endMs: 3000,
+              text: "We agreed to keep the ingestion flow. I will send the configuration tomorrow.",
+            },
+          ],
+          notes: "",
+        },
+      ]),
+    );
+  });
+
+  await page.goto(baseUrl);
+  await completeOnboarding(page, "Migration Tester");
+  await page.locator("[data-action='meeting']").first().click();
+  await page
+    .locator(".decision-list")
+    .getByText("We agreed to keep the ingestion flow.", { exact: true })
+    .waitFor();
+  await page
+    .locator(".action-list")
+    .getByText("I will send the configuration tomorrow.", { exact: true })
+    .waitFor();
+  assert.equal(
+    await page.getByText("Review the recording and transcript", { exact: true }).count(),
+    0,
+    "legacy placeholder actions must be replaced from stored transcript evidence",
+  );
+  const migrated = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("notesbuddy-meetings") || "[]")[0],
+  );
+  assert.equal(migrated.summaryVersion, 2);
+  assert.deepEqual(
+    migrated.actions.map((action) => action.text),
+    ["I will send the configuration tomorrow."],
+  );
+  assert.equal(migrated.actions[0].done, true);
+  await context.close();
+}
+
 async function runDirectFileLoad(browser) {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -1447,13 +1584,14 @@ async function runDirectFileLoad(browser) {
     await runMeetingTrackMissing(browser, baseUrl);
     await runSilentMeetingTrack(browser, baseUrl);
     await runUnexpectedMeetingStop(browser, baseUrl);
+    await runLegacyInsightMigration(browser, baseUrl);
     await runDirectFileLoad(browser);
     await runHostedClientWorkflow(browser, baseUrl);
     await runHybridCompanionWorkflow(browser, baseUrl);
     await runExistingUserUpdateNotification(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, signal detection, pause/resume, stable controls, source persistence/default playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, signal detection, pause/resume, stable controls, source persistence/default playback, transcript-grounded insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

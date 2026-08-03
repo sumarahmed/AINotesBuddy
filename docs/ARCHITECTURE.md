@@ -270,7 +270,16 @@ existing local speaker metadata and locally owned follow-ups.
 - A completed companion result replaces the draft authoritatively.
 - Empty model results produce an empty transcript.
 - Unknown assignments remain **Unknown speaker**.
-- Extractive briefs contain only complete transcript segment text.
+- Highlights contain only transcript sentences, ranked for explicit decisions,
+  commitments, deadlines, risks, and substantive meeting content.
+- Decisions require explicit transcript wording such as agreed, approved, or
+  decided; pending decisions are not presented as completed decisions.
+- Action items require an explicit commitment, assignment, request, or next
+  step. Their text, owner, and due phrase remain grounded in the supporting
+  transcript sentence.
+- Overlapping or repeated transcript sentences are collapsed before insight
+  extraction.
+- Empty recordings and imports do not receive generic review actions.
 - Refreshing a brief with no transcript shows an unavailable message rather
   than inventing content.
 
