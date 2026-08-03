@@ -2,6 +2,7 @@
 
 The companion processes NotesBuddy recordings on the same computer. It combines:
 
+- Windows WASAPI loopback capture of the default system output;
 - faster-whisper speech-to-text with word timestamps;
 - pyannote `speaker-diarization-community-1` intervals;
 - deterministic timestamp alignment and echo de-duplication.
@@ -157,6 +158,12 @@ Endpoints:
 GET    /v1/companion
 POST   /v1/pairings
 GET    /v1/health
+POST   /v1/system-audio/captures
+GET    /v1/system-audio/captures/{captureId}
+POST   /v1/system-audio/captures/{captureId}/pause
+POST   /v1/system-audio/captures/{captureId}/resume
+POST   /v1/system-audio/captures/{captureId}/stop
+DELETE /v1/system-audio/captures/{captureId}
 POST   /v1/transcriptions
 GET    /v1/transcriptions/{jobId}
 DELETE /v1/transcriptions/{jobId}
@@ -195,6 +202,11 @@ The completed response includes clock-aligned segments:
 
 If no speech is detected, `segments` is empty. The test engine and production
 engine never generate placeholder transcript text.
+
+System-audio routes are local-companion-only and pairing protected. Only one
+capture can run at a time. The stop route returns a stereo 48 kHz WAV and
+deletes the companion's temporary file after delivery. The default Windows
+output—not only Teams—is captured, so notification sounds are included.
 
 ## Temporary data and logs
 

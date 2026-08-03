@@ -1,6 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.1");
 
 if (!MeetingAudio) {
   throw new Error("NotesBuddy meeting-audio module failed to load.");
@@ -237,6 +238,8 @@ const state = {
       mixed: "idle",
     },
     meetingDisplaySurface: null,
+    meetingCaptureMode: null,
+    meetingDeviceName: null,
     meetingAudioEnded: false,
     meetingAudioSignalDetected: false,
     meetingAudioWarning: "",
@@ -269,6 +272,9 @@ function createEmptyCaptureRuntime() {
     audioContext: null,
     audioNodes: [],
     meetingSignalMonitor: null,
+    companionStatusTimer: null,
+    companionCaptureId: null,
+    companionCaptureClient: null,
     captureStartedAt: null,
     captureStartedAtMonotonic: null,
   };
@@ -400,6 +406,16 @@ function usesHostedTranscription() {
 
 function usesHybridTranscription() {
   return runtimeTranscriptionMode === "hybrid";
+}
+
+function companionSystemAudioAvailable() {
+  return Boolean(
+    usesHybridTranscription() &&
+      !usesHostedTranscription() &&
+      state.companion.status === "connected" &&
+      state.companion.pairingToken &&
+      state.companion.metadata?.systemAudioCapture === true,
+  );
 }
 
 function greetingForTime(date = new Date()) {
@@ -561,6 +577,7 @@ function sidebar(meetings) {
         <div><strong>Private workspace</strong><span>Saved on this device</span></div>
         <span class="status-dot"></span>
       </div>
+      <span class="app-version">Version ${escapeHtml(APP_VERSION)}</span>
       <button type="button" class="settings-link" data-action="settings">${icon("settings", 17)} Settings</button>
     </div>
   </aside>`;
@@ -640,9 +657,19 @@ function homeView(meetings) {
 
 function captureView() {
   const capture = state.capture;
+  const companionAudio = companionSystemAudioAvailable();
   const meetingCaptureSupported = Boolean(
-    navigator.mediaDevices?.getDisplayMedia,
+    companionAudio || navigator.mediaDevices?.getDisplayMedia,
   );
+  const meetingOptionDescription = !meetingCaptureSupported
+    ? "Capture unavailable"
+    : !capture.systemAudioOn
+      ? "Not recorded"
+      : companionAudio
+        ? "Windows output via companion"
+        : "Choose a tab, window, or screen";
+  const meetingSourceLabel =
+    capture.meetingCaptureMode === "companion" ? "Windows output" : "Meeting";
   const statusLabel = {
     idle: "Ready",
     "requesting-microphone": "Requesting microphone",
@@ -671,17 +698,17 @@ function captureView() {
           ? `<div class="capture-ready">
               <div class="capture-ready__visual"><div class="ready-ring ready-ring--outer"></div><div class="ready-ring ready-ring--inner"></div><div class="ready-mic">${icon("mic", 34)}</div></div>
               <h2>Ready for your next conversation</h2>
-              <p>Keep your microphone and meeting audio as separate synchronized recordings, with a mixed track for normal playback.</p>
+              <p>Keep microphone and meeting audio as synchronized tracks. Companion capture defaults playback to Windows output; browser capture also creates a mixed track.</p>
               <div class="source-options">
                 <button type="button" data-action="toggle-mic" class="${capture.microphoneOn ? "source-option--active" : ""}">
                   <span>${icon("mic", 17)}</span><div><strong>My microphone</strong><small>${capture.microphoneOn ? "Saved as You" : "Not recorded"}</small></div><i>${capture.microphoneOn ? icon("check", 13) : ""}</i>
                 </button>
                 <button type="button" data-action="toggle-system" class="${capture.systemAudioOn && meetingCaptureSupported ? "source-option--active" : ""}" ${meetingCaptureSupported ? "" : 'disabled title="Meeting audio sharing is unavailable in this browser"'}>
-                  <span>${icon("headphones", 17)}</span><div><strong>Meeting audio</strong><small>${meetingCaptureSupported ? (capture.systemAudioOn ? "Choose a tab, window, or screen" : "Not recorded") : "Browser unavailable"}</small></div><i>${capture.systemAudioOn && meetingCaptureSupported ? icon("check", 13) : ""}</i>
+                  <span>${icon("headphones", 17)}</span><div><strong>Meeting audio</strong><small>${escapeHtml(meetingOptionDescription)}</small></div><i>${capture.systemAudioOn && meetingCaptureSupported ? icon("check", 13) : ""}</i>
                 </button>
               </div>
               <button type="button" class="start-recording" data-action="start-capture"><span>${icon("mic", 20)}</span>Start capture</button>
-              <div class="prototype-note">${icon("shield", 14)}For Teams on the web, share the <strong>Teams tab</strong> and enable <strong>Also share tab audio</strong>. For the Teams desktop app, sharing <strong>Entire Screen</strong> with <strong>Also share system audio</strong> is the most reliable option. Video is never recorded or stored.</div>
+              <div class="prototype-note">${icon("shield", 14)}${companionAudio ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} will capture the default Windows output directly. Keep the Teams speaker and Windows default output set to the same device. No screen-sharing dialog is required.` : state.companion.status === "connected" ? `Update the Windows companion to <strong>${escapeHtml(APP_VERSION)}</strong> for direct Teams desktop audio. Until then, share <strong>Entire Screen</strong> and enable <strong>Also share system audio</strong>.` : `For Teams on the web, share the <strong>Teams tab</strong> and enable <strong>Also share tab audio</strong>. For Teams desktop, install companion ${escapeHtml(APP_VERSION)} for reliable Windows audio, or share <strong>Entire Screen</strong> with system audio.`}</div>
             </div>`
           : `<div class="live-workspace">
               <div class="live-meter">
@@ -689,9 +716,10 @@ function captureView() {
                 ${waveform(capture.status === "recording", true)}
                 <div class="capture-source-live">
                   <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.microphone}" data-source-status="microphone">${icon("mic", 13)}Microphone <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.microphone))}</b></span>
-                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.meeting}" data-source-status="meeting">${icon("headphones", 13)}Meeting <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.meeting))}</b></span>
-                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.mixed}" data-source-status="mixed">${icon("audio", 13)}Mixed <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.mixed))}</b></span>
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.meeting}" data-source-status="meeting">${icon("headphones", 13)}${escapeHtml(meetingSourceLabel)} <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.meeting))}</b></span>
+                  <span class="capture-source-live__item capture-source-live__item--${capture.sourceStatus.mixed}" data-source-status="mixed">${icon("audio", 13)}${capture.meetingCaptureMode === "companion" ? "Tracks" : "Mixed"} <b>${escapeHtml(captureSourceStatusLabel(capture.sourceStatus.mixed))}</b></span>
                 </div>
+                ${capture.meetingCaptureMode === "companion" && capture.meetingDeviceName ? `<div class="capture-device-name">${icon("headphones", 12)}Listening to ${escapeHtml(capture.meetingDeviceName)}</div>` : ""}
                 ${capture.meetingAudioEnded ? `<div class="capture-source-warning" data-meeting-audio-warning="ended">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>` : capture.meetingAudioWarning ? `<div class="capture-source-warning" data-meeting-audio-warning="signal">${icon("headphones", 14)}${escapeHtml(capture.meetingAudioWarning)}</div>` : ""}
               </div>
               <div class="live-transcript">
@@ -1049,8 +1077,8 @@ function settingsPanel() {
         <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
       </section>
       ${transcriptionSettings}
-      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Ask for a tab, window, or screen audio source when capture starts.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised microphone speech as a draft; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
-      <div class="settings-footer"><span>${icon("checkCircle", 15)}Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
+      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised microphone speech as a draft; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
+      <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
   </div>`;
 }
@@ -1083,7 +1111,7 @@ function companionOnboarding() {
         <div class="companion-setup__success-icon">${icon("checkCircle", 30)}</div>
         <span class="eyebrow">Connection confirmed</span>
         <h1 id="companion-setup-title">Desktop companion is working</h1>
-        <p>${escapeHtml(state.companion.metadata?.version ? `NotesBuddy Companion ${state.companion.metadata.version}` : "NotesBuddy Companion")} is running on this computer. Meeting recordings can now be transcribed locally without entering a model or pairing token.</p>
+        <p>${escapeHtml(state.companion.metadata?.version ? `NotesBuddy Companion ${state.companion.metadata.version}` : "NotesBuddy Companion")} is running on this computer. A compatible version captures Windows meeting output directly and transcribes saved recordings locally without a model or pairing token.</p>
         <div class="companion-setup__privacy">${icon("shield", 18)}<div><strong>On-device processing active</strong><span>Audio is sent only to the companion on 127.0.0.1 while it remains connected.</span></div></div>
         <button type="button" class="button button--primary companion-setup__primary" data-action="complete-companion-setup">Continue to NotesBuddy ${icon("chevronRight", 16)}</button>
       </section>
@@ -1428,6 +1456,8 @@ function resetCapture() {
       mixed: "idle",
     },
     meetingDisplaySurface: null,
+    meetingCaptureMode: null,
+    meetingDeviceName: null,
     meetingAudioEnded: false,
     meetingAudioSignalDetected: false,
     meetingAudioWarning: "",
@@ -1447,6 +1477,15 @@ function stopStream(stream) {
 
 function cancelCaptureRuntime() {
   stopMeetingAudioSignalMonitor();
+  if (
+    captureRuntime.companionCaptureId &&
+    captureRuntime.companionCaptureClient
+  ) {
+    captureRuntime.companionCaptureClient
+      .cancelSystemAudioCapture(captureRuntime.companionCaptureId)
+      .catch(() => {});
+    captureRuntime.companionCaptureId = null;
+  }
   Object.values(captureRuntime.recorders).forEach((recorder) => {
     if (recorder?.state && recorder.state !== "inactive") {
       try {
@@ -1473,6 +1512,7 @@ function captureSourceStatusLabel(status) {
     detected: "sound detected",
     listening: "waiting for sound",
     silent: "no sound detected",
+    separate: "saved separately",
   }[status] || status;
 }
 
@@ -1523,6 +1563,9 @@ function meetingAudioTrackHelp(surface) {
 }
 
 function meetingAudioSilenceHelp(surface) {
+  if (surface === "windows-loopback") {
+    return "No Windows output has been detected. In Teams device settings, choose the same speaker as the Windows default output and ask another participant to speak.";
+  }
   if (surface === "browser") {
     return "No sound is arriving from the Teams tab. Check that Also share tab audio is on and ask another participant to speak.";
   }
@@ -1536,6 +1579,10 @@ function stopMeetingAudioSignalMonitor() {
   if (captureRuntime.meetingSignalMonitor) {
     window.clearInterval(captureRuntime.meetingSignalMonitor);
     captureRuntime.meetingSignalMonitor = null;
+  }
+  if (captureRuntime.companionStatusTimer) {
+    window.clearInterval(captureRuntime.companionStatusTimer);
+    captureRuntime.companionStatusTimer = null;
   }
 }
 
@@ -1591,6 +1638,83 @@ function startMeetingAudioSignalMonitor(stream) {
       showToast("No meeting sound detected", message);
     }
   }, 200);
+}
+
+function startCompanionMeetingAudioStatusMonitor() {
+  stopMeetingAudioSignalMonitor();
+  const client = captureRuntime.companionCaptureClient;
+  const captureId = captureRuntime.companionCaptureId;
+  if (!client || !captureId) return;
+  let checking = false;
+  let warned = false;
+  const poll = async () => {
+    if (
+      checking ||
+      !captureRuntime.companionCaptureId ||
+      captureRuntime.companionCaptureId !== captureId
+    ) {
+      return;
+    }
+    checking = true;
+    try {
+      const status = await client.getSystemAudioCapture(captureId);
+      if (captureRuntime.companionCaptureId !== captureId) return;
+      state.capture.meetingDeviceName = status.deviceName || "Windows output";
+      if (status.status === "failed") {
+        throw new Error(status.error || "Windows audio capture stopped.");
+      }
+      if (status.signalDetected) {
+        state.capture.meetingAudioSignalDetected = true;
+        state.capture.meetingAudioWarning = "";
+        setCaptureSourceStatus("meeting", "detected");
+        app.querySelector('[data-meeting-audio-warning="signal"]')?.remove();
+      } else if (!warned && Number(status.durationMs) >= 5000) {
+        warned = true;
+        const message = meetingAudioSilenceHelp("windows-loopback");
+        setCaptureSourceStatus("meeting", "silent");
+        replaceMeetingAudioWarning(message);
+        showToast("No Windows meeting sound detected", message);
+      }
+    } catch (error) {
+      stopMeetingAudioSignalMonitor();
+      const message =
+        error?.message || "The desktop companion stopped capturing Windows audio.";
+      state.capture.meetingAudioWarning = message;
+      setCaptureSourceStatus("meeting", "unavailable");
+      replaceMeetingAudioWarning(message);
+      showToast("Windows audio capture stopped", message);
+    } finally {
+      checking = false;
+    }
+  };
+  captureRuntime.companionStatusTimer = window.setInterval(poll, 500);
+  poll();
+}
+
+async function startCompanionMeetingAudioCapture() {
+  let client = createTranscriptionClient();
+  let capture;
+  try {
+    capture = await client.startSystemAudioCapture();
+  } catch (error) {
+    if (!usesHybridTranscription() || error?.status !== 401) throw error;
+    const reconnected = await connectLocalCompanion({
+      silent: true,
+      force: true,
+    });
+    if (!reconnected || !companionSystemAudioAvailable()) throw error;
+    client = createTranscriptionClient();
+    capture = await client.startSystemAudioCapture();
+  }
+  if (!capture?.captureId) {
+    throw new Error("The desktop companion did not start Windows audio capture.");
+  }
+  captureRuntime.companionCaptureClient = client;
+  captureRuntime.companionCaptureId = capture.captureId;
+  state.capture.meetingCaptureMode = "companion";
+  state.capture.meetingDisplaySurface = "windows-loopback";
+  state.capture.meetingDeviceName = capture.deviceName || "Windows output";
+  state.capture.sourceStatus.meeting = "ready";
 }
 
 function preferredRecordingType() {
@@ -1689,15 +1813,38 @@ async function stopRecorderAndCollect(source) {
     : null;
 }
 
+async function stopCompanionMeetingAudioAndCollect() {
+  const client = captureRuntime.companionCaptureClient;
+  const captureId = captureRuntime.companionCaptureId;
+  if (!client || !captureId) return null;
+  stopMeetingAudioSignalMonitor();
+  captureRuntime.companionCaptureId = null;
+  try {
+    return await client.stopSystemAudioCapture(captureId);
+  } catch (error) {
+    client.cancelSystemAudioCapture(captureId).catch(() => {});
+    showToast(
+      "Windows meeting audio could not be saved",
+      error?.message || "Microphone audio will still be kept.",
+    );
+    return null;
+  }
+}
+
 async function collectCaptureRecordings() {
   const sources = Object.keys(captureRuntime.recorders);
-  const blobs = await Promise.all(
-    sources.map(async (source) => [
-      source,
-      await stopRecorderAndCollect(source),
-    ]),
-  );
-  return Object.fromEntries(blobs);
+  const [blobs, companionMeetingBlob] = await Promise.all([
+    Promise.all(
+      sources.map(async (source) => [
+        source,
+        await stopRecorderAndCollect(source),
+      ]),
+    ),
+    stopCompanionMeetingAudioAndCollect(),
+  ]);
+  const recordings = Object.fromEntries(blobs);
+  if (companionMeetingBlob) recordings.meeting = companionMeetingBlob;
+  return recordings;
 }
 
 async function releaseCaptureRuntime() {
@@ -1823,7 +1970,14 @@ function startSpeechRecognition() {
 }
 
 async function startCapture() {
-  if (!globalThis.MediaRecorder || !navigator.mediaDevices) {
+  const companionAudio = companionSystemAudioAvailable();
+  const browserRecorderRequired =
+    state.capture.microphoneOn ||
+    (state.capture.systemAudioOn && !companionAudio);
+  if (
+    (browserRecorderRequired && !globalThis.MediaRecorder) ||
+    (state.capture.microphoneOn && !navigator.mediaDevices)
+  ) {
     state.capture.permission = "unavailable";
     showToast(
       "Audio recording unavailable",
@@ -1843,76 +1997,11 @@ async function startCapture() {
   state.capture.meetingAudioEnded = false;
   state.capture.meetingAudioSignalDetected = false;
   state.capture.meetingAudioWarning = "";
+  state.capture.meetingCaptureMode = null;
+  state.capture.meetingDeviceName = null;
+  const useCompanionAudio = companionAudio;
 
-  // Display capture must be invoked from the original click's transient user
-  // activation. Microphone permission does not have that constraint, so it is
-  // intentionally requested second.
-  if (state.capture.systemAudioOn) {
-    state.capture.status = "requesting-meeting-audio";
-    state.capture.sourceStatus.meeting = "requesting";
-    render();
-    try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: {
-          suppressLocalAudioPlayback: false,
-        },
-        systemAudio: "include",
-        windowAudio: "system",
-        surfaceSwitching: "include",
-        selfBrowserSurface: "exclude",
-        monitorTypeSurfaces: "include",
-      });
-      state.capture.meetingDisplaySurface =
-        displayStream.getVideoTracks()[0]?.getSettings?.().displaySurface ||
-        "shared surface";
-      const meetingTracks = displayStream.getAudioTracks();
-      if (!meetingTracks.length) {
-        stopStream(displayStream);
-        throw new Error(
-          meetingAudioTrackHelp(state.capture.meetingDisplaySurface),
-        );
-      }
-      captureRuntime.streams.display = displayStream;
-      captureRuntime.streams.meeting = new MediaStream(meetingTracks);
-      state.capture.sourceStatus.meeting = "ready";
-      const sharedTrack =
-        displayStream.getVideoTracks()[0] || meetingTracks[0];
-      sharedTrack.addEventListener(
-        "ended",
-        () => {
-          if (
-            state.capture.status !== "recording" &&
-            state.capture.status !== "paused"
-          ) {
-            return;
-          }
-          state.capture.meetingAudioEnded = true;
-          stopMeetingAudioSignalMonitor();
-          setCaptureSourceStatus("meeting", "ended");
-          showMeetingAudioEndedWarning();
-          showToast(
-            "Meeting audio sharing stopped",
-            "The microphone and mixed recording will continue until you finish.",
-          );
-        },
-        { once: true },
-      );
-    } catch (error) {
-      state.capture.sourceStatus.meeting = "unavailable";
-      state.capture.meetingAudioWarning =
-        error?.name === "NotAllowedError"
-          ? "Meeting audio sharing was cancelled or blocked. Start again and choose a Teams tab or Entire Screen with audio enabled."
-          : error?.message ||
-            meetingAudioTrackHelp(state.capture.meetingDisplaySurface);
-      showToast(
-        "Meeting audio was not shared",
-        `${state.capture.meetingAudioWarning}${state.capture.microphoneOn ? " Microphone recording will continue." : ""}`,
-      );
-    }
-  }
-
-  if (state.capture.microphoneOn) {
+  const requestMicrophone = async () => {
     state.capture.status = "requesting-microphone";
     state.capture.sourceStatus.microphone = "requesting";
     render();
@@ -1930,18 +2019,112 @@ async function startCapture() {
       state.capture.sourceStatus.microphone = "unavailable";
       showToast(
         "Microphone was not shared",
-        captureRuntime.streams.meeting
-          ? "NotesBuddy will continue with the shared meeting audio."
+        captureRuntime.streams.meeting ||
+          captureRuntime.companionCaptureId ||
+          (useCompanionAudio && state.capture.systemAudioOn)
+          ? "NotesBuddy will continue with the meeting audio."
           : "Allow microphone access, then start capture again.",
       );
     }
+  };
+
+  // Companion capture has no transient-activation restriction. Ask for the
+  // microphone first so a first-time permission prompt cannot put Windows
+  // output several seconds ahead of the local track.
+  if (useCompanionAudio && state.capture.microphoneOn) {
+    await requestMicrophone();
+  }
+
+  // Display capture must be invoked from the original click's transient user
+  // activation. In browser fallback, microphone permission is intentionally
+  // requested only after the share picker returns.
+  if (state.capture.systemAudioOn) {
+    state.capture.status = "requesting-meeting-audio";
+    state.capture.sourceStatus.meeting = "requesting";
+    render();
+    try {
+      if (useCompanionAudio) {
+        await startCompanionMeetingAudioCapture();
+      } else {
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: {
+            suppressLocalAudioPlayback: false,
+          },
+          systemAudio: "include",
+          windowAudio: "system",
+          surfaceSwitching: "include",
+          selfBrowserSurface: "exclude",
+          monitorTypeSurfaces: "include",
+        });
+        state.capture.meetingCaptureMode = "browser";
+        state.capture.meetingDisplaySurface =
+          displayStream.getVideoTracks()[0]?.getSettings?.().displaySurface ||
+          "shared surface";
+        const meetingTracks = displayStream.getAudioTracks();
+        if (!meetingTracks.length) {
+          stopStream(displayStream);
+          throw new Error(
+            meetingAudioTrackHelp(state.capture.meetingDisplaySurface),
+          );
+        }
+        captureRuntime.streams.display = displayStream;
+        captureRuntime.streams.meeting = new MediaStream(meetingTracks);
+        state.capture.sourceStatus.meeting = "ready";
+        const sharedTrack =
+          displayStream.getVideoTracks()[0] || meetingTracks[0];
+        sharedTrack.addEventListener(
+          "ended",
+          () => {
+            if (
+              state.capture.status !== "recording" &&
+              state.capture.status !== "paused"
+            ) {
+              return;
+            }
+            state.capture.meetingAudioEnded = true;
+            stopMeetingAudioSignalMonitor();
+            setCaptureSourceStatus("meeting", "ended");
+            showMeetingAudioEndedWarning();
+            showToast(
+              "Meeting audio sharing stopped",
+              "The microphone and mixed recording will continue until you finish.",
+            );
+          },
+          { once: true },
+        );
+      }
+    } catch (error) {
+      state.capture.sourceStatus.meeting = "unavailable";
+      state.capture.meetingAudioWarning =
+        useCompanionAudio
+          ? error?.message ||
+            `Windows audio capture could not start. Restart companion ${APP_VERSION} and try again.`
+          : error?.name === "NotAllowedError"
+          ? "Meeting audio sharing was cancelled or blocked. Start again and choose a Teams tab or Entire Screen with audio enabled."
+          : error?.message ||
+            meetingAudioTrackHelp(state.capture.meetingDisplaySurface);
+      showToast(
+        useCompanionAudio
+          ? "Windows meeting audio could not start"
+          : "Meeting audio was not shared",
+        `${state.capture.meetingAudioWarning}${state.capture.microphoneOn ? " Microphone recording will continue." : ""}`,
+      );
+    }
+  }
+
+  if (!useCompanionAudio && state.capture.microphoneOn) {
+    await requestMicrophone();
   }
 
   const sourceStreams = [
     captureRuntime.streams.microphone,
     captureRuntime.streams.meeting,
   ].filter(Boolean);
-  if (!sourceStreams.length) {
+  const companionMeetingAvailable = Boolean(
+    captureRuntime.companionCaptureId,
+  );
+  if (!sourceStreams.length && !companionMeetingAvailable) {
     state.capture.status = "idle";
     state.capture.permission = "unavailable";
     cancelCaptureRuntime();
@@ -1954,7 +2137,9 @@ async function startCapture() {
   }
 
   try {
-    captureRuntime.streams.mixed = buildMixedStream(sourceStreams);
+    if (!companionMeetingAvailable) {
+      captureRuntime.streams.mixed = buildMixedStream(sourceStreams);
+    }
     if (captureRuntime.streams.microphone) {
       createSourceRecorder(
         "microphone",
@@ -1964,7 +2149,9 @@ async function startCapture() {
     if (captureRuntime.streams.meeting) {
       createSourceRecorder("meeting", captureRuntime.streams.meeting);
     }
-    createSourceRecorder("mixed", captureRuntime.streams.mixed);
+    if (captureRuntime.streams.mixed) {
+      createSourceRecorder("mixed", captureRuntime.streams.mixed);
+    }
   } catch (error) {
     state.capture.status = "idle";
     cancelCaptureRuntime();
@@ -1985,6 +2172,10 @@ async function startCapture() {
       state.capture.sourceStatus[source] =
         source === "meeting" ? "listening" : "recording";
     });
+    if (companionMeetingAvailable) {
+      state.capture.sourceStatus.meeting = "listening";
+      state.capture.sourceStatus.mixed = "separate";
+    }
   } catch (error) {
     state.capture.status = "idle";
     cancelCaptureRuntime();
@@ -2004,12 +2195,14 @@ async function startCapture() {
   if (captureRuntime.streams.microphone) startSpeechRecognition();
   startCaptureTimer();
   render();
-  if (captureRuntime.streams.meeting) {
+  if (companionMeetingAvailable) {
+    startCompanionMeetingAudioStatusMonitor();
+  } else if (captureRuntime.streams.meeting) {
     startMeetingAudioSignalMonitor(captureRuntime.streams.meeting);
   }
 }
 
-function pauseCapture() {
+async function pauseCapture() {
   if (state.capture.status !== "recording") return;
   state.capture.status = "paused";
   clearInterval(captureTimer);
@@ -2018,10 +2211,27 @@ function pauseCapture() {
     if (recorder.state === "recording") recorder.pause();
     setCaptureSourceStatus(source, "paused");
   });
+  if (
+    captureRuntime.companionCaptureId &&
+    captureRuntime.companionCaptureClient
+  ) {
+    setCaptureSourceStatus("meeting", "paused");
+    setCaptureSourceStatus("mixed", "separate");
+    try {
+      await captureRuntime.companionCaptureClient.pauseSystemAudioCapture(
+        captureRuntime.companionCaptureId,
+      );
+    } catch (error) {
+      showToast(
+        "Windows audio could not pause",
+        error?.message || "Finish the capture to preserve available audio.",
+      );
+    }
+  }
   captureRuntime.audioContext?.suspend?.().catch(() => {});
 }
 
-function resumeCapture() {
+async function resumeCapture() {
   if (state.capture.status !== "paused") return;
   state.capture.status = "recording";
   Object.entries(captureRuntime.recorders).forEach(([source, recorder]) => {
@@ -2037,6 +2247,31 @@ function resumeCapture() {
         : "recording",
     );
   });
+  if (
+    captureRuntime.companionCaptureId &&
+    captureRuntime.companionCaptureClient
+  ) {
+    try {
+      await captureRuntime.companionCaptureClient.resumeSystemAudioCapture(
+        captureRuntime.companionCaptureId,
+      );
+      setCaptureSourceStatus(
+        "meeting",
+        state.capture.meetingAudioSignalDetected
+          ? "detected"
+          : state.capture.meetingAudioWarning
+            ? "silent"
+            : "listening",
+      );
+      setCaptureSourceStatus("mixed", "separate");
+    } catch (error) {
+      setCaptureSourceStatus("meeting", "unavailable");
+      showToast(
+        "Windows audio could not resume",
+        error?.message || "Finish the capture to preserve available audio.",
+      );
+    }
+  }
   captureRuntime.audioContext?.resume?.().catch(() => {});
   if (captureRuntime.streams.microphone) startSpeechRecognition();
   startCaptureTimer();
@@ -2050,6 +2285,7 @@ async function finishCapture() {
   const title = state.capture.title.trim() || "Untitled meeting";
   const elapsed = state.capture.elapsed;
   const segments = structuredClone(state.capture.segments);
+  const meetingCaptureMode = state.capture.meetingCaptureMode;
   const captureStartedAt = captureRuntime.captureStartedAt;
   const audioPromise = collectCaptureRecordings();
   render();
@@ -2079,7 +2315,12 @@ async function finishCapture() {
     }
   }
   const primarySource =
-    ["mixed", "microphone", "meeting"].find(
+    [
+      "mixed",
+      ...(meetingCaptureMode === "companion"
+        ? ["meeting", "microphone"]
+        : ["microphone", "meeting"]),
+    ].find(
       (source) => recordingAssets[source],
     ) || null;
   const primaryAsset = primarySource
@@ -2120,6 +2361,7 @@ async function finishCapture() {
     recordingAssets,
     captureStartedAt,
     captureClockVersion: 1,
+    meetingCaptureMode,
     title,
     dateISO: new Date().toISOString(),
     duration: durationLabel(elapsed),
@@ -2771,9 +3013,9 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "pause-capture") {
     if (state.capture.status === "recording") {
-      pauseCapture();
+      await pauseCapture();
     } else {
-      resumeCapture();
+      await resumeCapture();
     }
   } else if (action === "select-recording-source") {
     const meeting = selectedMeeting();

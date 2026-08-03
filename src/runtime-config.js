@@ -1,5 +1,6 @@
 // Public, non-secret deployment configuration. Never put service credentials here.
 globalThis.NotesBuddyRuntime = Object.freeze({
+  appVersion: "2026.08.1",
   transcriptionMode: "hybrid",
   localCompanionEndpoint: "http://127.0.0.1:8765",
   transcriptionEndpoint:

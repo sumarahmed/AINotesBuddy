@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
+import wave
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -18,17 +21,101 @@ from notesbuddy_transcription.engine import EmptyEngine, EngineCancelled
 PAIRING_TOKEN = "test-pairing-token-that-is-long-enough"
 
 
+class FakeSystemAudioCapture:
+    def __init__(self, capture_id: str, path: Path) -> None:
+        self.id = capture_id
+        self.path = path
+        self.status = "recording"
+
+    def public(self) -> dict:
+        return {
+            "captureId": self.id,
+            "status": self.status,
+            "deviceName": "Synthetic Windows output",
+            "signalDetected": True,
+            "level": 0.2,
+            "durationMs": 1000,
+            "sampleRate": 8000,
+            "channels": 2,
+            "error": None,
+        }
+
+
+class FakeSystemAudioManager:
+    available = True
+    backend_name = "test-wasapi-loopback"
+
+    def __init__(self) -> None:
+        self.captures: dict[str, FakeSystemAudioCapture] = {}
+        self.discarded: list[str] = []
+
+    def start(self) -> FakeSystemAudioCapture:
+        capture_id = f"capture-{len(self.captures) + 1}"
+        handle, raw_path = tempfile.mkstemp(suffix=".wav")
+        os.close(handle)
+        path = Path(raw_path)
+        with wave.open(str(path), "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(2)
+            output.setframerate(8000)
+            output.writeframes(b"\x00\x00\x00\x00" * 8000)
+        capture = FakeSystemAudioCapture(capture_id, path)
+        self.captures[capture_id] = capture
+        return capture
+
+    def get(self, capture_id: str) -> FakeSystemAudioCapture:
+        from notesbuddy_transcription.system_audio import SystemAudioCaptureNotFound
+
+        capture = self.captures.get(capture_id)
+        if capture is None:
+            raise SystemAudioCaptureNotFound("System audio capture was not found.")
+        return capture
+
+    def pause(self, capture_id: str) -> FakeSystemAudioCapture:
+        capture = self.get(capture_id)
+        capture.status = "paused"
+        return capture
+
+    def resume(self, capture_id: str) -> FakeSystemAudioCapture:
+        capture = self.get(capture_id)
+        capture.status = "recording"
+        return capture
+
+    def stop(self, capture_id: str) -> FakeSystemAudioCapture:
+        capture = self.get(capture_id)
+        capture.status = "completed"
+        return capture
+
+    def cancel(self, capture_id: str) -> FakeSystemAudioCapture:
+        capture = self.get(capture_id)
+        capture.status = "cancelled"
+        self.discard(capture_id)
+        return capture
+
+    def discard(self, capture_id: str) -> None:
+        capture = self.captures.pop(capture_id, None)
+        if capture is not None:
+            capture.path.unlink(missing_ok=True)
+        self.discarded.append(capture_id)
+
+    def shutdown(self) -> None:
+        for capture_id in list(self.captures):
+            self.discard(capture_id)
+
+
 @unittest.skipIf(TestClient is None, "FastAPI test dependencies are not installed")
 class LocalApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         from notesbuddy_transcription.server import create_app
 
+        cls.system_audio = FakeSystemAudioManager()
         cls.client = TestClient(
             create_app(
                 engine=EmptyEngine(),
                 pairing_token=PAIRING_TOKEN,
                 allowed_origins=["http://127.0.0.1:4173"],
+                system_audio_capture=cls.system_audio,
             )
         )
         cls.headers = {"X-NotesBuddy-Pairing-Token": PAIRING_TOKEN}
@@ -116,7 +203,70 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "available")
         self.assertFalse(response.json()["browserPairing"])
         self.assertTrue(response.json()["modelsReady"])
+        self.assertTrue(response.json()["systemAudioCapture"])
+        self.assertEqual(
+            response.json()["systemAudioBackend"],
+            "test-wasapi-loopback",
+        )
         self.assertNotIn("token", response.text.lower())
+
+    def test_system_audio_capture_requires_pairing_and_returns_wav(self) -> None:
+        denied = self.client.post("/v1/system-audio/captures")
+        self.assertEqual(denied.status_code, 401)
+
+        started = self.client.post(
+            "/v1/system-audio/captures",
+            headers=self.headers,
+        )
+        self.assertEqual(started.status_code, 200)
+        capture_id = started.json()["captureId"]
+        self.assertEqual(started.json()["deviceName"], "Synthetic Windows output")
+
+        status = self.client.get(
+            f"/v1/system-audio/captures/{capture_id}",
+            headers=self.headers,
+        )
+        self.assertTrue(status.json()["signalDetected"])
+
+        paused = self.client.post(
+            f"/v1/system-audio/captures/{capture_id}/pause",
+            headers=self.headers,
+        )
+        self.assertEqual(paused.json()["status"], "paused")
+        resumed = self.client.post(
+            f"/v1/system-audio/captures/{capture_id}/resume",
+            headers=self.headers,
+        )
+        self.assertEqual(resumed.json()["status"], "recording")
+
+        stopped = self.client.post(
+            f"/v1/system-audio/captures/{capture_id}/stop",
+            headers=self.headers,
+        )
+        self.assertEqual(stopped.status_code, 200)
+        self.assertEqual(stopped.headers["content-type"], "audio/wav")
+        self.assertTrue(stopped.content.startswith(b"RIFF"))
+        self.assertIn(capture_id, self.system_audio.discarded)
+
+    def test_system_audio_capture_can_be_cancelled(self) -> None:
+        started = self.client.post(
+            "/v1/system-audio/captures",
+            headers=self.headers,
+        )
+        capture_id = started.json()["captureId"]
+
+        cancelled = self.client.delete(
+            f"/v1/system-audio/captures/{capture_id}",
+            headers=self.headers,
+        )
+
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.json()["status"], "cancelled")
+        missing = self.client.get(
+            f"/v1/system-audio/captures/{capture_id}",
+            headers=self.headers,
+        )
+        self.assertEqual(missing.status_code, 404)
 
     def test_automatic_pairing_is_disabled_for_the_manual_cli(self) -> None:
         response = self.client.post(
@@ -236,6 +386,10 @@ class AnonymousHostedApiTests(unittest.TestCase):
     def test_local_companion_routes_are_not_exposed_by_hosted_service(self) -> None:
         self.assertEqual(self.client.get("/v1/companion").status_code, 404)
         self.assertEqual(self.client.post("/v1/pairings").status_code, 404)
+        self.assertEqual(
+            self.client.post("/v1/system-audio/captures").status_code,
+            404,
+        )
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test dependencies are not installed")

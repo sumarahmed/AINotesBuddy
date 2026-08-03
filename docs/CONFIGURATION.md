@@ -5,13 +5,17 @@ transcript, fixed calendar event, or fixed date. The first-run profile supplies
 the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
+The published version uses `Year.Month.MinorRelease`. The current release is
+`2026.08.1`; `package.json` represents it as `2026.8.1` for semantic-version
+compatibility.
+
 ## Browser settings
 
 Settings are stored under `notesbuddy-settings` for the current browser origin.
 
 | Setting | Default | Behavior |
 | --- | --- | --- |
-| Meeting audio | On | Ask for a tab/window/screen audio source at capture start |
+| Meeting audio | On | Capture default Windows output through a compatible companion; otherwise ask for a browser tab/window/screen audio source |
 | Browser live transcript draft | On | Use browser speech recognition for microphone draft text when supported |
 | Automatically identify speakers | Off | Start the paired local job after saving a recording |
 | Create meeting brief | On | Build an extractive brief only from returned transcript segments |
@@ -37,6 +41,7 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
+| Product version | `2026.08.1` | `Year.Month.MinorRelease` in `src/runtime-config.js` and the companion launcher |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
 | Runtime transcription mode | `hybrid` | Public non-secret setting in `src/runtime-config.js` |
@@ -48,6 +53,7 @@ streams. It applies to the next capture.
 | Recorder preference | Opus WebM, WebM, then MP4 | First browser-supported type in `preferredRecordingType()` |
 | Recorder chunk interval | 500 ms | Incremental data without excessive events |
 | Display-audio hints | System audio included; window audio set to system | Encourages Chrome/Edge to expose Teams desktop sound when supported |
+| Preferred meeting capture | Windows WASAPI loopback | Used when companion discovery reports `systemAudioCapture`; avoids silent Teams-window browser tracks |
 | Meeting signal threshold | RMS 0.008 over 512 samples | Changes the live badge only after actual meeting sound arrives |
 | Meeting silence warning | 5 seconds | Warns early while allowing quiet meetings to keep recording |
 | Default meeting title | `Untitled meeting` | User-editable safe placeholder |

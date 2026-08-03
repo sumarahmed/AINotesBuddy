@@ -2,6 +2,10 @@
 
 Status: implemented and verified on `feature/meeting-audio-diarization`
 
+Update for `2026.08.1`: the Windows companion now provides explicit,
+user-started WASAPI loopback capture. The browser share path described below is
+retained as a fallback for users without the updated companion.
+
 Implementation verification completed 2026-07-30:
 
 - Browser module tests: 8/8 passed.
@@ -18,9 +22,9 @@ Implementation verification completed 2026-07-30:
   and local `HF_TOKEN`; secrets and multi-gigabyte models are intentionally not
   committed or downloaded by repository checks.
 
-This work remains isolated from `main`. The GitHub Pages workflow deploys only
-pushes to `main`, so planning and implementation on this feature branch cannot
-change the current public site.
+The original work was developed on an isolated feature branch. The implemented
+capture/diarization foundation is now part of the main application; this file
+is retained as its design and verification record.
 
 ## Objectives
 
@@ -405,6 +409,6 @@ is data/hardware/version dependent and is not represented by mocked text.
 
 - Voice biometric identification or automatic real-name recognition.
 - A meeting-platform bot that joins Teams, Zoom, or Google Meet.
-- Silent background system-audio capture without the browser share prompt.
+- Background system-audio capture without an explicit NotesBuddy start action.
 - Uploading meeting recordings to a hosted service.
 - Merging to `main` or changing the public deployment.

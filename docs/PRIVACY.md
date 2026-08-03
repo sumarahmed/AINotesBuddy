@@ -21,6 +21,7 @@ application's control.
 | Manual CLI URL and recovery token | Browser `localStorage` in explicit local mode | Until settings/site data is cleared |
 | Hosted anonymous session token | Browser `sessionStorage` | Session expiry or tab/session storage deletion |
 | Microphone, meeting, mixed audio | Browser IndexedDB | Until meeting/site data is deleted |
+| Active Windows-output capture | Companion random temporary WAV | Deleted after local transfer, cancellation, or shutdown |
 | Browser live-speech audio | Browser speech provider when enabled | Provider/browser controlled |
 | Local companion job audio | Random OS temporary directory | Removed after job success, failure, or cancellation |
 | Hosted job audio | Host container temporary directory | Removed after job success, failure, or cancellation |
@@ -33,7 +34,13 @@ application's control.
 
 ## Browser capture
 
-Microphone capture uses `getUserMedia()`. Meeting audio uses an explicit
+Microphone capture uses `getUserMedia()`. With compatible companion `2026.08.1`
+or later, meeting audio uses a pairing-protected request to capture the default
+Windows output through WASAPI loopback. Capture starts only after the user
+presses **Start capture**, stops when the user finishes/cancels, and includes
+all sounds played through that output device during the interval.
+
+Without a compatible companion, meeting audio uses an explicit
 `getDisplayMedia()` share prompt. The user chooses a tab, window, or screen and
 must enable its **Share audio** option.
 
@@ -44,8 +51,9 @@ render it, persist it, or send it to the companion.
 New captures can store:
 
 - isolated microphone audio;
-- isolated shared meeting audio;
-- a local mixed playback track.
+- isolated Windows-output or shared meeting audio;
+- a local mixed playback track for browser capture. Companion capture keeps
+  microphone and Windows output separate and defaults playback to the latter.
 
 The exact set depends on source selection and browser permission. Each Blob is
 stored under a source-specific IndexedDB key.
@@ -101,6 +109,11 @@ The packaged launcher:
 Uploads are written to a random OS temporary directory. The worker removes it
 in a `finally` block after completed, failed, or cancelled jobs. Cancellation is
 cooperative, so a native inference call may return before cleanup executes.
+
+Active WASAPI capture uses a separate random temporary WAV. The protected stop
+route transfers it over loopback and deletes it after the response. Cancellation
+or companion shutdown also deletes it. The companion permits only one active
+Windows-output capture.
 
 The returned transcript is saved in the browser meeting record. The companion
 keeps recent job status/results in process memory for one hour by default (and

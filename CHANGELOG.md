@@ -2,13 +2,21 @@
 
 All notable changes to NotesBuddy are documented in this file.
 
-The project follows the structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
-but does not yet publish semantic-versioned releases.
+The project follows the structure of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versions use `Year.Month.MinorRelease`; package metadata omits leading zeroes to
+remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.1 - 2026-08-03
+
 ### Added
 
+- Direct Windows system-output capture through the desktop companion and
+  WASAPI loopback, including live signal detection, pause/resume, and WAV
+  transfer back to the browser
+- Visible `Year.Month.MinorRelease` version in the website, settings, and
+  companion
 - Windows desktop companion control panel and notification-area lifecycle
 - First-entry installer onboarding with live companion confirmation and
   session-only online deferral
@@ -48,6 +56,10 @@ but does not yet publish semantic-versioned releases.
 
 ### Changed
 
+- When companion 2026.08.1 or later is connected, meeting capture uses Windows
+  output directly instead of opening the browser screen/window share picker
+- Companion captures keep Windows output and microphone as separate synchronized
+  tracks; playback prefers the meeting track when a mixed track is unavailable
 - The public runtime now probes the desktop companion first and does not expose
   URL/token fields in automatic hybrid mode
 - Packaged releases can use publisher-bundled offline models without requesting

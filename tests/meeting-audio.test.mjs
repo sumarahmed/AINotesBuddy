@@ -48,6 +48,22 @@ test("chooses mixed playback first and honours a valid source preference", () =>
   );
 });
 
+test("prefers companion Windows output when microphone and meeting tracks are separate", () => {
+  const meeting = {
+    meetingCaptureMode: "companion",
+    recordingAssets: {
+      microphone: { id: "mic" },
+      meeting: { id: "windows-output" },
+    },
+  };
+
+  assert.equal(MeetingAudio.primaryRecordingSource(meeting), "meeting");
+  assert.equal(
+    MeetingAudio.primaryRecordingSource(meeting, "microphone"),
+    "microphone",
+  );
+});
+
 test("keeps complete transcript text instead of applying name length limits", () => {
   const longText =
     "This sentence deliberately exceeds eighty characters so a complete spoken thought remains intact in the saved transcript.";
@@ -357,6 +373,85 @@ test("transcription client sends pairing token and all source assets", async () 
   assert.deepEqual(
     Array.from(calls[0].options.body.keys()),
     ["microphone", "meeting", "mixed", "metadata"],
+  );
+});
+
+test("local client controls Windows output capture and downloads WAV audio", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/stop")) {
+      return {
+        ok: true,
+        status: 200,
+        async blob() {
+          return new Blob(["RIFF synthetic wav"], { type: "audio/wav" });
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          captureId: "capture-test",
+          status: url.endsWith("/pause")
+            ? "paused"
+            : "recording",
+          signalDetected: true,
+        };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    token: "system-audio-pairing-secret",
+    fetchImpl,
+  });
+
+  const started = await client.startSystemAudioCapture();
+  await client.getSystemAudioCapture(started.captureId);
+  await client.pauseSystemAudioCapture(started.captureId);
+  await client.resumeSystemAudioCapture(started.captureId);
+  const recording = await client.stopSystemAudioCapture(started.captureId);
+
+  assert.equal(recording.type, "audio/wav");
+  assert.ok(recording.size > 0);
+  assert.deepEqual(
+    calls.map(({ url, options }) => [
+      new URL(url).pathname,
+      options.method || "GET",
+    ]),
+    [
+      ["/v1/system-audio/captures", "POST"],
+      ["/v1/system-audio/captures/capture-test", "GET"],
+      ["/v1/system-audio/captures/capture-test/pause", "POST"],
+      ["/v1/system-audio/captures/capture-test/resume", "POST"],
+      ["/v1/system-audio/captures/capture-test/stop", "POST"],
+    ],
+  );
+  assert.ok(
+    calls.every(
+      ({ options }) =>
+        options.targetAddressSpace === "loopback" &&
+        options.headers["X-NotesBuddy-Pairing-Token"] ===
+          "system-audio-pairing-secret",
+    ),
+  );
+});
+
+test("hosted client refuses desktop system audio capture", async () => {
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "https://transcribe.example.test",
+    mode: "hosted",
+    fetchImpl: async () => {
+      throw new Error("Hosted fetch must not be called");
+    },
+  });
+
+  assert.throws(
+    () => client.startSystemAudioCapture(),
+    /requires the desktop companion/,
   );
 });
 

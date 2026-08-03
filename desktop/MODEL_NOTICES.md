@@ -24,5 +24,14 @@ the executable, copied into the installer, committed to Git, or requested from
 an end user. `desktop/prepare_models.py` records the immutable repository
 revisions in `MODEL_MANIFEST.json` for every build.
 
+## Windows audio capture
+
+- Library: `SoundCard`
+- Project: <https://pypi.org/project/SoundCard/>
+- Declared license: BSD-3-Clause
+- The companion uses its Windows/WASAPI backend only while the user has an
+  active NotesBuddy recording. Preserve the upstream software notice in
+  distributed packages.
+
 This file is an engineering control, not legal advice. Complete a license and
 privacy review before publishing a public installer.
