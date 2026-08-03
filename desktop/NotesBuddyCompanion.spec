@@ -25,6 +25,7 @@ for package in (
     "PIL",
     "pyannote.audio",
     "pystray",
+    "soundcard",
 ):
     try:
         package_datas, package_binaries, package_hiddenimports = collect_all(package)

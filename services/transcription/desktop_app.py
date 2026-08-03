@@ -17,7 +17,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-COMPANION_VERSION = "0.1.2"
+COMPANION_VERSION = "2026.08.1"
 DEFAULT_PORT = 8765
 DEFAULT_WEB_URL = "https://sumarahmed.github.io/AINotesBuddy/"
 AUTOSTART_VALUE_NAME = "NotesBuddyCompanion"
@@ -200,7 +200,7 @@ class DesktopWindow:
         self.tray_icon = None
 
         self.root = tk.Tk()
-        self.root.title("NotesBuddy Desktop Companion")
+        self.root.title(f"NotesBuddy Desktop Companion {COMPANION_VERSION}")
         self.root.geometry("560x370")
         self.root.minsize(520, 340)
         self.root.protocol("WM_DELETE_WINDOW", self._close_window)
@@ -232,9 +232,14 @@ class DesktopWindow:
         ).pack(anchor="w")
         ttk.Label(
             frame,
+            text=f"Version {COMPANION_VERSION}",
+            foreground="#5b6470",
+        ).pack(anchor="w", pady=(2, 0))
+        ttk.Label(
+            frame,
             text=(
-                "Transcribes meeting audio on this computer and securely connects "
-                "to the NotesBuddy website."
+                "Captures Windows meeting audio, transcribes it on this computer, "
+                "and securely connects to the NotesBuddy website."
             ),
             wraplength=490,
         ).pack(anchor="w", pady=(8, 24))
@@ -274,8 +279,9 @@ class DesktopWindow:
         ttk.Label(
             frame,
             text=(
-                "Audio is sent only to 127.0.0.1 while local mode is active. "
-                "Models load on the first transcription and may take a moment."
+                "Windows output is captured through WASAPI only while a recording "
+                "is active. Audio stays on this computer and is sent only to "
+                "127.0.0.1 for local processing."
             ),
             foreground="#5b6470",
             wraplength=490,
@@ -283,7 +289,7 @@ class DesktopWindow:
 
     def _show_server_result(self, result: str) -> None:
         if result == "started":
-            self.status.set("Connected — local transcription is available")
+            self.status.set("Connected — Windows audio capture is available")
             self.detail.set(
                 "Keep this companion running. The website will connect "
                 "automatically without asking users for a token."
@@ -417,10 +423,15 @@ def self_test(
                 raise RuntimeError(
                     "The packaged loopback API started but did not answer discovery."
                 )
+            if sys.platform == "win32" and not discovery.get("systemAudioCapture"):
+                raise RuntimeError(
+                    "The packaged loopback API cannot capture Windows output."
+                )
             server_check = {
                 "status": "ok",
                 "host": "127.0.0.1",
                 "apiVersion": discovery.get("apiVersion"),
+                "systemAudioCapture": discovery.get("systemAudioCapture"),
             }
         finally:
             companion_server.stop()
@@ -440,6 +451,11 @@ def self_test(
         "/v1/companion",
         "/v1/pairings",
         "/v1/health",
+        "/v1/system-audio/captures",
+        "/v1/system-audio/captures/{capture_id}",
+        "/v1/system-audio/captures/{capture_id}/pause",
+        "/v1/system-audio/captures/{capture_id}/resume",
+        "/v1/system-audio/captures/{capture_id}/stop",
         "/v1/transcriptions",
         "/v1/transcriptions/{job_id}",
     }
@@ -457,6 +473,7 @@ def self_test(
         for package in (
             "faster_whisper",
             "pyannote.audio",
+            "soundcard",
             "soundfile",
             "torch",
         ):

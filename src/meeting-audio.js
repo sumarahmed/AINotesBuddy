@@ -117,6 +117,9 @@
   function primaryRecordingSource(meeting, preferredSource) {
     const assets = getRecordingAssets(meeting);
     if (preferredSource && assets[preferredSource]) return preferredSource;
+    if (meeting?.meetingCaptureMode === "companion" && assets.meeting) {
+      return "meeting";
+    }
     return RECORDING_SOURCES.find((source) => assets[source]) || null;
   }
 
@@ -809,6 +812,88 @@
 
     health() {
       return this.request("/v1/health", { skipSession: true });
+    }
+
+    requireLocalSystemAudio() {
+      if (this.mode !== "local") {
+        throw new Error(
+          "Windows system audio capture requires the desktop companion.",
+        );
+      }
+    }
+
+    startSystemAudioCapture() {
+      this.requireLocalSystemAudio();
+      return this.request("/v1/system-audio/captures", {
+        method: "POST",
+        cache: "no-store",
+      });
+    }
+
+    getSystemAudioCapture(captureId) {
+      this.requireLocalSystemAudio();
+      return this.request(
+        `/v1/system-audio/captures/${encodeURIComponent(captureId)}`,
+        { cache: "no-store" },
+      );
+    }
+
+    pauseSystemAudioCapture(captureId) {
+      this.requireLocalSystemAudio();
+      return this.request(
+        `/v1/system-audio/captures/${encodeURIComponent(captureId)}/pause`,
+        { method: "POST", cache: "no-store" },
+      );
+    }
+
+    resumeSystemAudioCapture(captureId) {
+      this.requireLocalSystemAudio();
+      return this.request(
+        `/v1/system-audio/captures/${encodeURIComponent(captureId)}/resume`,
+        { method: "POST", cache: "no-store" },
+      );
+    }
+
+    cancelSystemAudioCapture(captureId) {
+      this.requireLocalSystemAudio();
+      return this.request(
+        `/v1/system-audio/captures/${encodeURIComponent(captureId)}`,
+        { method: "DELETE", cache: "no-store" },
+      );
+    }
+
+    async stopSystemAudioCapture(captureId) {
+      this.requireLocalSystemAudio();
+      const response = await this.fetchImpl(
+        `${this.endpoint}/v1/system-audio/captures/${encodeURIComponent(captureId)}/stop`,
+        {
+          method: "POST",
+          cache: "no-store",
+          targetAddressSpace: "loopback",
+          headers: this.headers({ Accept: "audio/wav" }),
+        },
+      );
+      if (!response.ok) {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        const error = new Error(
+          payload?.detail ||
+            `Desktop companion returned ${response.status}`,
+        );
+        error.status = response.status;
+        throw error;
+      }
+      const blob = await response.blob();
+      if (!blob?.size) {
+        throw new Error("Desktop companion returned an empty audio recording.");
+      }
+      return blob.type
+        ? blob
+        : new Blob([blob], { type: "audio/wav" });
     }
 
     async createJob({

@@ -12,6 +12,8 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
+**Current version:** `2026.08.1` (`Year.Month.MinorRelease`)
+
 ## What works
 
 - Separate **My microphone**, **Meeting audio**, and **Mixed recording** assets
@@ -56,20 +58,22 @@ For meeting audio:
 
 1. Leave **Meeting audio** enabled.
 2. Press **Start capture**.
-3. For **Teams on the web**, choose the Teams tab and enable **Also share tab
-   audio**.
-4. For the **Teams desktop app**, choose **Entire Screen** and enable **Also
-   share system audio**. This is more reliable than selecting only the Teams
-   window when the browser cannot expose window audio.
+3. With companion `2026.08.1` or later connected, NotesBuddy records the
+   default Windows output directly. No browser share picker is shown. In Teams,
+   select the same speaker device that Windows uses as its default output.
+4. Without the companion, **Teams on the web** can use a shared Teams tab with
+   **Also share tab audio**. For the Teams desktop app, browser fallback requires
+   **Entire Screen** with **Also share system audio**; a Teams window alone can
+   still return a silent browser track.
 5. Ask another participant to speak and confirm the Meeting badge changes from
    **Waiting for sound** to **Sound detected** before continuing.
 
-The browser temporarily requires a display video track to maintain the share,
-but NotesBuddy never sends it to `MediaRecorder`, stores it, or displays it.
-Meeting-audio availability depends on the browser, operating system, and
-selected surface. Current Chrome or Edge on Windows is recommended. NotesBuddy
-requests window/system audio and warns when the browser returns no audio track
-or when the track remains silent for five seconds.
+The companion uses Windows WASAPI loopback only while capture is active. It
+saves Windows output and microphone as separate synchronized tracks, which
+preserves remote voices for transcription and reliable playback. Browser
+fallback temporarily requires a display video track to maintain the share, but
+NotesBuddy never records, stores, or displays that video. Current Chrome or
+Edge on Windows is recommended.
 
 Speaker separation happens after the recording is transcribed. It can group
 distinct voices as **Speaker 1**, **Speaker 2**, and so on, but it cannot learn
@@ -133,13 +137,15 @@ operating limits, and future subscription migration.
 | --- | --- |
 | Profile, meeting records, speaker names, transcripts, settings | Browser `localStorage` |
 | Microphone, meeting, and mixed audio Blobs | Browser IndexedDB |
+| Active Windows-output capture | Companion temporary WAV; transferred locally and deleted when capture finishes |
 | Automatic desktop pairing token | Page memory only; expires and is revoked on companion restart |
 | Manual recovery token | User-local companion token file; browser storage only in manual CLI mode |
 | Transcription job audio | Temporary local/hosted job directory, deleted after terminal state |
 | Hosted anonymous session | Browser `sessionStorage`, expiring |
 | Speech and diarization models | Local or hosted model cache |
 
-Meeting records are not synchronized between people, devices, browsers, or
+Windows-output capture includes everything played through the selected default
+speaker while recording, including notification sounds. Meeting records are not synchronized between people, devices, browsers, or
 site origins. Hosted processing returns the result only to the requesting
 anonymous session. The local profile is not an account. Two users sharing one
 operating-system browser profile share the same NotesBuddy workspace, while
@@ -209,9 +215,9 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 
 ## Current limitations
 
-- Display-audio capture always requires an explicit browser share prompt.
-- Some surface/browser combinations do not expose audio; there is no silent
-  operating-system loopback capture.
+- Direct system-output capture requires companion `2026.08.1` or later on
+  Windows. The browser-only fallback still requires an explicit share prompt
+  and some surface/browser combinations do not expose audio.
 - The Windows installer is large because it includes offline models. Publishing
   it requires a one-time model-license review and gated build secret.
 - A running browser page cannot start the local companion automatically.

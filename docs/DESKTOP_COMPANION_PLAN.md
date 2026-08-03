@@ -2,13 +2,14 @@
 
 ## Status
 
-Implementation target: Windows-first local companion with a hybrid public-site
-rollout.
+Implemented through release `2026.08.1`: Windows-first local companion with a
+hybrid public-site rollout and WASAPI system-output capture.
 
 The currently deployed hosted transcription service remains available while
 the companion is developed and adopted. Installing the companion changes the
-processing location, not the recording, transcript, playback, or export data
-contracts.
+processing location and replaces unreliable Teams-window browser audio with
+direct default-output capture while preserving the transcript, playback, and
+export data contracts.
 
 ## Product objective
 
@@ -22,7 +23,8 @@ The target experience is:
 2. NotesBuddy checks for a companion on `127.0.0.1`.
 3. If the companion is present, the trusted NotesBuddy origin receives an
    ephemeral browser-pairing token.
-4. Browser recordings are sent to the loopback service only.
+4. The companion captures Windows output locally; browser microphone recordings
+   are sent to the loopback service only for transcription.
 5. Whisper and diarization run locally.
 6. The completed JSON transcript returns to the browser and is stored with the
    meeting.
@@ -50,7 +52,7 @@ loopback only and serves only that signed-in OS user.
 ## Non-goals for the first installable milestone
 
 - Silently recording the operating system without an explicit user action.
-- Replacing browser capture with native WASAPI loopback in the first release.
+- Capturing without an explicit NotesBuddy **Start capture** action.
 - Shipping a centrally managed Hugging Face credential inside the executable.
 - Claiming that speaker labels identify real people.
 - Multi-user LAN hosting, inbound internet access, or opening firewall ports.
@@ -58,9 +60,8 @@ loopback only and serves only that signed-in OS user.
 - Automatic redistribution of gated model files before licensing and
   attribution review is complete.
 
-Native WASAPI microphone and loopback capture is a follow-up milestone. It can
-use the same local API and transcript contract after the compute companion is
-stable.
+Native WASAPI loopback capture is included in `2026.08.1`; the microphone
+remains browser-captured so local-user attribution stays isolated.
 
 ## Target architecture
 
@@ -197,23 +198,25 @@ No wildcard origin is allowed on a token-bearing route.
 
 ## Recording and transcription flow
 
-The first milestone keeps recording in the browser:
+The current hybrid milestone splits recording across browser and companion:
 
 1. The user explicitly starts capture.
-2. The browser requests microphone and optional shared meeting audio.
-3. NotesBuddy records isolated microphone, meeting, and mixed assets.
-4. The assets stay in IndexedDB.
-5. On transcription, the browser uploads them to `127.0.0.1`.
-6. The companion writes one random temporary directory.
+2. The browser requests the microphone; the companion captures default Windows
+   output through WASAPI loopback when available.
+3. NotesBuddy records isolated microphone and meeting assets. Browser fallback
+   retains the existing shared-audio/mixed-track path.
+4. On stop, the companion transfers its temporary WAV over `127.0.0.1` and
+   deletes it; the browser stores both assets in IndexedDB.
+5. On transcription, the browser uploads the saved assets to `127.0.0.1`.
+6. The companion writes one random transcription-job directory.
 7. Whisper transcribes isolated sources.
 8. Diarization labels meeting-audio turns.
 9. Deterministic timestamp alignment builds the existing segment contract.
 10. The browser polls the local job and saves the result.
 11. The companion deletes temporary audio in the terminal `finally` path.
 
-The later native-capture milestone can use Windows WASAPI loopback to capture a
-Teams desktop call more reliably. It must retain visible recording state,
-consent guidance, isolated microphone/system tracks, and a stop control.
+The WASAPI path retains visible recording state, consent guidance, isolated
+microphone/system tracks, live signal detection, and pause/stop controls.
 
 ## Model delivery
 

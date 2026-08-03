@@ -87,13 +87,14 @@ Once the license and ownership decisions are complete:
 2. Run the local-companion API tests.
 3. Complete the manual checklist in [TESTING.md](TESTING.md).
 4. Update [CHANGELOG.md](../CHANGELOG.md).
-5. Create an annotated tag, for example `v0.1.0`.
+5. Create an annotated `Year.Month.MinorRelease` tag, for example
+   `v2026.08.1` (or `companion-v2026.08.1` for the Windows installer workflow).
 6. Push the tag to the GitHub remote.
 7. Create a GitHub Release using the matching changelog section.
 
 Example:
 
 ```bash
-git tag -a v0.1.0 -m "NotesBuddy v0.1.0"
-git push github v0.1.0
+git tag -a v2026.08.1 -m "NotesBuddy v2026.08.1"
+git push github v2026.08.1
 ```

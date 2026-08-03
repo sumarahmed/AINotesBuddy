@@ -63,6 +63,36 @@ function close(server) {
   return new Promise((resolve) => server.close(resolve));
 }
 
+function syntheticWavBuffer({ durationMs = 1600, sampleRate = 16000 } = {}) {
+  const channels = 2;
+  const bitsPerSample = 16;
+  const frameCount = Math.floor((durationMs / 1000) * sampleRate);
+  const dataSize = frameCount * channels * (bitsPerSample / 8);
+  const output = Buffer.alloc(44 + dataSize);
+  output.write("RIFF", 0);
+  output.writeUInt32LE(36 + dataSize, 4);
+  output.write("WAVE", 8);
+  output.write("fmt ", 12);
+  output.writeUInt32LE(16, 16);
+  output.writeUInt16LE(1, 20);
+  output.writeUInt16LE(channels, 22);
+  output.writeUInt32LE(sampleRate, 24);
+  output.writeUInt32LE(sampleRate * channels * 2, 28);
+  output.writeUInt16LE(channels * 2, 32);
+  output.writeUInt16LE(bitsPerSample, 34);
+  output.write("data", 36);
+  output.writeUInt32LE(dataSize, 40);
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const sample = Math.round(
+      Math.sin((frame / sampleRate) * Math.PI * 2 * 440) * 3500,
+    );
+    for (let channel = 0; channel < channels; channel += 1) {
+      output.writeInt16LE(sample, 44 + (frame * channels + channel) * 2);
+    }
+  }
+  return output;
+}
+
 async function installSyntheticMedia(
   page,
   {
@@ -389,6 +419,9 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
     "https://github.com/sumarahmed/AINotesBuddy/releases";
   const calls = [];
   let hostedCalls = 0;
+  const systemAudioWav = syntheticWavBuffer();
+
+  await installSyntheticMedia(page);
 
   await page.route("**/src/runtime-config.js", async (route) => {
     await route.fulfill({
@@ -423,11 +456,13 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
         headers,
         body: JSON.stringify({
           product: "NotesBuddy Desktop Companion",
-          version: "0.1.0",
+          version: "2026.08.1",
           apiVersion: 1,
           status: "available",
           browserPairing: true,
           modelsReady: true,
+          systemAudioCapture: true,
+          systemAudioBackend: "windows-wasapi-loopback",
           engine: "desktop-browser-test",
         }),
       });
@@ -447,14 +482,74 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
     const accepted =
       request.headers()["x-notesbuddy-pairing-token"] ===
       "automatic-browser-pairing-token-value";
+    if (!accepted) {
+      await route.fulfill({
+        status: 401,
+        headers,
+        body: JSON.stringify({ detail: "Pairing token is missing or invalid." }),
+      });
+      return;
+    }
+    if (pathname === "/v1/system-audio/captures") {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          captureId: "capture-browser-system-audio",
+          status: "recording",
+          deviceName: "Synthetic Windows output",
+          signalDetected: false,
+          durationMs: 0,
+        }),
+      });
+      return;
+    }
+    if (pathname.endsWith("/stop")) {
+      await route.fulfill({
+        status: 200,
+        headers: { ...headers, "content-type": "audio/wav" },
+        body: systemAudioWav,
+      });
+      return;
+    }
+    if (
+      pathname.endsWith("/pause") ||
+      pathname.endsWith("/resume")
+    ) {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          captureId: "capture-browser-system-audio",
+          status: pathname.endsWith("/pause") ? "paused" : "recording",
+          signalDetected: true,
+          durationMs: 700,
+        }),
+      });
+      return;
+    }
+    if (pathname.startsWith("/v1/system-audio/captures/")) {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          captureId: "capture-browser-system-audio",
+          status: "recording",
+          deviceName: "Synthetic Windows output",
+          signalDetected: true,
+          durationMs: 900,
+        }),
+      });
+      return;
+    }
     await route.fulfill({
-      status: accepted ? 200 : 401,
+      status: 200,
       headers,
-      body: JSON.stringify(
-        accepted
-          ? { status: "ok", engine: "desktop-browser-test" }
-          : { detail: "Pairing token is missing or invalid." },
-      ),
+      body: JSON.stringify({
+        status: "ok",
+        engine: "desktop-browser-test",
+        systemAudioCapture: true,
+      }),
     });
   });
   await page.route(`${hostedEndpoint}/v1/**`, async (route) => {
@@ -485,11 +580,46 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   assert.equal(calls.at(-1).token, "automatic-browser-pairing-token-value");
   await page.locator("[data-action='complete-companion-setup']").click();
   await page.locator(".companion-setup-backdrop").waitFor({ state: "detached" });
+  await page.getByText("Version 2026.08.1", { exact: true }).waitFor();
   let persistedSettings = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("notesbuddy-settings") || "{}"),
   );
   assert.equal(persistedSettings.companionSetupCompleted, true);
   assert.equal(persistedSettings.transcriptionToken, "");
+
+  await page.locator("[data-action='capture']").first().click();
+  await page.getByText("Windows output via companion", { exact: true }).waitFor();
+  await page.locator("[data-action='start-capture']").click();
+  await page
+    .locator("[data-source-status='meeting']")
+    .filter({ hasText: "sound detected" })
+    .waitFor({ timeout: 5000 });
+  await page.getByText("Listening to Synthetic Windows output").waitFor();
+  assert.deepEqual(
+    await page.evaluate(() => globalThis.__notesBuddyTestMedia.captureCalls),
+    ["microphone"],
+    "companion capture must not open the browser display-share picker",
+  );
+  await page.locator("[data-action='pause-capture']").click();
+  await page.locator(".recording-status--paused").waitFor();
+  await page.locator("[data-action='pause-capture']").click();
+  await page.locator(".recording-status--recording").waitFor();
+  await page.waitForTimeout(900);
+  await page.locator("[data-action='finish-capture']").click();
+  await page.locator(".detail-view").waitFor({ timeout: 10000 });
+  await page
+    .locator(
+      "[data-action='select-recording-source'][data-id='meeting'][aria-pressed='true']",
+    )
+    .waitFor();
+  assert.deepEqual(
+    (await idbAssets(page))
+      .map(({ key }) => String(key).split(":").at(-1))
+      .sort(),
+    ["meeting", "microphone"],
+    "companion capture should keep isolated microphone and Windows output",
+  );
+  await playSelectedRecording(page, "meeting");
 
   await page.reload();
   await page.locator(".home-view").waitFor();
@@ -535,6 +665,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
     "",
     "automatic pairing tokens must never be persisted",
   );
+  await page.evaluate(() => globalThis.__notesBuddyTestMedia.dispose());
   await context.close();
 }
 
@@ -1170,7 +1301,7 @@ async function runDirectFileLoad(browser) {
     await runHybridCompanionWorkflow(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, first-entry installer onboarding and confirmation, synchronized and meeting-only capture, system/window audio request hints, live meeting-sound detection, missing/silent meeting-audio guidance, stable controls, three-source persistence/playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, browser and companion Windows-output capture, signal detection, pause/resume, stable controls, source persistence/default playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

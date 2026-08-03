@@ -1,9 +1,10 @@
 # Architecture
 
 NotesBuddy consists of a dependency-free static browser client and a Python
-transcription service that can run as a paired loopback companion or a hosted
-anonymous API. The client owns capture, browser storage, playback, and UI. The
-selected service owns speech-to-text and speaker diarization.
+service that can run as a paired Windows companion or a hosted anonymous API.
+The client owns microphone/browser-fallback capture, browser storage, playback,
+and UI. The companion owns Windows-output capture plus local speech-to-text and
+speaker diarization.
 
 ## Design goals
 
@@ -22,13 +23,16 @@ selected service owns speech-to-text and speaker diarization.
 ```mermaid
 flowchart LR
     Mic["Local microphone"] --> MicStream["Microphone MediaStream"]
-    Share["Shared tab/window/screen audio"] --> MeetingStream["Meeting MediaStream"]
+    Windows["Default Windows output"] --> Loopback["Companion WASAPI loopback"]
+    Share["Browser share fallback"] --> MeetingStream["Meeting MediaStream"]
     MicStream --> MicRecorder["Microphone MediaRecorder"]
+    Loopback --> MeetingWav["Temporary stereo WAV"]
     MeetingStream --> MeetingRecorder["Meeting MediaRecorder"]
     MicStream --> Mixer["Web Audio mixer"]
     MeetingStream --> Mixer
     Mixer --> MixedRecorder["Mixed MediaRecorder"]
     MicRecorder --> IDB["IndexedDB recordings"]
+    MeetingWav -->|"Protected loopback transfer + delete"| IDB
     MeetingRecorder --> IDB
     MixedRecorder --> IDB
 
@@ -86,8 +90,8 @@ Owns:
 
 - application, settings, profile, and capture state;
 - template rendering and event delegation;
-- microphone/display permission flow;
-- three coordinated `MediaRecorder` instances;
+- microphone, companion-loopback, and display-fallback permission flow;
+- coordinated browser `MediaRecorder` instances plus companion WAV transfer;
 - optional browser speech-recognition draft;
 - IndexedDB storage and `localStorage` metadata;
 - audio hydration, playback, seeking, source download;
@@ -119,26 +123,25 @@ and validated against source by `npm test`.
 ## Capture lifecycle
 
 1. Confirm at least one source is selected.
-2. If meeting audio is selected, call `getDisplayMedia()` immediately from the
-   start-button activation. The user chooses a surface and enables **Share
-   audio**. It is requested before the microphone because display capture
-   requires transient user activation.
-3. Request the microphone independently with echo cancellation, noise
-   suppression, and automatic gain control.
-4. Verify the display stream includes audio. The required video track stays
-   alive only to maintain the browser share; it is never recorded or stored.
-5. Create isolated microphone and meeting streams.
-6. Create a mixed audio stream using Web Audio when both sources exist. For one
-   source, reuse its audio track in a mixed `MediaStream`.
-7. Construct every recorder before starting any. Start all recorders from one
-   capture session and collect chunks every 500 ms.
-8. Pause/resume all recorders and the mixer together.
-9. On finish, stop and collect every recorder before stopping tracks.
-10. Persist each non-empty Blob independently. A single source write failure
-    does not claim the other sources failed.
-11. Store the meeting record and source metadata.
+2. If compatible companion capability `systemAudioCapture` is connected,
+   request microphone permission first, then start a protected stereo 48 kHz
+   WASAPI loopback capture of the default Windows output.
+3. Otherwise, call `getDisplayMedia()` immediately from the start-button
+   activation and request the microphone second. Verify the share contains an
+   audio track; its video track remains alive but is never recorded or stored.
+4. Create isolated microphone and meeting streams. Browser fallback also builds
+   a mixed Web Audio stream; companion capture preserves separate microphone
+   and Windows-output tracks.
+5. Start browser recorders together and collect chunks every 500 ms. Poll the
+   companion for real output-signal status.
+6. Pause/resume browser recorders, mixer, and companion capture together.
+7. On finish, stop browser recorders and download the companion WAV before
+   stopping local tracks. The companion deletes its temporary file after the
+   response.
+8. Persist each non-empty Blob independently, prefer Windows output for playback
+   when no mixed track exists, then store the meeting/source metadata.
 
-If display capture is denied or returns no audio, microphone capture continues.
+If companion or display capture fails, microphone capture continues.
 If the user ends sharing during a meeting, the UI marks the meeting source
 ended, inserts a persistent warning, and keeps the microphone path active.
 

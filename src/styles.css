@@ -418,6 +418,15 @@ kbd {
   border-top: 1px solid #d7d4cb;
 }
 
+.app-version {
+  display: block;
+  padding: 0 12px;
+  margin: 5px 0 2px;
+  font-size: 8px;
+  color: var(--ink-faint);
+  letter-spacing: 0.35px;
+}
+
 .local-status {
   display: grid;
   grid-template-columns: 31px minmax(0, 1fr) auto;
@@ -1475,7 +1484,8 @@ kbd {
 
 .capture-source-live__item--recording,
 .capture-source-live__item--ready,
-.capture-source-live__item--detected {
+.capture-source-live__item--detected,
+.capture-source-live__item--separate {
   color: var(--teal-deep);
   background: var(--teal-pale);
   border-color: #bed8d1;
@@ -1494,6 +1504,16 @@ kbd {
   color: var(--coral-deep);
   background: var(--coral-soft);
   border-color: #efc8bf;
+}
+
+.capture-device-name {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  max-width: 420px;
+  margin-top: 8px;
+  font-size: 8px;
+  color: var(--ink-soft);
 }
 
 .capture-source-warning {

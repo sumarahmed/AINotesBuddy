@@ -6,10 +6,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from desktop_app import build_autostart_command, companion_endpoint, parse_arguments
+from desktop_app import (
+    COMPANION_VERSION,
+    build_autostart_command,
+    companion_endpoint,
+    parse_arguments,
+)
 
 
 class DesktopUtilityTests(unittest.TestCase):
+    def test_companion_uses_year_month_minor_release_version(self) -> None:
+        self.assertEqual(COMPANION_VERSION, "2026.08.1")
+
     def test_companion_endpoint_is_fixed_to_ipv4_loopback(self) -> None:
         self.assertEqual(companion_endpoint(8765), "http://127.0.0.1:8765")
         for port in (0, 65536):

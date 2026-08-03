@@ -65,6 +65,8 @@ The Python suite covers:
 - bounded/expiring browser pairings and exact-origin issuance;
 - safe discovery and hosted/manual-CLI route separation;
 - desktop CLI, loopback, and Windows autostart command construction;
+- direct system-output start/status/pause/resume/stop/cancel API behavior;
+- stereo WAV writing, signal detection, active-capture conflict, and cleanup;
 - bundled offline-model path selection without a per-user model token;
 - allowed/denied CORS origins and private-network preflight;
 - multipart source upload and asynchronous job polling;
@@ -119,6 +121,8 @@ The workflow verifies:
 - hosted health checks without consuming a session;
 - automatic anonymous-session creation and session-token job submission;
 - hybrid automatic companion discovery/pairing/health verification;
+- companion Windows-output capture without invoking `getDisplayMedia`, live
+  signal polling, pause/resume, WAV persistence, and meeting-first playback;
 - first-entry installer prompt, stable Releases link, successful local
   API/pairing/model confirmation, persisted completion, and session-only online
   deferral;

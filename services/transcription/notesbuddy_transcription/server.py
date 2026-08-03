@@ -28,7 +28,9 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
 from starlette.requests import Request
+from starlette.responses import FileResponse
 
 from .access import (
     AnonymousSessionStore,
@@ -38,6 +40,12 @@ from .access import (
 from .engine import EngineCancelled, engine_from_environment
 from .pairing import BrowserPairingStore
 from .security import ensure_pairing_token
+from .system_audio import (
+    SystemAudioCaptureConflict,
+    SystemAudioCaptureManager,
+    SystemAudioCaptureNotFound,
+    SystemAudioUnavailable,
+)
 
 
 def _now() -> str:
@@ -264,6 +272,7 @@ def create_app(
     authentication_mode: str | None = None,
     allow_browser_pairing: bool | None = None,
     companion_version: str | None = None,
+    system_audio_capture: object | None = None,
 ) -> FastAPI:
     active_engine = engine or engine_from_environment()
     access_mode = (
@@ -275,6 +284,7 @@ def create_app(
             "NOTESBUDDY_ACCESS_MODE must be 'local' or 'anonymous'."
         )
     hosted = access_mode == "anonymous"
+    active_system_audio = system_audio_capture or SystemAudioCaptureManager()
     trusted_origins = (
         list(allowed_origins)
         if allowed_origins is not None
@@ -362,6 +372,9 @@ def create_app(
             yield
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+            shutdown_system_audio = getattr(active_system_audio, "shutdown", None)
+            if callable(shutdown_system_audio):
+                shutdown_system_audio()
 
     app = FastAPI(
         title=(
@@ -468,6 +481,25 @@ def create_app(
             "status": "custom engine configured",
         }
 
+    def system_audio_configuration() -> dict[str, object]:
+        return {
+            "available": bool(
+                not hosted and getattr(active_system_audio, "available", False)
+            ),
+            "backend": str(
+                getattr(active_system_audio, "backend_name", "unavailable")
+            ),
+        }
+
+    def _raise_system_audio_error(error: BaseException) -> NoReturn:
+        if isinstance(error, SystemAudioCaptureNotFound):
+            status_code = 404
+        elif isinstance(error, SystemAudioCaptureConflict):
+            status_code = 409
+        else:
+            status_code = 503
+        raise HTTPException(status_code=status_code, detail=str(error)) from error
+
     def require_access(
         request: Request,
         supplied_pairing_token: Annotated[
@@ -523,12 +555,27 @@ def create_app(
                 detail="Pairing token is missing or invalid.",
             )
 
+    def require_local_system_audio_access(
+        request: Request,
+        supplied_pairing_token: Annotated[
+            str | None,
+            Header(alias="X-NotesBuddy-Pairing-Token"),
+        ] = None,
+    ) -> None:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        require_access(
+            request,
+            supplied_pairing_token=supplied_pairing_token,
+        )
+
     @app.get("/v1/companion")
     def companion_discovery(response: Response) -> dict[str, Any]:
         if hosted:
             raise HTTPException(status_code=404, detail="Route was not found.")
         response.headers["Cache-Control"] = "no-store"
         model_status = model_configuration()
+        system_audio_status = system_audio_configuration()
         return {
             "product": "NotesBuddy Desktop Companion",
             "version": companion_version or "development",
@@ -543,6 +590,8 @@ def create_app(
             "modelsReady": bool(model_status.get("ready")),
             "modelSource": str(model_status.get("source") or "unknown"),
             "modelStatus": str(model_status.get("status") or "unknown"),
+            "systemAudioCapture": bool(system_audio_status["available"]),
+            "systemAudioBackend": system_audio_status["backend"],
             "storage": "temporary job files only",
         }
 
@@ -575,6 +624,7 @@ def create_app(
     def health(response: Response) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
         model_status = model_configuration()
+        system_audio_status = system_audio_configuration()
         return {
             "status": "ok",
             "engine": getattr(
@@ -585,9 +635,128 @@ def create_app(
             "modelsReady": bool(model_status.get("ready")),
             "modelSource": str(model_status.get("source") or "unknown"),
             "modelStatus": str(model_status.get("status") or "unknown"),
+            "systemAudioCapture": bool(system_audio_status["available"]),
+            "systemAudioBackend": system_audio_status["backend"],
             "storage": "temporary job files only",
             "access": "anonymous-session" if hosted else "local-pairing",
         }
+
+    @app.post("/v1/system-audio/captures")
+    def start_system_audio_capture(
+        response: Response,
+        _access: None = Depends(require_local_system_audio_access),
+    ) -> dict[str, Any]:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        try:
+            capture = active_system_audio.start()
+        except (
+            SystemAudioUnavailable,
+            SystemAudioCaptureConflict,
+            SystemAudioCaptureNotFound,
+        ) as error:
+            _raise_system_audio_error(error)
+        response.headers["Cache-Control"] = "no-store"
+        return capture.public()
+
+    @app.get("/v1/system-audio/captures/{capture_id}")
+    def get_system_audio_capture(
+        capture_id: str,
+        response: Response,
+        _access: None = Depends(require_local_system_audio_access),
+    ) -> dict[str, Any]:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        try:
+            capture = active_system_audio.get(capture_id)
+        except (
+            SystemAudioUnavailable,
+            SystemAudioCaptureConflict,
+            SystemAudioCaptureNotFound,
+        ) as error:
+            _raise_system_audio_error(error)
+        response.headers["Cache-Control"] = "no-store"
+        return capture.public()
+
+    @app.post("/v1/system-audio/captures/{capture_id}/pause")
+    def pause_system_audio_capture(
+        capture_id: str,
+        response: Response,
+        _access: None = Depends(require_local_system_audio_access),
+    ) -> dict[str, Any]:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        try:
+            capture = active_system_audio.pause(capture_id)
+        except (
+            SystemAudioUnavailable,
+            SystemAudioCaptureConflict,
+            SystemAudioCaptureNotFound,
+        ) as error:
+            _raise_system_audio_error(error)
+        response.headers["Cache-Control"] = "no-store"
+        return capture.public()
+
+    @app.post("/v1/system-audio/captures/{capture_id}/resume")
+    def resume_system_audio_capture(
+        capture_id: str,
+        response: Response,
+        _access: None = Depends(require_local_system_audio_access),
+    ) -> dict[str, Any]:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        try:
+            capture = active_system_audio.resume(capture_id)
+        except (
+            SystemAudioUnavailable,
+            SystemAudioCaptureConflict,
+            SystemAudioCaptureNotFound,
+        ) as error:
+            _raise_system_audio_error(error)
+        response.headers["Cache-Control"] = "no-store"
+        return capture.public()
+
+    @app.post("/v1/system-audio/captures/{capture_id}/stop")
+    def stop_system_audio_capture(
+        capture_id: str,
+        _access: None = Depends(require_local_system_audio_access),
+    ) -> Response:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        try:
+            capture = active_system_audio.stop(capture_id)
+        except (
+            SystemAudioUnavailable,
+            SystemAudioCaptureConflict,
+            SystemAudioCaptureNotFound,
+        ) as error:
+            _raise_system_audio_error(error)
+        return FileResponse(
+            capture.path,
+            media_type="audio/wav",
+            filename="notesbuddy-windows-audio.wav",
+            headers={"Cache-Control": "no-store"},
+            background=BackgroundTask(active_system_audio.discard, capture_id),
+        )
+
+    @app.delete("/v1/system-audio/captures/{capture_id}")
+    def cancel_system_audio_capture(
+        capture_id: str,
+        response: Response,
+        _access: None = Depends(require_local_system_audio_access),
+    ) -> dict[str, Any]:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        try:
+            capture = active_system_audio.cancel(capture_id)
+        except (
+            SystemAudioUnavailable,
+            SystemAudioCaptureConflict,
+            SystemAudioCaptureNotFound,
+        ) as error:
+            _raise_system_audio_error(error)
+        response.headers["Cache-Control"] = "no-store"
+        return capture.public()
 
     @app.post("/v1/sessions")
     def create_session(request: Request, response: Response) -> dict[str, Any]:

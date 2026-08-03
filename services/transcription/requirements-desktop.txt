@@ -4,3 +4,4 @@
 huggingface-hub>=0.28,<2
 Pillow>=10,<13
 pystray>=0.19,<1
+SoundCard>=0.4.6,<0.5
