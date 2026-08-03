@@ -1,7 +1,8 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.3");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.4");
+const SUMMARY_VERSION = 2;
 
 if (!MeetingAudio) {
   throw new Error("NotesBuddy meeting-audio module failed to load.");
@@ -117,12 +118,72 @@ function normaliseProfile(profile) {
   };
 }
 
+function normaliseInsightText(value) {
+  return MeetingAudio.cleanTranscriptText(value)
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function applyTranscriptBriefToMeeting(meeting, brief) {
+  if (!meeting || !brief) return false;
+  const previousActions = new Map(
+    (Array.isArray(meeting.actions) ? meeting.actions : []).map((action) => [
+      normaliseInsightText(action.text),
+      action,
+    ]),
+  );
+  meeting.overview = brief.overview;
+  meeting.highlights = [...brief.highlights];
+  meeting.decisions = [...brief.decisions];
+  meeting.actions = brief.actions.map((action, index) => {
+    const previous = previousActions.get(normaliseInsightText(action.text));
+    const stableKey = String(
+      action.groundingKey || `${action.sourceSegmentId || "segment"}-${index}`,
+    ).replace(/[^a-z0-9_-]+/gi, "-");
+    return {
+      id: `${meeting.id}-transcript-action-${stableKey}`,
+      text: action.text,
+      owner: action.owner,
+      due: action.due || null,
+      done: Boolean(previous?.done),
+      grounded: true,
+      sourceSegmentId: action.sourceSegmentId || null,
+      sourceStartMs: Number(action.sourceStartMs) || 0,
+      sourceSpeakerId: action.sourceSpeakerId || null,
+    };
+  });
+  meeting.summaryVersion = SUMMARY_VERSION;
+  meeting.summaryGeneratedAt = new Date().toISOString();
+  return true;
+}
+
+function migrateMeetingInsights(meeting, profile, { enabled = true } = {}) {
+  if (!meeting || meeting.summaryVersion === SUMMARY_VERSION) return false;
+  const brief = enabled
+    ? MeetingAudio.buildExtractiveBrief(meeting.transcript, {
+        localOwnerName: profile?.name || "You",
+      })
+    : null;
+  if (brief) {
+    applyTranscriptBriefToMeeting(meeting, brief);
+  } else {
+    meeting.highlights = [];
+    meeting.decisions = [];
+    meeting.actions = [];
+    meeting.summaryVersion = SUMMARY_VERSION;
+  }
+  return true;
+}
+
 const LEGACY_SEED_MEETING_IDS = new Set([
   "product-weekly-0729",
   "customer-discovery-0728",
   "design-critique-0727",
   "sprint-planning-0725",
 ]);
+const storedSettings = loadStored("notesbuddy-settings", {});
 const storedMeetings = loadStored("notesbuddy-meetings", []);
 let initialMeetings = Array.isArray(storedMeetings)
   ? storedMeetings.filter((meeting) => !LEGACY_SEED_MEETING_IDS.has(meeting.id))
@@ -130,9 +191,19 @@ let initialMeetings = Array.isArray(storedMeetings)
 const initialProfile = normaliseProfile(
   loadStored("notesbuddy-profile", null),
 );
-initialMeetings = initialMeetings.map((meeting) =>
-  MeetingAudio.ensureMeetingSpeakers(meeting, initialProfile),
-);
+let meetingInsightsMigrated = false;
+initialMeetings = initialMeetings.map((meeting) => {
+  const normalizedMeeting = MeetingAudio.ensureMeetingSpeakers(
+    meeting,
+    initialProfile,
+  );
+  meetingInsightsMigrated =
+    migrateMeetingInsights(normalizedMeeting, initialProfile, {
+      enabled: storedSettings.autoSummarize !== false,
+    }) ||
+    meetingInsightsMigrated;
+  return normalizedMeeting;
+});
 
 const runtimeTranscriptionMode = ["hosted", "hybrid"].includes(
   runtimeConfig.transcriptionMode,
@@ -163,7 +234,6 @@ const companionDownloadUrl = String(
     `https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v${latestCompanionVersion}/NotesBuddyCompanion-Setup-${latestCompanionVersion}.exe`,
 );
 const companionSetupSessionKey = "notesbuddy-companion-setup-deferred";
-const storedSettings = loadStored("notesbuddy-settings", {});
 const defaultSettings = {
   autoSummarize: true,
   keepAudio: true,
@@ -304,7 +374,10 @@ function save() {
   }
 }
 
-if (storedMeetings.length !== initialMeetings.length) {
+if (
+  storedMeetings.length !== initialMeetings.length ||
+  meetingInsightsMigrated
+) {
   localStorage.setItem("notesbuddy-meetings", JSON.stringify(initialMeetings));
 }
 
@@ -821,6 +894,11 @@ function transcriptRow(
 }
 
 function summaryView(meeting) {
+  const highlights = Array.isArray(meeting.highlights)
+    ? meeting.highlights
+    : [];
+  const decisions = Array.isArray(meeting.decisions) ? meeting.decisions : [];
+  const actions = Array.isArray(meeting.actions) ? meeting.actions : [];
   return `<div class="summary-layout">
     <div class="summary-main">
       <section class="summary-lead">
@@ -829,15 +907,15 @@ function summaryView(meeting) {
       </section>
       <section class="summary-section">
         <div class="summary-section__heading"><span class="section-icon section-icon--teal">${icon("sparkles", 17)}</span><div><span class="eyebrow">What mattered</span><h2>Key highlights</h2></div></div>
-        <div class="highlight-grid">${meeting.highlights.map((item, index) => `<article><span>${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(item)}</p></article>`).join("")}</div>
+        <div class="highlight-grid">${highlights.length ? highlights.map((item, index) => `<article><span>${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(item)}</p></article>`).join("") : `<div class="insight-empty">No transcript-grounded highlights are available yet.</div>`}</div>
       </section>
       <section class="summary-section">
         <div class="summary-section__heading"><span class="section-icon section-icon--violet">${icon("clipboard", 17)}</span><div><span class="eyebrow">Locked in</span><h2>Decisions</h2></div></div>
-        <div class="decision-list">${meeting.decisions.length ? meeting.decisions.map((item) => `<div>${icon("check", 15)}<span>${escapeHtml(item)}</span></div>`).join("") : `<div>${icon("check", 15)}<span>No explicit decisions were identified.</span></div>`}</div>
+        <div class="decision-list">${decisions.length ? decisions.map((item) => `<div>${icon("check", 15)}<span>${escapeHtml(item)}</span></div>`).join("") : `<div>${icon("check", 15)}<span>No transcript sentence explicitly stated a decision.</span></div>`}</div>
       </section>
       <section class="summary-section">
-        <div class="summary-section__heading action-heading"><span class="section-icon section-icon--coral">${icon("checkCircle", 17)}</span><div><span class="eyebrow">Keep moving</span><h2>Action items</h2></div><span class="item-count">${meeting.actions.filter((action) => !action.done).length} open</span></div>
-        <div class="action-list">${meeting.actions.map((action) => `<button type="button" data-action="toggle-action" data-id="${action.id}" class="${action.done ? "action-item--done" : ""}"><span class="action-check">${action.done ? icon("check", 13) : ""}</span><span class="action-text">${escapeHtml(action.text)}</span><span class="action-owner">${escapeHtml(action.owner)}</span>${action.due ? `<span class="action-due">${escapeHtml(action.due)}</span>` : ""}</button>`).join("")}</div>
+        <div class="summary-section__heading action-heading"><span class="section-icon section-icon--coral">${icon("checkCircle", 17)}</span><div><span class="eyebrow">Keep moving</span><h2>Action items</h2></div><span class="item-count">${actions.filter((action) => !action.done).length} open</span></div>
+        <div class="action-list">${actions.length ? actions.map((action) => `<button type="button" data-action="toggle-action" data-id="${action.id}" class="${action.done ? "action-item--done" : ""}"><span class="action-check">${action.done ? icon("check", 13) : ""}</span><span class="action-text">${escapeHtml(action.text)}</span><span class="action-owner">${escapeHtml(action.owner)}</span>${action.due ? `<span class="action-due">${escapeHtml(action.due)}</span>` : ""}</button>`).join("") : `<div class="insight-empty">No transcript-grounded action items were identified.</div>`}</div>
       </section>
     </div>
     <aside class="meeting-context">
@@ -2391,21 +2469,10 @@ async function finishCapture() {
       ]
     : [];
   const draftBrief = state.settings.autoSummarize
-    ? MeetingAudio.buildExtractiveBrief(segments)
+    ? MeetingAudio.buildExtractiveBrief(segments, {
+        localOwnerName: currentUserName(),
+      })
     : null;
-  const highlights = draftBrief
-    ? draftBrief.highlights
-    : segments.length
-      ? segments.slice(0, 3).map((segment) => segment.text)
-      : [
-          recordingAssets.meeting
-            ? "Meeting audio was captured as a separate local recording."
-            : "The available audio source was recorded for playback.",
-          recordingAssets.microphone
-            ? "Microphone audio is isolated for reliable You attribution."
-            : "No microphone track was captured.",
-          "No sample or fabricated transcript was added.",
-        ];
   const meeting = {
     id,
     audioId: primaryAsset?.id || null,
@@ -2441,16 +2508,10 @@ async function finishCapture() {
       : transcriptText
         ? `This meeting contains synchronized local audio and ${segments.length} draft browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Run speaker transcription to create the authoritative diarized transcript.`
       : "This meeting contains locally stored audio. Speaker transcription has not run, and NotesBuddy did not generate sample transcript text.",
-    highlights,
+    highlights: [],
     decisions: [],
-    actions: [
-      {
-        id: `${id}-review`,
-        text: "Review the recording and transcript",
-        owner: currentUserName(),
-        done: false,
-      },
-    ],
+    actions: [],
+    summaryVersion: SUMMARY_VERSION,
     transcript: segments,
     transcription: {
       status: segments.length ? "draft" : "not-requested",
@@ -2461,6 +2522,7 @@ async function finishCapture() {
     notes: "",
   };
   MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
+  if (draftBrief) applyTranscriptBriefToMeeting(meeting, draftBrief);
   state.meetings.unshift(meeting);
   state.selectedMeetingId = id;
   state.view = "meeting";
@@ -2770,22 +2832,21 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
     });
     MeetingAudio.applyTranscriptionResult(meeting, completed, state.profile);
     const brief = state.settings.autoSummarize
-      ? MeetingAudio.buildExtractiveBrief(meeting.transcript)
+      ? MeetingAudio.buildExtractiveBrief(meeting.transcript, {
+          localOwnerName: currentUserName(),
+        })
       : null;
-    meeting.overview = brief
-      ? brief.overview
-      : meeting.transcript.length
+    if (brief) {
+      applyTranscriptBriefToMeeting(meeting, brief);
+    } else {
+      meeting.overview = meeting.transcript.length
         ? `Speaker transcription identified ${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} across ${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"}.`
         : `The ${usesHostedTranscription() ? "public transcription service" : "local transcription companion"} did not return speech text, so NotesBuddy did not generate a transcript.`;
-    meeting.highlights = brief
-      ? brief.highlights
-      : meeting.transcript.length
-        ? meeting.transcript.slice(0, 3).map((segment) => segment.text)
-        : [
-            "The original recordings remain available for playback.",
-            `No speech text was returned by the ${usesHostedTranscription() ? "public service" : "local companion"}.`,
-            "No sample or fabricated transcript was added.",
-          ];
+      meeting.highlights = [];
+      meeting.decisions = [];
+      meeting.actions = [];
+      meeting.summaryVersion = SUMMARY_VERSION;
+    }
     save();
     render();
     showToast(
@@ -2900,19 +2961,10 @@ async function importAudio(file) {
     overview: audioSaved
       ? "The original audio file was imported and stored locally for playback. No transcript text was invented."
       : "The audio file metadata was imported, but the browser could not persist the recording.",
-    highlights: [
-      "The original file is available for local playback.",
-      "No sample or fabricated transcript was generated.",
-    ],
+    highlights: [],
     decisions: [],
-    actions: [
-      {
-        id: `${id}-review`,
-        text: "Review and transcribe imported audio",
-        owner: currentUserName(),
-        done: false,
-      },
-    ],
+    actions: [],
+    summaryVersion: SUMMARY_VERSION,
     transcript: [],
     transcription: {
       status: "not-requested",
@@ -3161,15 +3213,16 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "regenerate") {
     const meeting = selectedMeeting();
-    const brief = MeetingAudio.buildExtractiveBrief(meeting?.transcript);
+    const brief = MeetingAudio.buildExtractiveBrief(meeting?.transcript, {
+      localOwnerName: currentUserName(),
+    });
     if (meeting && brief) {
-      meeting.overview = brief.overview;
-      meeting.highlights = brief.highlights;
+      applyTranscriptBriefToMeeting(meeting, brief);
       save();
       render();
       showToast(
-        "Summary refreshed",
-        "The brief was rebuilt only from this meeting’s transcript.",
+        "Insights refreshed",
+        "Highlights, decisions, and actions were rebuilt only from this meeting's transcript.",
       );
     } else {
       showToast(

@@ -8,6 +8,29 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.4 - 2026-08-04
+
+### Added
+
+- Transcript-grounded decision detection for explicit agreement, approval,
+  selection, and commitment wording
+- Transcript-grounded action extraction with spoken owners and due phrases
+- Automatic migration of existing meeting summaries, preserving completion
+  state when an action still matches transcript evidence
+
+### Changed
+
+- Key highlights are ranked from substantive transcript sentences and collapse
+  overlapping or repeated transcription output
+- **Refresh from transcript** now rebuilds highlights, decisions, and action
+  items together
+
+### Removed
+
+- Generic **Review the recording and transcript** and imported-audio review
+  actions that were not supported by anything said in the meeting
+- Recording-status sentences from the Key highlights section
+
 ## 2026.08.3 - 2026-08-03
 
 ### Added
