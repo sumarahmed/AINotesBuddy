@@ -6,6 +6,24 @@ await import("../src/meeting-audio.js");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const profile = { name: "Alex Morgan", initials: "AM" };
 
+test("compares Year.Month.MinorRelease versions including legacy companions", () => {
+  assert.equal(MeetingAudio.compareVersions("2026.08.1", "2026.08.2"), -1);
+  assert.equal(MeetingAudio.compareVersions("2026.8.2", "2026.08.2"), 0);
+  assert.equal(
+    MeetingAudio.compareVersions(
+      "companion-v2027.01.0",
+      "2026.12.9",
+    ),
+    1,
+  );
+  assert.equal(MeetingAudio.compareVersions("unknown", "2026.08.2"), null);
+  assert.equal(MeetingAudio.isVersionOutdated("0.1.2", "2026.08.2"), true);
+  assert.equal(
+    MeetingAudio.isVersionOutdated("2026.08.2", "2026.08.2"),
+    false,
+  );
+});
+
 test("migrates a legacy single recording without losing its audio id", () => {
   const meeting = {
     audioId: "legacy-audio",

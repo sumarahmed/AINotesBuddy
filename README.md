@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.08.1` (`Year.Month.MinorRelease`)
+**Current version:** `2026.08.2` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -24,6 +24,7 @@ for speech-to-text and speaker diarization.
 - Optional browser live-speech draft with no inserted sample text
 - Local faster-whisper transcription and pyannote speaker diarization companion
 - Windows tray/control-panel app with automatic short-lived browser pairing
+- Existing-user website warnings and daily desktop checks for companion updates
 - Local-first website selection with a disclosed online fallback
 - First-entry Windows setup guide with download, installation, and live
   connection confirmation

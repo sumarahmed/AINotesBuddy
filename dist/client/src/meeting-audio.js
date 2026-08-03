@@ -29,6 +29,28 @@
       .trim();
   }
 
+  function versionParts(value) {
+    const match = String(value || "")
+      .trim()
+      .match(/(?:^|v)(\d+)\.(\d+)\.(\d+)$/i);
+    return match ? match.slice(1).map((part) => Number(part)) : null;
+  }
+
+  function compareVersions(left, right) {
+    const leftParts = versionParts(left);
+    const rightParts = versionParts(right);
+    if (!leftParts || !rightParts) return null;
+    for (let index = 0; index < 3; index += 1) {
+      if (leftParts[index] < rightParts[index]) return -1;
+      if (leftParts[index] > rightParts[index]) return 1;
+    }
+    return 0;
+  }
+
+  function isVersionOutdated(installedVersion, latestVersion) {
+    return compareVersions(installedVersion, latestVersion) === -1;
+  }
+
   function initialsForName(name) {
     const words = cleanName(name, "Speaker")
       .split(/\s+/)
@@ -965,12 +987,14 @@
     buildExtractiveBrief,
     cleanName,
     cleanTranscriptText,
+    compareVersions,
     createId,
     deduplicateEchoSegments,
     ensureMeetingSpeakers,
     formatTimestamp,
     getRecordingAssets,
     initialsForName,
+    isVersionOutdated,
     parseTimestamp,
     primaryRecordingSource,
     recordingAsset,

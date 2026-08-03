@@ -75,7 +75,7 @@ jobs:
           $requireModels = $env:INCLUDE_MODELS -eq "true"
           $version = "${{ github.ref_name }}".Replace("companion-v", "")
           if (-not $version -or $version -eq "${{ github.ref_name }}") {
-            $version = "2026.08.1"
+            $version = "2026.08.2"
           }
           ./desktop/build.ps1 -Python python -Version $version -RequireModels:$requireModels
 

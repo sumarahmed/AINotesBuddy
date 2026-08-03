@@ -6,6 +6,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -17,10 +18,81 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-COMPANION_VERSION = "2026.08.1"
+COMPANION_VERSION = "2026.08.2"
 DEFAULT_PORT = 8765
 DEFAULT_WEB_URL = "https://sumarahmed.github.io/AINotesBuddy/"
 AUTOSTART_VALUE_NAME = "NotesBuddyCompanion"
+RELEASES_URL = "https://github.com/sumarahmed/AINotesBuddy/releases"
+LATEST_RELEASE_API_URL = (
+    "https://api.github.com/repos/sumarahmed/AINotesBuddy/releases/latest"
+)
+UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+
+def version_parts(value: str) -> tuple[int, int, int] | None:
+    match = re.search(r"(?:^|v)(\d+)\.(\d+)\.(\d+)$", str(value).strip(), re.I)
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def is_version_outdated(installed: str, latest: str) -> bool:
+    installed_parts = version_parts(installed)
+    latest_parts = version_parts(latest)
+    return bool(
+        installed_parts is not None
+        and latest_parts is not None
+        and installed_parts < latest_parts
+    )
+
+
+def fetch_latest_companion_release(
+    *,
+    opener: Any = urllib.request.urlopen,
+    timeout: float = 4,
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        LATEST_RELEASE_API_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"NotesBuddy-Companion/{COMPANION_VERSION}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        method="GET",
+    )
+    with opener(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    tag = str(payload.get("tag_name") or "")
+    latest_version_parts = version_parts(tag)
+    if latest_version_parts is None:
+        raise ValueError("The latest companion release has an invalid version tag.")
+    latest_version = (
+        f"{latest_version_parts[0]:04d}."
+        f"{latest_version_parts[1]:02d}."
+        f"{latest_version_parts[2]}"
+    )
+    release_url = str(payload.get("html_url") or RELEASES_URL)
+    if not release_url.startswith(f"{RELEASES_URL}/"):
+        release_url = RELEASES_URL
+    asset_url = ""
+    for asset in payload.get("assets") or []:
+        name = str(asset.get("name") or "")
+        candidate = str(asset.get("browser_download_url") or "")
+        if (
+            name.lower().endswith(".exe")
+            and candidate.startswith(
+                "https://github.com/sumarahmed/AINotesBuddy/releases/download/"
+            )
+        ):
+            asset_url = candidate
+            break
+    return {
+        "available": is_version_outdated(COMPANION_VERSION, latest_version),
+        "currentVersion": COMPANION_VERSION,
+        "latestVersion": latest_version,
+        "releaseUrl": release_url,
+        "downloadUrl": asset_url or release_url,
+    }
 
 
 def companion_endpoint(port: int) -> str:
@@ -198,21 +270,26 @@ class DesktopWindow:
         self.web_url = web_url
         self.background = background
         self.tray_icon = None
+        self.update_check_running = False
+        self.update_url = RELEASES_URL
+        self.last_notified_version: str | None = None
 
         self.root = tk.Tk()
         self.root.title(f"NotesBuddy Desktop Companion {COMPANION_VERSION}")
-        self.root.geometry("560x370")
-        self.root.minsize(520, 340)
+        self.root.geometry("560x470")
+        self.root.minsize(520, 440)
         self.root.protocol("WM_DELETE_WINDOW", self._close_window)
 
         self.status = tk.StringVar(value="Starting local service…")
         self.detail = tk.StringVar(
             value=f"Private loopback address: {companion_endpoint(server.port)}"
         )
+        self.update_status = tk.StringVar(value="Checking for updates shortly…")
         self.autostart = tk.BooleanVar(value=autostart_enabled())
         self._build()
         self._start_tray()
         self.root.after(0, self._show_server_result, server_result)
+        self.root.after(800, self._start_update_check)
 
         if background:
             if self.tray_icon is not None:
@@ -269,6 +346,20 @@ class DesktopWindow:
             text="Copy recovery token",
             command=self._copy_token,
         ).pack(side="left", padx=(10, 0))
+        self.update_button = ttk.Button(
+            actions,
+            text="Download update",
+            command=self._open_update,
+            state="disabled",
+        )
+        self.update_button.pack(side="left", padx=(10, 0))
+
+        ttk.Label(
+            frame,
+            textvariable=self.update_status,
+            foreground="#5b6470",
+            wraplength=490,
+        ).pack(anchor="w", pady=(0, 4))
 
         ttk.Checkbutton(
             frame,
@@ -311,6 +402,64 @@ class DesktopWindow:
 
     def _open_site(self) -> None:
         webbrowser.open(self.web_url)
+
+    def _open_update(self) -> None:
+        webbrowser.open(self.update_url)
+
+    def _start_update_check(self) -> None:
+        if self.update_check_running:
+            return
+        self.update_check_running = True
+        self.update_status.set("Checking for companion updates…")
+        threading.Thread(
+            target=self._check_for_update,
+            name="notesbuddy-update-check",
+            daemon=True,
+        ).start()
+
+    def _check_for_update(self) -> None:
+        try:
+            result = fetch_latest_companion_release()
+        except Exception as error:  # noqa: BLE001 - update checks must not stop capture
+            result = {"error": str(error)}
+        try:
+            self.root.after(0, self._show_update_result, result)
+        except (RuntimeError, self.tk.TclError):
+            pass
+
+    def _show_update_result(self, result: dict[str, Any]) -> None:
+        self.update_check_running = False
+        if result.get("available"):
+            latest_version = str(result.get("latestVersion") or "a newer version")
+            self.update_url = str(result.get("downloadUrl") or RELEASES_URL)
+            self.update_status.set(
+                f"Update {latest_version} is available. Recording will keep working."
+            )
+            self.update_button.configure(state="normal")
+            if self.last_notified_version != latest_version:
+                self.last_notified_version = latest_version
+                if self.tray_icon is not None:
+                    try:
+                        self.tray_icon.notify(
+                            f"Version {latest_version} is ready to download.",
+                            "NotesBuddy update available",
+                        )
+                    except (AttributeError, NotImplementedError, OSError):
+                        pass
+                elif self.background:
+                    self._show_window()
+        elif result.get("error"):
+            self.update_status.set(
+                "Could not check for updates. Recording is still available."
+            )
+            self.update_button.configure(state="disabled")
+        else:
+            self.update_status.set(f"Version {COMPANION_VERSION} is up to date.")
+            self.update_button.configure(state="disabled")
+        try:
+            self.root.after(UPDATE_CHECK_INTERVAL_MS, self._start_update_check)
+        except self.tk.TclError:
+            pass
 
     def _copy_token(self) -> None:
         self.root.clipboard_clear()

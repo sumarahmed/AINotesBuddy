@@ -427,7 +427,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "${hostedEndpoint}", companionDownloadUrl: "${downloadUrl}" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.2", latestCompanionVersion: "2026.08.2", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "${hostedEndpoint}", companionDownloadUrl: "${downloadUrl}" });`,
     });
   });
   await page.route(`${localEndpoint}/v1/**`, async (route) => {
@@ -456,7 +456,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
         headers,
         body: JSON.stringify({
           product: "NotesBuddy Desktop Companion",
-          version: "2026.08.1",
+          version: "2026.08.2",
           apiVersion: 1,
           status: "available",
           browserPairing: true,
@@ -580,7 +580,12 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   assert.equal(calls.at(-1).token, "automatic-browser-pairing-token-value");
   await page.locator("[data-action='complete-companion-setup']").click();
   await page.locator(".companion-setup-backdrop").waitFor({ state: "detached" });
-  await page.getByText("Version 2026.08.1", { exact: true }).waitFor();
+  await page.getByText("Version 2026.08.2", { exact: true }).waitFor();
+  assert.equal(
+    await page.locator(".companion-update-banner").count(),
+    0,
+    "the current companion must not trigger an update warning",
+  );
   let persistedSettings = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("notesbuddy-settings") || "{}"),
   );
@@ -666,6 +671,151 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
     "automatic pairing tokens must never be persisted",
   );
   await page.evaluate(() => globalThis.__notesBuddyTestMedia.dispose());
+  await context.close();
+}
+
+async function runExistingUserUpdateNotification(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const localEndpoint = "http://127.0.0.1:8765";
+  const downloadUrl = "https://github.com/sumarahmed/AINotesBuddy/releases";
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "notesbuddy-profile",
+      JSON.stringify({
+        id: "profile-existing-update-user",
+        name: "Existing Update User",
+        initials: "EU",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      }),
+    );
+    localStorage.setItem(
+      "notesbuddy-settings",
+      JSON.stringify({
+        companionSetupCompleted: true,
+        transcriptionMode: "hosted",
+        transcriptionEndpoint: "https://transcribe.notesbuddy.test",
+        transcriptionToken: "",
+      }),
+    );
+  });
+  await page.route("**/src/runtime-config.js", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/javascript; charset=utf-8",
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.2", latestCompanionVersion: "2026.08.2", transcriptionMode: "hybrid", localCompanionEndpoint: "${localEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "${downloadUrl}" });`,
+    });
+  });
+  await page.route(`${localEndpoint}/v1/**`, async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    const headers = {
+      "access-control-allow-origin": baseUrl,
+      "access-control-allow-methods": "GET,POST,OPTIONS",
+      "access-control-allow-headers":
+        "Content-Type,X-NotesBuddy-Pairing-Token",
+      "access-control-allow-private-network": "true",
+      "content-type": "application/json",
+    };
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers, body: "" });
+      return;
+    }
+    if (pathname === "/v1/companion") {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          product: "NotesBuddy Desktop Companion",
+          version: "0.1.2",
+          apiVersion: 1,
+          status: "available",
+          browserPairing: true,
+          modelsReady: true,
+          systemAudioCapture: false,
+          engine: "outdated-browser-test",
+        }),
+      });
+      return;
+    }
+    if (pathname === "/v1/pairings") {
+      await route.fulfill({
+        status: 200,
+        headers,
+        body: JSON.stringify({
+          pairingToken: "outdated-companion-pairing-token",
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      headers,
+      body: JSON.stringify({ status: "ok", engine: "outdated-browser-test" }),
+    });
+  });
+
+  await page.goto(baseUrl);
+  await page.locator(".home-view").waitFor();
+  const banner = page.locator(".companion-update-banner");
+  await banner.waitFor({ timeout: 5000 });
+  await banner.getByText("Companion update available", { exact: true }).waitFor();
+  await banner.getByText(/You have 0\.1\.2\. Update to 2026\.08\.2/).waitFor();
+  assert.equal(await banner.getAttribute("role"), "alert");
+  assert.equal(await banner.getAttribute("aria-live"), "assertive");
+  const desktopBannerLayout = await banner.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      viewportWidth: innerWidth,
+      messageFontSize: Number.parseFloat(
+        getComputedStyle(element.querySelector("p")).fontSize,
+      ),
+    };
+  });
+  assert.ok(desktopBannerLayout.left >= 0);
+  assert.ok(desktopBannerLayout.right <= desktopBannerLayout.viewportWidth);
+  assert.ok(
+    desktopBannerLayout.messageFontSize >= 11,
+    "the update warning must remain readable",
+  );
+  assert.equal(
+    await page.locator(".companion-setup-backdrop").count(),
+    0,
+    "an existing user must receive a banner without repeating onboarding",
+  );
+
+  await page.locator("[data-action='settings']").first().click();
+  await page.locator(".service-check__status--update").waitFor();
+  await page
+    .locator("[data-panel='settings']")
+    .getByRole("link", { name: "Download update", exact: true })
+    .waitFor();
+  await page.locator("[data-action='close-settings']").last().click();
+  await banner.locator("[data-action='dismiss-companion-update']").click();
+  await banner.waitFor({ state: "detached" });
+
+  await page.reload();
+  await page.locator(".companion-update-banner").waitFor({ timeout: 5000 });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileBannerLayout = await page
+    .locator(".companion-update-banner")
+    .evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        viewportWidth: innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+      };
+    });
+  assert.ok(mobileBannerLayout.left >= 0);
+  assert.ok(mobileBannerLayout.right <= mobileBannerLayout.viewportWidth);
+  assert.ok(mobileBannerLayout.documentWidth <= mobileBannerLayout.viewportWidth);
   await context.close();
 }
 
@@ -1299,9 +1449,10 @@ async function runDirectFileLoad(browser) {
     await runDirectFileLoad(browser);
     await runHostedClientWorkflow(browser, baseUrl);
     await runHybridCompanionWorkflow(browser, baseUrl);
+    await runExistingUserUpdateNotification(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, browser and companion Windows-output capture, signal detection, pause/resume, stable controls, source persistence/default playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, signal detection, pause/resume, stable controls, source persistence/default playback, reload, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();
