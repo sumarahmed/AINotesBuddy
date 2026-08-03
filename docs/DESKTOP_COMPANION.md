@@ -20,10 +20,10 @@ update without the user's choice, and a failed check does not affect recording.
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
-2. Follow the displayed **Install the Windows companion** guide and open the
-   repository Releases page.
-3. Download and run `NotesBuddyCompanion-Setup-<version>.exe`. Administrator
-   rights are not required.
+2. Follow the displayed **Install the Windows companion** guide; its download
+   button targets the current versioned `.exe` asset directly.
+3. Run `NotesBuddyCompanion-Setup-<version>.exe`. Administrator rights are not
+   required.
 4. Leave the companion running in the Windows notification area.
 5. Return to the website and choose **I've installed it — check connection**.
    NotesBuddy checks `http://127.0.0.1:8765`, pairs automatically, and verifies

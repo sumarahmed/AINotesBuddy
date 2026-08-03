@@ -416,7 +416,7 @@ async function runHybridCompanionWorkflow(browser, baseUrl) {
   const localEndpoint = "http://127.0.0.1:8765";
   const hostedEndpoint = "https://transcribe.notesbuddy.test";
   const downloadUrl =
-    "https://github.com/sumarahmed/AINotesBuddy/releases";
+    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe";
   const calls = [];
   let hostedCalls = 0;
   const systemAudioWav = syntheticWavBuffer();
@@ -678,7 +678,8 @@ async function runExistingUserUpdateNotification(browser, baseUrl) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const localEndpoint = "http://127.0.0.1:8765";
-  const downloadUrl = "https://github.com/sumarahmed/AINotesBuddy/releases";
+  const downloadUrl =
+    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe";
 
   await page.addInitScript(() => {
     localStorage.setItem(
@@ -829,7 +830,7 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${unavailableEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "https://github.com/sumarahmed/AINotesBuddy/releases" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ transcriptionMode: "hybrid", localCompanionEndpoint: "${unavailableEndpoint}", transcriptionEndpoint: "https://transcribe.notesbuddy.test", companionDownloadUrl: "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe" });`,
     });
   });
   await page.route(`${unavailableEndpoint}/v1/**`, async (route) => {
@@ -855,7 +856,7 @@ async function runHybridFallbackWorkflow(browser, baseUrl) {
   assert.equal(
     await page
       .locator(
-        "a[href='https://github.com/sumarahmed/AINotesBuddy/releases']",
+        "a[href='https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.2/NotesBuddyCompanion-Setup-2026.08.2.exe']",
       )
       .getAttribute("target"),
     "_blank",

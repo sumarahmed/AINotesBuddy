@@ -23,6 +23,8 @@ remain compatible with semantic-version tooling.
   upgrade notice; Settings now reports **update required** with both versions
 - Update-check network failures cannot prevent local recording or companion
   startup
+- Website install and update buttons now target the versioned Windows `.exe`
+  asset directly instead of opening the general GitHub Releases page
 
 ## 2026.08.1 - 2026-08-03
 

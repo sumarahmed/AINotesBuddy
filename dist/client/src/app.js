@@ -155,12 +155,12 @@ const runtimeTranscriptionEndpoint =
   runtimeTranscriptionMode === "local"
     ? runtimeLocalCompanionEndpoint
     : runtimeHostedTranscriptionEndpoint;
-const companionDownloadUrl = String(
-  runtimeConfig.companionDownloadUrl ||
-    "https://github.com/sumarahmed/AINotesBuddy/releases",
-);
 const latestCompanionVersion = String(
   runtimeConfig.latestCompanionVersion || APP_VERSION,
+);
+const companionDownloadUrl = String(
+  runtimeConfig.companionDownloadUrl ||
+    `https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v${latestCompanionVersion}/NotesBuddyCompanion-Setup-${latestCompanionVersion}.exe`,
 );
 const companionSetupSessionKey = "notesbuddy-companion-setup-deferred";
 const storedSettings = loadStored("notesbuddy-settings", {});
