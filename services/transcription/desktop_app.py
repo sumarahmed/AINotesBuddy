@@ -18,7 +18,14 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
-COMPANION_VERSION = "2026.08.3"
+from teams_detection import (
+    TeamsMeetingMonitor,
+    TeamsSignal,
+    show_teams_meeting_notification,
+    teams_capture_url,
+)
+
+COMPANION_VERSION = "2026.08.4"
 DEFAULT_PORT = 8765
 DEFAULT_WEB_URL = "https://sumarahmed.github.io/AINotesBuddy/"
 AUTOSTART_VALUE_NAME = "NotesBuddyCompanion"
@@ -27,6 +34,7 @@ LATEST_RELEASE_API_URL = (
     "https://api.github.com/repos/sumarahmed/AINotesBuddy/releases/latest"
 )
 UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+DEFAULT_COMPANION_SETTINGS = {"teamsMeetingNotifications": True}
 
 
 def version_parts(value: str) -> tuple[int, int, int] | None:
@@ -177,6 +185,46 @@ def set_autostart(enabled: bool) -> None:
             pass
 
 
+def companion_settings_path() -> Path:
+    base = os.getenv("LOCALAPPDATA")
+    if base:
+        return Path(base) / "NotesBuddy" / "companion-settings.json"
+    return Path.home() / ".notesbuddy" / "companion-settings.json"
+
+
+def load_companion_settings(path: Path | None = None) -> dict[str, Any]:
+    settings = dict(DEFAULT_COMPANION_SETTINGS)
+    target = path or companion_settings_path()
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return settings
+    if isinstance(payload, dict):
+        settings["teamsMeetingNotifications"] = bool(
+            payload.get("teamsMeetingNotifications", True)
+        )
+    return settings
+
+
+def save_companion_settings(
+    settings: dict[str, Any],
+    path: Path | None = None,
+) -> None:
+    target = path or companion_settings_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "teamsMeetingNotifications": bool(
+            settings.get("teamsMeetingNotifications", True)
+        )
+    }
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(temporary, target)
+
+
 class CompanionServer:
     """Own a loopback-only Uvicorn server running on a background thread."""
 
@@ -273,11 +321,16 @@ class DesktopWindow:
         self.update_check_running = False
         self.update_url = RELEASES_URL
         self.last_notified_version: str | None = None
+        self.companion_settings = load_companion_settings()
+        self.teams_notifications_enabled = bool(
+            self.companion_settings["teamsMeetingNotifications"]
+        )
+        self.teams_monitor: TeamsMeetingMonitor | None = None
 
         self.root = tk.Tk()
         self.root.title(f"NotesBuddy Desktop Companion {COMPANION_VERSION}")
-        self.root.geometry("560x470")
-        self.root.minsize(520, 440)
+        self.root.geometry("580x590")
+        self.root.minsize(540, 550)
         self.root.protocol("WM_DELETE_WINDOW", self._close_window)
 
         self.status = tk.StringVar(value="Starting local service…")
@@ -286,8 +339,20 @@ class DesktopWindow:
         )
         self.update_status = tk.StringVar(value="Checking for updates shortly…")
         self.autostart = tk.BooleanVar(value=autostart_enabled())
+        self.teams_notifications = tk.BooleanVar(
+            value=self.teams_notifications_enabled
+        )
+        self.teams_detection_status = tk.StringVar(
+            value=(
+                "Watching for Microsoft Teams calls on this computer."
+                if self.teams_notifications_enabled
+                else "Teams meeting notifications are turned off."
+            )
+        )
         self._build()
         self._start_tray()
+        if server_result == "started":
+            self._start_teams_detection()
         self.root.after(0, self._show_server_result, server_result)
         self.root.after(800, self._start_update_check)
 
@@ -367,6 +432,25 @@ class DesktopWindow:
             variable=self.autostart,
             command=self._toggle_autostart,
         ).pack(anchor="w", pady=(8, 0))
+
+        meeting_frame = ttk.LabelFrame(
+            frame,
+            text="Teams meeting detection",
+            padding=14,
+        )
+        meeting_frame.pack(fill="x", pady=(18, 0))
+        ttk.Checkbutton(
+            meeting_frame,
+            text="Notify me when a Microsoft Teams meeting starts",
+            variable=self.teams_notifications,
+            command=self._toggle_teams_notifications,
+        ).pack(anchor="w")
+        ttk.Label(
+            meeting_frame,
+            textvariable=self.teams_detection_status,
+            foreground="#5b6470",
+            wraplength=480,
+        ).pack(anchor="w", pady=(5, 0))
         ttk.Label(
             frame,
             text=(
@@ -481,6 +565,70 @@ class DesktopWindow:
             self.autostart.set(not desired)
             messagebox.showerror("NotesBuddy", str(error), parent=self.root)
 
+    def _toggle_teams_notifications(self) -> None:
+        desired = bool(self.teams_notifications.get())
+        self.teams_notifications_enabled = desired
+        self.companion_settings["teamsMeetingNotifications"] = desired
+        try:
+            save_companion_settings(self.companion_settings)
+        except OSError:
+            self.teams_notifications_enabled = not desired
+            self.teams_notifications.set(not desired)
+            self.teams_detection_status.set(
+                "The notification preference could not be saved."
+            )
+            return
+        self.teams_detection_status.set(
+            "Watching for Microsoft Teams calls on this computer."
+            if desired
+            else "Teams meeting notifications are turned off."
+        )
+
+    def _start_teams_detection(self) -> None:
+        if self.teams_monitor is not None:
+            return
+        self.teams_monitor = TeamsMeetingMonitor(
+            on_detected=self._teams_meeting_detected,
+            enabled=lambda: self.teams_notifications_enabled,
+        )
+        self.teams_monitor.start()
+
+    def _teams_meeting_detected(self, signal: TeamsSignal) -> None:
+        actionable = show_teams_meeting_notification(self.web_url)
+        try:
+            self.root.after(
+                0,
+                self._show_teams_detection_result,
+                actionable,
+                signal,
+            )
+        except (RuntimeError, self.tk.TclError):
+            pass
+
+    def _show_teams_detection_result(
+        self,
+        actionable: bool,
+        signal: TeamsSignal,
+    ) -> None:
+        evidence = (
+            "microphone and meeting audio"
+            if signal.microphone_active and signal.audio_active
+            else "microphone activity"
+            if signal.microphone_active
+            else "meeting audio"
+        )
+        self.teams_detection_status.set(
+            f"Teams {evidence} detected. Recording has not started."
+        )
+        if not actionable and self.tray_icon is not None:
+            try:
+                self.tray_icon.notify(
+                    "Open NotesBuddy from the tray to start a capture.",
+                    "Teams meeting detected",
+                )
+            except (AttributeError, NotImplementedError, OSError):
+                pass
+
     def _start_tray(self) -> None:
         try:
             import pystray
@@ -495,6 +643,10 @@ class DesktopWindow:
         menu = pystray.Menu(
             pystray.MenuItem("Show companion", self._tray_show, default=True),
             pystray.MenuItem("Open NotesBuddy", self._tray_open),
+            pystray.MenuItem(
+                "Open NotesBuddy for Teams meeting",
+                self._tray_open_teams,
+            ),
             pystray.MenuItem("Quit", self._tray_quit),
         )
         self.tray_icon = pystray.Icon(
@@ -511,6 +663,12 @@ class DesktopWindow:
     def _tray_open(self, _icon=None, _item=None) -> None:
         self.root.after(0, self._open_site)
 
+    def _tray_open_teams(self, _icon=None, _item=None) -> None:
+        self.root.after(0, self._open_teams_capture)
+
+    def _open_teams_capture(self) -> None:
+        webbrowser.open(teams_capture_url(self.web_url))
+
     def _tray_quit(self, _icon=None, _item=None) -> None:
         self.root.after(0, self._quit)
 
@@ -526,6 +684,9 @@ class DesktopWindow:
         self._quit()
 
     def _quit(self) -> None:
+        if self.teams_monitor is not None:
+            self.teams_monitor.stop()
+            self.teams_monitor = None
         if self.tray_icon is not None:
             self.tray_icon.stop()
             self.tray_icon = None
@@ -616,6 +777,13 @@ def self_test(
         "version": COMPANION_VERSION,
         "routes": sorted(expected),
     }
+    if sys.platform == "win32":
+        for package in ("pycaw.pycaw", "windows_toasts"):
+            importlib.import_module(package)
+        result["teamsMeetingNotifications"] = {
+            "status": "ok",
+            "actionUrl": teams_capture_url(DEFAULT_WEB_URL),
+        }
     if server_check is not None:
         result["server"] = server_check
     if require_models:

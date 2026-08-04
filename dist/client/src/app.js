@@ -1,11 +1,29 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.7");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.8");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
 const MEETING_ACTIVITY_HANGOVER_MS = 900;
+const initialLaunchUrl = new URL(window.location.href);
+const launchedFromTeamsNotification =
+  initialLaunchUrl.searchParams.get("action") === "capture" &&
+  initialLaunchUrl.searchParams.get("source") === "teams";
+
+if (launchedFromTeamsNotification) {
+  initialLaunchUrl.searchParams.delete("action");
+  initialLaunchUrl.searchParams.delete("source");
+  try {
+    window.history.replaceState(
+      null,
+      "",
+      `${initialLaunchUrl.pathname}${initialLaunchUrl.search}${initialLaunchUrl.hash}`,
+    );
+  } catch {
+    // Direct-file previews may not allow replacing their history entry.
+  }
+}
 
 if (!MeetingAudio) {
   throw new Error("NotesBuddy meeting-audio module failed to load.");
@@ -313,7 +331,7 @@ const state = {
   profile: initialProfile,
   profileOnboardingOpen: !initialProfile,
   settings: initialSettings,
-  view: "home",
+  view: launchedFromTeamsNotification ? "capture" : "home",
   selectedMeetingId: initialMeetings[0]?.id || null,
   tab: "summary",
   search: "",
@@ -337,6 +355,7 @@ const state = {
   playbackSourceByMeeting: {},
   toasts: [],
   capture: {
+    launchSource: launchedFromTeamsNotification ? "teams" : null,
     title: "Untitled meeting",
     status: "idle",
     elapsed: 0,
@@ -830,6 +849,7 @@ function captureView() {
       ${
         idle
           ? `<div class="capture-ready">
+              ${capture.launchSource === "teams" ? `<div class="teams-launch-notice">${icon("radio", 18)}<div><strong>Teams meeting detected</strong><span>Review your audio sources, then start capture when you are ready. Recording has not started.</span></div></div>` : ""}
               <div class="capture-ready__visual"><div class="ready-ring ready-ring--outer"></div><div class="ready-ring ready-ring--inner"></div><div class="ready-mic">${icon("mic", 34)}</div></div>
               <h2>Ready for your next conversation</h2>
               <p>Keep microphone and meeting audio as synchronized tracks. Companion capture defaults playback to Windows output; browser capture also creates a mixed track.</p>
@@ -1657,11 +1677,12 @@ function refreshToastRegion() {
   }
 }
 
-function resetCapture() {
+function resetCapture({ launchSource = null } = {}) {
   clearInterval(captureTimer);
   stopSpeechRecognition();
   cancelCaptureRuntime();
   state.capture = {
+    launchSource,
     title: "Untitled meeting",
     status: "idle",
     elapsed: 0,

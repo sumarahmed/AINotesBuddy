@@ -24,8 +24,10 @@ for package in (
     "huggingface_hub",
     "PIL",
     "pyannote.audio",
+    "pycaw",
     "pystray",
     "soundcard",
+    "windows_toasts",
 ):
     try:
         package_datas, package_binaries, package_hiddenimports = collect_all(package)

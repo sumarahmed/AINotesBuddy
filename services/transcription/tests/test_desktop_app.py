@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,14 +18,16 @@ from desktop_app import (
     companion_endpoint,
     fetch_latest_companion_release,
     is_version_outdated,
+    load_companion_settings,
     parse_arguments,
+    save_companion_settings,
     version_parts,
 )
 
 
 class DesktopUtilityTests(unittest.TestCase):
     def test_companion_uses_year_month_minor_release_version(self) -> None:
-        self.assertEqual(COMPANION_VERSION, "2026.08.3")
+        self.assertEqual(COMPANION_VERSION, "2026.08.4")
 
     def test_companion_compares_release_versions_numerically(self) -> None:
         self.assertEqual(version_parts("companion-v2026.08.3"), (2026, 8, 3))
@@ -33,14 +36,14 @@ class DesktopUtilityTests(unittest.TestCase):
 
     def test_latest_release_selects_trusted_windows_installer(self) -> None:
         payload = {
-            "tag_name": "companion-v2026.08.4",
-            "html_url": f"{RELEASES_URL}/tag/companion-v2026.08.4",
+            "tag_name": "companion-v2026.08.5",
+            "html_url": f"{RELEASES_URL}/tag/companion-v2026.08.5",
             "assets": [
                 {
-                    "name": "NotesBuddy-Companion-Setup-2026.08.4.exe",
+                    "name": "NotesBuddy-Companion-Setup-2026.08.5.exe",
                     "browser_download_url": (
-                        f"{RELEASES_URL}/download/companion-v2026.08.4/"
-                        "NotesBuddy-Companion-Setup-2026.08.4.exe"
+                        f"{RELEASES_URL}/download/companion-v2026.08.5/"
+                        "NotesBuddy-Companion-Setup-2026.08.5.exe"
                     ),
                 }
             ],
@@ -65,13 +68,27 @@ class DesktopUtilityTests(unittest.TestCase):
         result = fetch_latest_companion_release(opener=opener, timeout=2)
 
         self.assertTrue(result["available"])
-        self.assertEqual(result["latestVersion"], "2026.08.4")
+        self.assertEqual(result["latestVersion"], "2026.08.5")
         self.assertTrue(str(result["downloadUrl"]).endswith(".exe"))
         self.assertEqual(captured["timeout"], 2)
         self.assertIn(
-            "NotesBuddy-Companion/2026.08.3",
+            "NotesBuddy-Companion/2026.08.4",
             captured["request"].get_header("User-agent"),
         )
+
+    def test_teams_notification_preference_is_local_and_persistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "companion-settings.json"
+
+            self.assertTrue(load_companion_settings(path)["teamsMeetingNotifications"])
+            save_companion_settings(
+                {"teamsMeetingNotifications": False},
+                path,
+            )
+
+            self.assertFalse(
+                load_companion_settings(path)["teamsMeetingNotifications"]
+            )
 
     def test_latest_release_rejects_an_invalid_tag(self) -> None:
         class FakeResponse:

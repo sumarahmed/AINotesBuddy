@@ -1312,6 +1312,39 @@ kbd {
   text-align: center;
 }
 
+.teams-launch-notice {
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  width: min(560px, 100%);
+  padding: 12px 14px;
+  margin: -4px auto 15px;
+  color: #155f57;
+  text-align: left;
+  background: #eef8f5;
+  border: 1px solid #bcded6;
+  border-radius: 12px;
+}
+
+.teams-launch-notice > svg {
+  flex: 0 0 auto;
+}
+
+.teams-launch-notice div {
+  display: grid;
+  gap: 2px;
+}
+
+.teams-launch-notice strong {
+  font-size: 11px;
+}
+
+.teams-launch-notice span {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
 .capture-ready__visual {
   position: relative;
   display: grid;

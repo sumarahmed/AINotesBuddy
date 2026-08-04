@@ -8,6 +8,22 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.8 - 2026-08-04
+
+### Added
+
+- Local Microsoft Teams meeting detection in Windows companion 2026.08.4
+- A clickable Windows notification that opens NotesBuddy directly on the
+  ready-to-record capture screen
+- A companion preference for enabling or disabling Teams meeting notifications
+- Debouncing, ringtone suppression, one-notification-per-meeting behavior, and
+  a quiet-period reset for consecutive calls
+
+### Changed
+
+- Notification handoffs clearly state that recording has not started and still
+  require the user to select **Start capture**
+
 ## 2026.08.7 - 2026-08-04
 
 ### Fixed

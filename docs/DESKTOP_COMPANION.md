@@ -22,6 +22,13 @@ speaker segments. Matching meeting speech that leaked into the microphone is
 removed word by word, while unmatched microphone speech remains **You** and the
 meeting copy retains its pyannote speaker assignment.
 
+Version `2026.08.4` locally watches Microsoft Teams' Windows audio-session and
+microphone-use state. Sustained activity shows one clickable Windows
+notification per meeting. Clicking it opens the NotesBuddy capture screen, but
+recording still starts only after the user selects **Start capture**. The
+control panel includes an on/off preference, and short audio activity is
+debounced to reduce ringtone and device-test notifications.
+
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
@@ -74,6 +81,9 @@ option can be changed in the control panel or selected during installation.
   after the response. It includes all sounds sent to the default Windows
   speaker during that interval.
 - The application does not open a Windows Firewall port.
+- Meeting detection reads only local Windows audio-session state and Teams'
+  microphone-use status. It does not read Teams messages, participants,
+  calendar events, or meeting content, and it records no audio while watching.
 
 The website may use an online fallback when the companion is unavailable.
 Settings discloses which path is currently active.
@@ -104,7 +114,7 @@ In GitHub:
    read-only, gated-model token.
 3. Run **Windows desktop companion** from the Actions tab with
    `include_models` enabled to test a build.
-4. When ready, create and push a tag such as `companion-v2026.08.3`.
+4. When ready, create and push a tag such as `companion-v2026.08.4`.
 
 The tag workflow runs service tests, prepares pinned offline models, builds a
 PyInstaller one-directory application, executes the packaged `--self-test`,
@@ -125,7 +135,7 @@ python -m pip install torch torchaudio --index-url https://download.pytorch.org/
 python -m pip install -r services\transcription\requirements-packaging.txt
 $env:HF_TOKEN = "publisher-build-token"
 python desktop\prepare_models.py --accept-pyannote-terms
-.\desktop\build.ps1 -Python python -Version 2026.08.3 -RequireModels
+.\desktop\build.ps1 -Python python -Version 2026.08.4 -RequireModels
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -134,7 +144,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.3 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.4 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 
