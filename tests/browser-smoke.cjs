@@ -1586,7 +1586,7 @@ async function runLiveGuestAttribution(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.6", transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.7", transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
     });
   });
 

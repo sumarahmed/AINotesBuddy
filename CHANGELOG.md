@@ -8,6 +8,21 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.7 - 2026-08-04
+
+### Fixed
+
+- Existing saved meetings with longer transcripts now analyze in bounded,
+  token-aware sections instead of exhausting the hosted GPU or truncating input
+- Long-meeting partial results now merge hierarchically so every request stays
+  within the model's safe input limit
+- Supported summaries that under-cite transcript evidence now recover from the
+  strongest matching segments rather than failing the entire refresh
+- Weekdays, months, relative dates, and numeric dates are rejected when they do
+  not appear in the cited transcript evidence
+- Summary recovery removes repeated decisions and actions while remaining based
+  only on validated transcript findings
+
 ## 2026.08.6 - 2026-08-04
 
 ### Added
