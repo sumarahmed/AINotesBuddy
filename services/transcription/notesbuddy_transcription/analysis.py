@@ -11,7 +11,7 @@ from typing import Any
 
 
 ANALYSIS_SCHEMA_VERSION = 1
-ANALYSIS_PROMPT_VERSION = 1
+ANALYSIS_PROMPT_VERSION = 2
 NOT_SPECIFIED = "Not specified"
 PRIORITIES = {"High", "Medium", "Low"}
 GROUNDING_STOP_WORDS = {
@@ -68,6 +68,13 @@ LOW_URGENCY = re.compile(
     r"nice to have|consider exploring)\b",
     re.IGNORECASE,
 )
+SPECIFIC_TIME_TERM = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"january|february|march|april|may|june|july|august|september|"
+    r"october|november|december|today|tomorrow|yesterday|tonight|"
+    r"noon|midnight|weekend|eod)\b",
+    re.IGNORECASE,
+)
 CONFIRMED_DECISION = re.compile(
     r"\b(?:decided|agreed|approved|confirmed|selected|chose|chosen|settled|"
     r"consensus|going with|will use|will proceed|moving forward with|"
@@ -97,7 +104,7 @@ Requirements:
 1. shortSummary: fewer than 300 words in clear paragraphs. Explain the purpose, main topics, overall outcome, and important next steps only when supported.
 2. highlights: concise important discussion points, findings, concerns, updates, risks, opportunities, and recommendations. Combine repeated or related points.
 3. decisions: confirmed decisions and agreements only. Include context and responsible person/team when stated. Never turn suggestions, proposals, questions, or unresolved discussion into decisions.
-4. actionItems: clear, specific, separate tasks. Use "Not specified" when owner or due date is absent. Do not invent deadlines. Priority must be High, Medium, or Low based only on urgency expressed. Put dependencies, follow-ups, or relevant context in notes; otherwise use "Not specified".
+4. actionItems: clear, specific, separate tasks. Use "Not specified" when owner or due date is absent. Do not infer, calculate, or invent a deadline; every weekday, month, relative date, and numeric date must appear in the cited evidence. The task must represent the stated commitment, not a prerequisite. Put prerequisites and dependencies in notes unless they were separately assigned as tasks. Priority must be High, Medium, or Low based only on urgency expressed; otherwise use Medium.
 
 Every summary and list item must cite one or more transcript segment IDs that directly support it. If no confirmed decisions exist, return an empty decisions array. If no action items exist, return an empty actionItems array.
 
@@ -242,7 +249,51 @@ def _is_grounded_text(value: object, evidence_text: str) -> bool:
     evidence_numbers = set(
         re.findall(r"\b\d+(?:[./:-]\d+)*\b", evidence_text)
     )
-    return len(overlap) >= minimum_overlap and output_numbers <= evidence_numbers
+    output_time_terms = {
+        value.lower() for value in SPECIFIC_TIME_TERM.findall(text)
+    }
+    evidence_time_terms = {
+        value.lower() for value in SPECIFIC_TIME_TERM.findall(evidence_text)
+    }
+    return (
+        len(overlap) >= minimum_overlap
+        and output_numbers <= evidence_numbers
+        and output_time_terms <= evidence_time_terms
+    )
+
+
+def _expanded_summary_evidence(
+    summary: str,
+    evidence: list[str],
+    by_id: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Add the strongest transcript matches when a model under-cites a summary."""
+
+    output_tokens = _content_tokens(summary)
+    output_numbers = set(re.findall(r"\b\d+(?:[./:-]\d+)*\b", summary))
+    candidates: list[tuple[int, int, str]] = []
+    for segment_id, segment in by_id.items():
+        if segment_id in evidence:
+            continue
+        segment_text = segment["text"]
+        overlap = len(output_tokens & _content_tokens(segment_text))
+        matched_numbers = len(
+            output_numbers
+            & set(re.findall(r"\b\d+(?:[./:-]\d+)*\b", segment_text))
+        )
+        if overlap or matched_numbers:
+            candidates.append((matched_numbers, overlap, segment_id))
+    candidates.sort(reverse=True)
+
+    expanded = list(evidence)
+    for _matched_numbers, _overlap, segment_id in candidates:
+        expanded.append(segment_id)
+        if len(expanded) >= 12 or _is_grounded_text(
+            summary,
+            _evidence_text(expanded, by_id),
+        ):
+            break
+    return expanded
 
 
 def _validated_owner(
@@ -350,9 +401,18 @@ def normalise_analysis(
         summary,
         _evidence_text(summary_evidence, by_id),
     ):
-        raise MeetingAnalysisUnavailable(
-            "The analysis model returned a summary unsupported by its cited transcript evidence."
+        summary_evidence = _expanded_summary_evidence(
+            summary,
+            summary_evidence,
+            by_id,
         )
+        if not _is_grounded_text(
+            summary,
+            _evidence_text(summary_evidence, by_id),
+        ):
+            raise MeetingAnalysisUnavailable(
+                "The analysis model returned a summary unsupported by its cited transcript evidence."
+            )
 
     highlights: list[dict[str, Any]] = []
     seen_highlights: set[str] = set()
@@ -468,6 +528,81 @@ def normalise_analysis(
     }
 
 
+def _repair_summary_from_grounded_items(
+    raw_analysis: dict[str, Any],
+    prepared_segments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Replace an unverifiable summary with already-grounded model findings."""
+
+    by_id = {segment["id"]: segment for segment in prepared_segments}
+    valid_ids = set(by_id)
+    evidence: list[str] = []
+    sentences: list[str] = []
+    candidate_fields = (
+        (raw_analysis.get("highlights") or [], "text"),
+        (raw_analysis.get("decisions") or [], "decision"),
+        (raw_analysis.get("actionItems") or [], "task"),
+    )
+    for items, field in candidate_fields:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            text = _clean_text(item.get(field), maximum=600)
+            item_evidence = _evidence_ids(
+                item.get("evidenceSegmentIds"),
+                valid_ids,
+            )
+            if not text or not item_evidence or not _is_grounded_text(
+                text,
+                _evidence_text(item_evidence, by_id),
+            ):
+                continue
+            new_evidence = [
+                segment_id
+                for segment_id in item_evidence
+                if segment_id not in evidence
+            ]
+            if len(evidence) + len(new_evidence) > 12:
+                continue
+            candidate_tokens = _content_tokens(text)
+            repeated = any(
+                len(candidate_tokens & _content_tokens(existing))
+                >= max(
+                    2,
+                    math.ceil(
+                        min(
+                            len(candidate_tokens),
+                            len(_content_tokens(existing)),
+                        )
+                        * 0.55
+                    ),
+                )
+                for existing in sentences
+                if candidate_tokens and _content_tokens(existing)
+            )
+            if repeated:
+                continue
+            sentences.append(text.rstrip(". ") + ".")
+            evidence.extend(new_evidence)
+            if len(sentences) >= 8:
+                break
+        if len(sentences) >= 8:
+            break
+
+    if not sentences:
+        cited = _evidence_ids(
+            raw_analysis.get("summaryEvidenceSegmentIds"),
+            valid_ids,
+        )
+        evidence = cited or [segment["id"] for segment in prepared_segments[:3]]
+        sentences = [by_id[segment_id]["text"] for segment_id in evidence]
+
+    repaired = dict(raw_analysis)
+    repaired["shortSummary"] = _limit_words(" ".join(sentences), 299)
+    repaired["summaryEvidenceSegmentIds"] = evidence
+    return repaired
+
+
 def _public_analysis(
     analysis: dict[str, Any],
     prepared_segments: list[dict[str, Any]],
@@ -535,20 +670,65 @@ def _extract_json(value: str) -> dict[str, Any]:
     return payload
 
 
+def _transcript_line(segment: dict[str, Any]) -> str:
+    return (
+        f"[{segment['id']} | {segment['timestamp'] or 'time unavailable'} | "
+        f"{segment['speaker']}] {segment['text']}"
+    )
+
+
+def _token_count(tokenizer: Any, text: str) -> int:
+    return len(tokenizer.encode(text, add_special_tokens=False))
+
+
+def _split_segment_for_token_budget(
+    segment: dict[str, Any],
+    tokenizer: Any,
+    maximum_tokens: int,
+) -> list[dict[str, Any]]:
+    if _token_count(tokenizer, _transcript_line(segment)) <= maximum_tokens:
+        return [segment]
+
+    empty_segment = {**segment, "text": ""}
+    metadata_tokens = _token_count(tokenizer, _transcript_line(empty_segment))
+    text_budget = maximum_tokens - metadata_tokens - 8
+    if text_budget < 16:
+        raise MeetingAnalysisUnavailable(
+            "The analysis transcript token budget is configured too low."
+        )
+
+    text_tokens = tokenizer.encode(segment["text"], add_special_tokens=False)
+    parts: list[dict[str, Any]] = []
+    for start in range(0, len(text_tokens), text_budget):
+        text = tokenizer.decode(
+            text_tokens[start : start + text_budget],
+            skip_special_tokens=True,
+        ).strip()
+        if text:
+            parts.append({**segment, "text": text})
+    return parts
+
+
 def _transcript_chunks(
-    segments: list[dict[str, Any]], maximum_characters: int
+    segments: list[dict[str, Any]],
+    tokenizer: Any,
+    maximum_tokens: int,
 ) -> list[list[dict[str, Any]]]:
     chunks: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
-    current_size = 0
     for segment in segments:
-        segment_size = len(segment["text"]) + len(segment["speaker"]) + 40
-        if current and current_size + segment_size > maximum_characters:
-            chunks.append(current)
-            current = []
-            current_size = 0
-        current.append(segment)
-        current_size += segment_size
+        for part in _split_segment_for_token_budget(
+            segment,
+            tokenizer,
+            maximum_tokens,
+        ):
+            candidate = current + [part]
+            candidate_text = "\n".join(_transcript_line(item) for item in candidate)
+            if current and _token_count(tokenizer, candidate_text) > maximum_tokens:
+                chunks.append(current)
+                current = [part]
+            else:
+                current = candidate
     if current:
         chunks.append(current)
     return chunks
@@ -565,12 +745,24 @@ class MeetingAnalyzer:
         model_name: str,
         revision: str | None = None,
         device: str = "cuda",
-        maximum_chunk_characters: int = 42_000,
+        maximum_chunk_tokens: int = 3_600,
+        maximum_input_tokens: int = 6_000,
+        maximum_output_tokens: int = 1_600,
+        merge_batch_size: int = 3,
     ) -> None:
         self.model_name = model_name
         self.revision = revision or None
         self.device = device
-        self.maximum_chunk_characters = max(8_000, maximum_chunk_characters)
+        self.maximum_input_tokens = max(2_500, maximum_input_tokens)
+        self.maximum_chunk_tokens = min(
+            max(1_000, maximum_chunk_tokens),
+            self.maximum_input_tokens - 1_200,
+        )
+        self.maximum_output_tokens = min(
+            max(600, maximum_output_tokens),
+            2_000,
+        )
+        self.merge_batch_size = min(max(2, merge_batch_size), 4)
         self._tokenizer = None
         self._model = None
         self._load_lock = threading.Lock()
@@ -603,7 +795,7 @@ class MeetingAnalyzer:
                 self._model = AutoModelForCausalLM.from_pretrained(
                     self.model_name,
                     revision=self.revision,
-                    torch_dtype=dtype,
+                    dtype=dtype,
                     low_cpu_mem_usage=True,
                 ).to(self.device)
                 self._model.eval()
@@ -611,11 +803,7 @@ class MeetingAnalyzer:
 
     @staticmethod
     def _transcript_text(segments: list[dict[str, Any]]) -> str:
-        return "\n".join(
-            f"[{item['id']} | {item['timestamp'] or 'time unavailable'} | "
-            f"{item['speaker']}] {item['text']}"
-            for item in segments
-        )
+        return "\n".join(_transcript_line(item) for item in segments)
 
     def _generate(self, user_prompt: str) -> dict[str, Any]:
         tokenizer, model = self._load()
@@ -631,26 +819,87 @@ class MeetingAnalyzer:
         inputs = tokenizer(
             rendered,
             return_tensors="pt",
-            truncation=True,
-            max_length=15_500,
-        ).to(self.device)
+            truncation=False,
+        )
+        input_tokens = int(inputs["input_ids"].shape[-1])
+        if input_tokens > self.maximum_input_tokens:
+            raise MeetingAnalysisUnavailable(
+                "A transcript section exceeded the safe analysis size."
+            )
+        inputs = inputs.to(self.device)
         try:
             import torch
 
             with self._generation_lock, torch.inference_mode():
                 output = model.generate(
                     **inputs,
-                    max_new_tokens=1_800,
+                    max_new_tokens=self.maximum_output_tokens,
                     do_sample=False,
                     repetition_penalty=1.04,
                     pad_token_id=tokenizer.eos_token_id,
                 )
         except RuntimeError as error:
+            out_of_memory = "out of memory" in str(error).lower()
+            print(
+                "[notesbuddy-analysis] generation_failed "
+                f"input_tokens={input_tokens} "
+                f"error_type={type(error).__name__} "
+                f"out_of_memory={str(out_of_memory).lower()}",
+                flush=True,
+            )
+            if out_of_memory and torch.cuda.is_available():
+                torch.cuda.empty_cache()
             raise MeetingAnalysisUnavailable(
                 "The professional analysis model could not process this transcript."
             ) from error
         generated = output[0][inputs["input_ids"].shape[-1] :]
         return _extract_json(tokenizer.decode(generated, skip_special_tokens=True))
+
+    def _merge_analyses(
+        self,
+        partials: list[dict[str, Any]],
+        prepared: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        current = partials
+        while len(current) > 1:
+            merged: list[dict[str, Any]] = []
+            for start in range(0, len(current), self.merge_batch_size):
+                batch = current[start : start + self.merge_batch_size]
+                if len(batch) == 1:
+                    merged.append(batch[0])
+                    continue
+                merge_prompt = (
+                    "The following evidence-grounded analyses cover consecutive "
+                    "parts of one meeting. Merge them into one professional analysis. "
+                    "Combine repetition, preserve all confirmed decisions and distinct "
+                    "tasks, and retain the cited segment IDs. Do not add any fact absent "
+                    "from these partial analyses.\n\n"
+                    f"{json.dumps(batch, ensure_ascii=False)}\n\n"
+                    "Return exactly this JSON shape:\n"
+                    f"{json.dumps(OUTPUT_SHAPE, ensure_ascii=False)}"
+                )
+                merged.append(
+                    self._generate_and_normalise(merge_prompt, prepared)
+                )
+            current = merged
+        return current[0]
+
+    def _generate_and_normalise(
+        self,
+        prompt: str,
+        prepared: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        raw_analysis = self._generate(prompt)
+        try:
+            return normalise_analysis(raw_analysis, prepared)
+        except MeetingAnalysisUnavailable as error:
+            if "summary" not in str(error).lower():
+                raise
+            repaired = _repair_summary_from_grounded_items(
+                raw_analysis,
+                prepared,
+            )
+            return normalise_analysis(repaired, prepared)
 
     def analyze(
         self,
@@ -663,7 +912,12 @@ class MeetingAnalyzer:
             raise MeetingAnalysisUnavailable(
                 "A completed transcript is required for meeting analysis."
             )
-        chunks = _transcript_chunks(prepared, self.maximum_chunk_characters)
+        tokenizer, _model = self._load()
+        chunks = _transcript_chunks(
+            prepared,
+            tokenizer,
+            self.maximum_chunk_tokens,
+        )
         partials: list[dict[str, Any]] = []
         for index, chunk in enumerate(chunks):
             prompt = (
@@ -674,22 +928,12 @@ class MeetingAnalyzer:
                 "Return exactly this JSON shape:\n"
                 f"{json.dumps(OUTPUT_SHAPE, ensure_ascii=False)}"
             )
-            partials.append(normalise_analysis(self._generate(prompt), prepared))
+            partials.append(self._generate_and_normalise(prompt, prepared))
 
         if len(partials) == 1:
             final = partials[0]
         else:
-            merge_prompt = (
-                "The following evidence-grounded analyses cover consecutive parts of "
-                "one meeting. Merge them into one professional analysis. Combine "
-                "repetition, preserve all confirmed decisions and distinct tasks, and "
-                "retain the cited segment IDs. Do not add any fact absent from these "
-                "partial analyses.\n\n"
-                f"{json.dumps(partials, ensure_ascii=False)}\n\n"
-                "Return exactly this JSON shape:\n"
-                f"{json.dumps(OUTPUT_SHAPE, ensure_ascii=False)}"
-            )
-            final = normalise_analysis(self._generate(merge_prompt), prepared)
+            final = self._merge_analyses(partials, prepared)
         return _public_analysis(final, prepared, model_name=self.model_name)
 
 
@@ -701,7 +945,16 @@ def analyzer_from_environment() -> MeetingAnalyzer | None:
         model_name=model_name,
         revision=os.getenv("NOTESBUDDY_ANALYSIS_REVISION", "").strip() or None,
         device=os.getenv("NOTESBUDDY_ANALYSIS_DEVICE", "cuda").strip(),
-        maximum_chunk_characters=int(
-            os.getenv("NOTESBUDDY_ANALYSIS_CHUNK_CHARACTERS", "42000")
+        maximum_chunk_tokens=int(
+            os.getenv("NOTESBUDDY_ANALYSIS_CHUNK_TOKENS", "3600")
+        ),
+        maximum_input_tokens=int(
+            os.getenv("NOTESBUDDY_ANALYSIS_INPUT_TOKENS", "6000")
+        ),
+        maximum_output_tokens=int(
+            os.getenv("NOTESBUDDY_ANALYSIS_OUTPUT_TOKENS", "1600")
+        ),
+        merge_batch_size=int(
+            os.getenv("NOTESBUDDY_ANALYSIS_MERGE_BATCH_SIZE", "3")
         ),
     )
