@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.08.5` (`Year.Month.MinorRelease`)
+**Current version:** `2026.08.6` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -36,10 +36,13 @@ for speech-to-text and speaker diarization.
   meeting audio
 - Word-level cross-channel echo cleanup that preserves local speech while
   keeping leaked meeting speech under its diarized remote speaker
-- Transcript-grounded highlights, decisions, and action items with no generic
-  review tasks or fabricated summary content
+- Professional analysis of the complete transcript with a sub-300-word short
+  summary, consolidated highlights, confirmed decisions, and structured action
+  items
+- Transcript-segment evidence citations plus server validation that rejects
+  unsupported decisions, tasks, owners, dates, priorities, and notes
 - Speaker rename, transcript search, copy, and Markdown export
-- Local profile, notes, action items, and extractive transcript brief
+- Local profile, notes, structured action items, and Markdown export
 - Backward-compatible playback for legacy single-asset meetings
 - Direct `index.html` launch and a dependency-free static client build
 
@@ -157,6 +160,7 @@ operating limits, and future subscription migration.
 | Manual recovery token | User-local companion token file; browser storage only in manual CLI mode |
 | Transcription job audio | Temporary local/hosted job directory, deleted after terminal state |
 | Hosted anonymous session | Browser `sessionStorage`, expiring |
+| Professional-analysis request | Completed transcript sent to the configured analysis service; no recording audio in this request |
 | Speech and diarization models | Local or hosted model cache |
 
 Windows-output capture includes everything played through the selected default
@@ -239,7 +243,8 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,
   entitlement, or production abuse-prevention boundary.
-- Briefs are extractive transcript text, not LLM-generated conclusions.
+- Professional analysis depends on model availability and must still be
+  reviewed against the transcript for high-impact decisions.
 - Overlapping speech and poor audio can reduce diarization accuracy; users
   should review labels before relying on them.
 

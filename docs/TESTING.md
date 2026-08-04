@@ -28,11 +28,12 @@ The JavaScript tests cover:
 - cross-source echo de-duplication;
 - **You**, detected, renamed, and unknown speaker labels;
 - rename propagation to participants;
-- extractive briefs with no invented text;
+- structured analysis validation and rejection of invalid evidence IDs;
 - authenticated local multipart client construction;
 - automatic desktop discovery, pairing, token validation, and incompatibility
   rejection;
-- hosted anonymous-session creation and session-token multipart requests.
+- hosted anonymous-session creation and session-token multipart requests;
+- transcript-only professional-analysis request construction;
 - automatic replacement of hosted sessions lost during scale-to-zero.
 
 The test file runs directly rather than with Node's process-isolated test mode,
@@ -206,15 +207,24 @@ Set timing/speaker-count tolerances rather than asserting exact wording.
 - Rename the profile and verify existing local participants/follow-ups update.
 - Confirm separate site origins have separate data.
 - Import WAV/MP3 and transcribe it as a mixed-only remote recording.
-- Refresh a brief with no transcript; confirm no brief is fabricated.
-- Confirm every highlight, decision, and action sentence can be found verbatim
-  in the transcript.
-- Confirm overlapping transcript text does not create duplicate highlights or
-  actions.
-- Confirm pending-decision wording is not shown as a completed decision.
-- Open a meeting saved by an older build and confirm the generic review action
-  is replaced by transcript-grounded results while completed matching actions
-  remain completed.
+- Refresh analysis with no completed transcript; confirm no content is
+  fabricated and the control stays disabled.
+- Confirm an analysis request contains the complete timestamped speaker
+  transcript and no audio Blob.
+- Confirm every summary/list item cites at least one real transcript segment.
+- Confirm fabricated evidence IDs and unsupported highlights/actions are
+  rejected.
+- Confirm suggestions and pending-decision wording are not shown as confirmed
+  decisions.
+- Confirm unsupported owners and due dates become **Not specified**, and
+  unsupported High/Low priority becomes **Medium**.
+- Confirm action notes and decision context unsupported by their cited evidence
+  become **Not specified**.
+- Confirm the summary stays below 300 words and related highlights are not
+  duplicated.
+- Open a meeting saved by an older build and confirm keyword-generated content
+  is cleared, marked outdated, and can be refreshed only from a completed
+  transcript.
 - Confirm browser live text is explicitly marked as a draft.
 - With meeting output silent, emit microphone speech and confirm the live row is
   **You** with no provisional badge.

@@ -21,6 +21,36 @@ from notesbuddy_transcription.engine import EmptyEngine, EngineCancelled
 PAIRING_TOKEN = "test-pairing-token-that-is-long-enough"
 
 
+class FakeAnalyzer:
+    name = "fake-professional-analyzer"
+
+    @staticmethod
+    def configuration_status() -> dict[str, object]:
+        return {
+            "ready": True,
+            "model": "fake-analysis-model",
+            "status": "ready",
+        }
+
+    def analyze(self, *, segments, meeting_title="") -> dict:
+        source_id = str(segments[0]["id"])
+        return {
+            "schemaVersion": 1,
+            "promptVersion": 1,
+            "model": "fake-analysis-model",
+            "shortSummary": f"{meeting_title or 'The meeting'} confirmed the scope.",
+            "summarySourceSegmentIds": [source_id],
+            "highlights": [
+                {
+                    "text": "The scope was confirmed.",
+                    "sourceSegmentIds": [source_id],
+                }
+            ],
+            "decisions": [],
+            "actionItems": [],
+        }
+
+
 class FakeSystemAudioCapture:
     def __init__(self, capture_id: str, path: Path) -> None:
         self.id = capture_id
@@ -113,6 +143,7 @@ class LocalApiTests(unittest.TestCase):
         cls.client = TestClient(
             create_app(
                 engine=EmptyEngine(),
+                analyzer=FakeAnalyzer(),
                 pairing_token=PAIRING_TOKEN,
                 allowed_origins=["http://127.0.0.1:4173"],
                 system_audio_capture=cls.system_audio,
@@ -128,6 +159,39 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
         self.assertEqual(response.json()["storage"], "temporary job files only")
+        self.assertTrue(response.json()["analysisAvailable"])
+        self.assertEqual(response.json()["analysisModel"], "fake-analysis-model")
+
+    def test_analysis_requires_pairing_and_returns_structured_result(self) -> None:
+        payload = {
+            "meetingTitle": "Scope review",
+            "segments": [
+                {
+                    "id": "segment-one",
+                    "speaker": "Jordan",
+                    "timestamp": "00:01",
+                    "text": "We agreed to use the revised scope.",
+                }
+            ],
+        }
+        self.assertEqual(
+            self.client.post("/v1/analyses", json=payload).status_code,
+            401,
+        )
+
+        response = self.client.post(
+            "/v1/analyses",
+            headers=self.headers,
+            json=payload,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        self.assertEqual(response.json()["schemaVersion"], 1)
+        self.assertEqual(
+            response.json()["summarySourceSegmentIds"],
+            ["segment-one"],
+        )
 
     def test_job_accepts_assets_and_never_fabricates_text(self) -> None:
         response = self.client.post(
@@ -297,6 +361,7 @@ class AnonymousHostedApiTests(unittest.TestCase):
         self.client = TestClient(
             create_app(
                 engine=EmptyEngine(),
+                analyzer=FakeAnalyzer(),
                 authentication_mode="anonymous",
                 allowed_origins=["https://sumarahmed.github.io"],
             )
@@ -326,6 +391,7 @@ class AnonymousHostedApiTests(unittest.TestCase):
         health = self.client.get("/v1/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["access"], "anonymous-session")
+        self.assertTrue(health.json()["analysisAvailable"])
 
         missing_session = self.client.post(
             "/v1/transcriptions",
@@ -341,6 +407,29 @@ class AnonymousHostedApiTests(unittest.TestCase):
             data={"metadata": '{"durationMs":7200001}'},
         )
         self.assertEqual(too_long.status_code, 413)
+
+    def test_analysis_requires_session_and_preserves_session_isolation(self) -> None:
+        payload = {
+            "meetingTitle": "Hosted scope review",
+            "segments": [
+                {
+                    "id": "hosted-segment",
+                    "speaker": "Speaker 1",
+                    "text": "We agreed to use the revised scope.",
+                }
+            ],
+        }
+        self.assertEqual(
+            self.client.post("/v1/analyses", json=payload).status_code,
+            401,
+        )
+        response = self.client.post(
+            "/v1/analyses",
+            headers=self._new_session(),
+            json=payload,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["model"], "fake-analysis-model")
 
     def test_session_owns_job_and_other_sessions_cannot_read_it(self) -> None:
         owner_headers = self._new_session()

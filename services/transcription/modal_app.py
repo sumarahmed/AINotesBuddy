@@ -27,6 +27,10 @@ image = (
     .pip_install_from_requirements(
         "services/transcription/requirements-models.txt",
     )
+    .pip_install(
+        "transformers>=4.55,<5",
+        "accelerate>=1,<2",
+    )
     .env(
         {
             "HF_HOME": "/model-cache/huggingface",
@@ -39,6 +43,13 @@ image = (
             "NOTESBUDDY_ALLOWED_ORIGINS": "https://sumarahmed.github.io",
             "NOTESBUDDY_MODEL_DEVICE": "cuda",
             "NOTESBUDDY_WHISPER_COMPUTE_TYPE": "float16",
+            "NOTESBUDDY_ANALYSIS_MODEL": "Qwen/Qwen3-4B-Instruct-2507",
+            "NOTESBUDDY_ANALYSIS_REVISION": (
+                "1b4199c4f36b0cef378bfb12390c18780c18af4c"
+            ),
+            "NOTESBUDDY_ANALYSIS_DEVICE": "cuda",
+            "NOTESBUDDY_ANALYSIS_CHUNK_CHARACTERS": "42000",
+            "NOTESBUDDY_MAX_ANALYSIS_CHARACTERS": "180000",
             "NOTESBUDDY_MAX_WORKERS": "1",
             "NOTESBUDDY_MAX_JOBS": "16",
             "NOTESBUDDY_MAX_SOURCE_BYTES": str(250 * 1024**2),
