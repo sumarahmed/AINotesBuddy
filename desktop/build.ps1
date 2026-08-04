@@ -64,17 +64,32 @@ $selfTestProcess = Start-Process `
     -FilePath $executable `
     -ArgumentList $selfTestArguments `
     -WindowStyle Hidden `
-    -Wait `
     -PassThru `
     -RedirectStandardOutput $selfTestStdout `
     -RedirectStandardError $selfTestStderr
+$selfTestCompleted = $selfTestProcess.WaitForExit(300000)
+if (-not $selfTestCompleted) {
+    Stop-Process -Id $selfTestProcess.Id -Force -ErrorAction SilentlyContinue
+    throw "Packaged companion self-test exceeded the five-minute safety limit."
+}
+$selfTestProcess.WaitForExit()
+$selfTestOutput = ""
 if (Test-Path -LiteralPath $selfTestStdout) {
-    Get-Content -LiteralPath $selfTestStdout
+    $selfTestOutput = Get-Content -LiteralPath $selfTestStdout -Raw
+    Write-Output $selfTestOutput
 }
 if (Test-Path -LiteralPath $selfTestStderr) {
     Get-Content -LiteralPath $selfTestStderr
 }
-if ($selfTestProcess.ExitCode -ne 0) {
+try {
+    $selfTestResult = $selfTestOutput | ConvertFrom-Json
+} catch {
+    throw "Packaged companion self-test did not return valid JSON."
+}
+if ($selfTestResult.status -ne "ok") {
+    throw "Packaged companion self-test did not report success."
+}
+if ($null -ne $selfTestProcess.ExitCode -and $selfTestProcess.ExitCode -ne 0) {
     throw (
         "Packaged companion self-test failed with exit code " +
         "$($selfTestProcess.ExitCode)."

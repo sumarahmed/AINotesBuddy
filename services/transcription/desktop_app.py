@@ -779,7 +779,10 @@ def self_test(
     }
     if sys.platform == "win32":
         for package in ("pycaw.pycaw", "windows_toasts"):
-            importlib.import_module(package)
+            if importlib.util.find_spec(package) is None:
+                raise RuntimeError(
+                    f"Packaged notification dependency is missing: {package}"
+                )
         result["teamsMeetingNotifications"] = {
             "status": "ok",
             "actionUrl": teams_capture_url(DEFAULT_WEB_URL),
