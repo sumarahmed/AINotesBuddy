@@ -1586,7 +1586,7 @@ async function runLiveGuestAttribution(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.7", transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.8", transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
     });
   });
 
@@ -1779,6 +1779,48 @@ async function runDirectFileLoad(browser) {
   await context.close();
 }
 
+async function runTeamsNotificationHandoff(browser, baseUrl) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "notesbuddy-profile",
+      JSON.stringify({
+        id: "teams-notification-profile",
+        name: "Teams Tester",
+        initials: "TT",
+      }),
+    );
+    localStorage.setItem(
+      "notesbuddy-settings",
+      JSON.stringify({ companionSetupCompleted: true }),
+    );
+  });
+
+  await page.goto(`${baseUrl}?action=capture&source=teams`);
+  await page
+    .getByText("Teams meeting detected", { exact: true })
+    .waitFor();
+  await page
+    .getByText(
+      "Review your audio sources, then start capture when you are ready. Recording has not started.",
+      { exact: true },
+    )
+    .waitFor();
+  await page.locator("[data-action='start-capture']").waitFor();
+  assert.equal(
+    await page.locator(".recording-status--idle").count(),
+    1,
+    "a notification handoff must never start recording automatically",
+  );
+  assert.equal(
+    new URL(page.url()).search,
+    "",
+    "the one-time notification launch parameters should be consumed",
+  );
+  await context.close();
+}
+
 (async () => {
   const server = staticServer();
   const baseUrl = await listen(server);
@@ -1805,12 +1847,13 @@ async function runDirectFileLoad(browser) {
     await runLiveGuestAttribution(browser, baseUrl);
     await runLegacyInsightMigration(browser, baseUrl);
     await runDirectFileLoad(browser);
+    await runTeamsNotificationHandoff(browser, baseUrl);
     await runHostedClientWorkflow(browser, baseUrl);
     await runHybridCompanionWorkflow(browser, baseUrl);
     await runExistingUserUpdateNotification(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, live You/Guest draft attribution, signal detection, pause/resume, stable controls, source persistence/default playback, structured meeting analysis, obsolete-insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, version display, Teams notification handoff without auto-recording, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, live You/Guest draft attribution, signal detection, pause/resume, stable controls, source persistence/default playback, structured meeting analysis, obsolete-insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

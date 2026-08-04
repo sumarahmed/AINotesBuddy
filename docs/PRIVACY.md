@@ -30,6 +30,7 @@ application's control.
 | Hashed hosted client network key | Host process memory | Rate-limit window/session cleanup |
 | Companion pairing token | Local OS user configuration directory | Until token file is deleted |
 | Companion update response | Companion process memory | Until the next check or application exit |
+| Teams audio/microphone activity flags | Companion process memory | Current detection poll only; no audio content is read or stored |
 | Speech/diarization models | Local or hosted model cache | Until the owner removes the cache |
 | Hugging Face model token | Source-development environment, host secret manager, or trusted release job | Owner controlled; never included in installer |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
@@ -56,6 +57,12 @@ New captures can store:
 - isolated Windows-output or shared meeting audio;
 - a local mixed playback track for browser capture. Companion capture keeps
   microphone and Windows output separate and defaults playback to the latter.
+
+The optional Teams meeting notification watches only Windows audio-session
+activity and Teams' local microphone-use flag. It does not access Teams chat,
+participants, calendars, captions, or audio samples. A detected meeting opens a
+ready screen; capture still requires the user's explicit **Start capture**
+selection.
 
 The exact set depends on source selection and browser permission. Each Blob is
 stored under a source-specific IndexedDB key.

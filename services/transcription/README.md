@@ -78,7 +78,8 @@ The launcher:
 
 `desktop_app.py` is the packaged launcher. In addition to the loopback service,
 it provides a control panel, notification-area menu, Windows sign-in startup,
-safe discovery, and exact-origin automatic browser pairing.
+safe discovery, exact-origin automatic browser pairing, and opt-out local Teams
+meeting notifications that open the website's ready-to-record capture screen.
 
 Display the token without starting a second server:
 
