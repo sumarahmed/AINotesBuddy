@@ -6,7 +6,7 @@ the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
 The published version uses `Year.Month.MinorRelease`. The current release is
-`2026.08.5`; `package.json` represents it as `2026.8.5` for semantic-version
+`2026.08.6`; `package.json` represents it as `2026.8.6` for semantic-version
 compatibility.
 
 ## Browser settings
@@ -18,7 +18,7 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | Meeting audio | On | Capture default Windows output through a compatible companion; otherwise ask for a browser tab/window/screen audio source |
 | Browser live transcript draft | On | Use browser speech recognition for draft text and meeting-output timestamps for provisional **You**/**Guest** attribution when supported |
 | Automatically identify speakers | Off | Start the paired local job after saving a recording |
-| Create meeting brief | On | Build deduplicated highlights, explicit decisions, and assigned actions only from returned transcript sentences |
+| Create professional meeting analysis | On | After final speaker transcription, send the complete transcript to the configured analysis service and build a grounded summary, highlights, confirmed decisions, and structured actions |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
 | Transcription mode | From `src/runtime-config.js` | `hybrid`, `local`, or centrally managed `hosted` |
 | Companion URL | `http://127.0.0.1:8765` in local mode | Loopback-only local API |
@@ -41,13 +41,16 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
-| Product version | `2026.08.5` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
+| Product version | `2026.08.6` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
 | Latest companion version | `2026.08.3` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
 | Runtime transcription mode | `hybrid` | Public non-secret setting in `src/runtime-config.js` |
 | Local companion endpoint | `http://127.0.0.1:8765` | Fixed loopback discovery/API address |
 | Hosted fallback endpoint | Deployment URL | Used when the companion is unavailable |
+| Analysis model | `Qwen/Qwen3-4B-Instruct-2507` at a pinned revision | Hosted instruction model configured only in `services/transcription/modal_app.py`; never downloaded by the browser |
+| Analysis schema/prompt version | `1` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
+| Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |
 | Companion download URL | Versioned GitHub Release `.exe` asset | Direct public Windows installer download |
 | Storage keys | `notesbuddy-profile`, `notesbuddy-meetings`, `notesbuddy-settings`, `notesbuddy-audio` | Namespace isolation in `src/app.js` |
 | IndexedDB schema | Version 1, `recordings` store | Blob persistence in `openAudioDatabase()` |

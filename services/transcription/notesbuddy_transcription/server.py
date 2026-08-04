@@ -18,6 +18,7 @@ from typing import Annotated, Any, Callable, NoReturn
 from uuid import uuid4
 
 from fastapi import (
+    Body,
     Depends,
     FastAPI,
     File,
@@ -36,6 +37,10 @@ from .access import (
     AnonymousSessionStore,
     SessionAccessError,
     anonymise_client_key,
+)
+from .analysis import (
+    MeetingAnalysisUnavailable,
+    analyzer_from_environment,
 )
 from .engine import EngineCancelled, engine_from_environment
 from .pairing import BrowserPairingStore
@@ -267,6 +272,7 @@ async def _save_upload(
 def create_app(
     *,
     engine: object | None = None,
+    analyzer: object | None = None,
     pairing_token: str | None = None,
     allowed_origins: list[str] | None = None,
     authentication_mode: str | None = None,
@@ -275,6 +281,7 @@ def create_app(
     system_audio_capture: object | None = None,
 ) -> FastAPI:
     active_engine = engine or engine_from_environment()
+    active_analyzer = analyzer or analyzer_from_environment()
     access_mode = (
         authentication_mode
         or os.getenv("NOTESBUDDY_ACCESS_MODE", "local")
@@ -382,7 +389,7 @@ def create_app(
             if hosted
             else "NotesBuddy local transcription companion"
         ),
-        version="1.1.0",
+        version="1.2.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -464,6 +471,10 @@ def create_app(
             )
         ),
     )
+    maximum_analysis_characters = max(
+        10_000,
+        int(os.getenv("NOTESBUDDY_MAX_ANALYSIS_CHARACTERS", "180000")),
+    )
 
     def _raise_session_error(error: SessionAccessError) -> NoReturn:
         raise HTTPException(
@@ -479,6 +490,22 @@ def create_app(
             "ready": True,
             "source": "custom",
             "status": "custom engine configured",
+        }
+
+    def analysis_configuration() -> dict[str, object]:
+        if active_analyzer is None:
+            return {
+                "ready": False,
+                "model": None,
+                "status": "professional analysis is not configured",
+            }
+        status_provider = getattr(active_analyzer, "configuration_status", None)
+        if callable(status_provider):
+            return dict(status_provider())
+        return {
+            "ready": True,
+            "model": getattr(active_analyzer, "name", "configured analyzer"),
+            "status": "professional analysis configured",
         }
 
     def system_audio_configuration() -> dict[str, object]:
@@ -575,6 +602,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Route was not found.")
         response.headers["Cache-Control"] = "no-store"
         model_status = model_configuration()
+        analysis_status = analysis_configuration()
         system_audio_status = system_audio_configuration()
         return {
             "product": "NotesBuddy Desktop Companion",
@@ -590,6 +618,8 @@ def create_app(
             "modelsReady": bool(model_status.get("ready")),
             "modelSource": str(model_status.get("source") or "unknown"),
             "modelStatus": str(model_status.get("status") or "unknown"),
+            "analysisAvailable": bool(analysis_status.get("ready")),
+            "analysisModel": analysis_status.get("model"),
             "systemAudioCapture": bool(system_audio_status["available"]),
             "systemAudioBackend": system_audio_status["backend"],
             "storage": "temporary job files only",
@@ -624,6 +654,7 @@ def create_app(
     def health(response: Response) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
         model_status = model_configuration()
+        analysis_status = analysis_configuration()
         system_audio_status = system_audio_configuration()
         return {
             "status": "ok",
@@ -635,6 +666,8 @@ def create_app(
             "modelsReady": bool(model_status.get("ready")),
             "modelSource": str(model_status.get("source") or "unknown"),
             "modelStatus": str(model_status.get("status") or "unknown"),
+            "analysisAvailable": bool(analysis_status.get("ready")),
+            "analysisModel": analysis_status.get("model"),
             "systemAudioCapture": bool(system_audio_status["available"]),
             "systemAudioBackend": system_audio_status["backend"],
             "storage": "temporary job files only",
@@ -773,6 +806,61 @@ def create_app(
             "expiresAt": session.expires_at,
             "access": "anonymous",
         }
+
+    @app.post("/v1/analyses")
+    def create_meeting_analysis(
+        response: Response,
+        payload: Annotated[dict[str, Any], Body()],
+        owner_digest: str | None = Depends(require_access),
+    ) -> dict[str, Any]:
+        if active_analyzer is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Professional meeting analysis is not configured on this service.",
+            )
+        segments = payload.get("segments")
+        if not isinstance(segments, list) or not segments:
+            raise HTTPException(
+                status_code=400,
+                detail="A completed transcript is required for meeting analysis.",
+            )
+        transcript_characters = sum(
+            len(str(segment.get("text") or ""))
+            for segment in segments
+            if isinstance(segment, dict)
+        )
+        if transcript_characters > maximum_analysis_characters:
+            raise HTTPException(
+                status_code=413,
+                detail="The transcript exceeds the configured analysis limit.",
+            )
+
+        reservation_owned = False
+        if hosted:
+            assert sessions is not None
+            assert owner_digest is not None
+            try:
+                sessions.reserve_job(owner_digest)
+                reservation_owned = True
+            except SessionAccessError as error:
+                _raise_session_error(error)
+        try:
+            result = active_analyzer.analyze(
+                segments=segments,
+                meeting_title=payload.get("meetingTitle"),
+            )
+        except MeetingAnalysisUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except Exception as error:  # noqa: BLE001 - return a safe service error
+            raise HTTPException(
+                status_code=503,
+                detail="Professional meeting analysis failed. Try again shortly.",
+            ) from error
+        finally:
+            if reservation_owned and sessions is not None:
+                sessions.release_job(owner_digest)
+        response.headers["Cache-Control"] = "no-store"
+        return dict(result)
 
     @app.post("/v1/transcriptions")
     async def create_transcription(

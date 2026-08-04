@@ -341,9 +341,7 @@ test("preserves an explicitly unknown diarization assignment", () => {
   );
 });
 
-test("builds highlights, decisions, and actions only from transcript evidence", () => {
-  assert.equal(MeetingAudio.buildExtractiveBrief([]), null);
-
+test("normalises structured meeting analysis only when every item cites transcript evidence", () => {
   const transcript = [
     {
       id: "decision",
@@ -359,117 +357,114 @@ test("builds highlights, decisions, and actions only from transcript evidence", 
       startMs: 3000,
       text: "Jordan will send the final schedule by Friday.",
     },
-    {
-      id: "local-action",
-      speakerId: "local-user",
-      speaker: "You",
-      startMs: 5000,
-      text: "I need to confirm the email mapping tomorrow.",
-    },
-    {
-      id: "pending",
-      speakerId: "remote-2",
-      speaker: "Speaker 2",
-      startMs: 7000,
-      text: "We still need to decide which archive to use.",
-    },
-    {
-      id: "duplicate",
-      speakerId: "remote-1",
-      speaker: "Speaker 1",
-      startMs: 9000,
-      text: "Jordan will send the final schedule by Friday.",
-    },
   ];
-  const brief = MeetingAudio.buildExtractiveBrief(transcript, {
-    localOwnerName: "Alex Morgan",
-  });
-
-  assert.deepEqual(brief.decisions, [
-    "The customer approved the revised scope.",
-  ]);
-  assert.deepEqual(
-    brief.actions.map(({ text, owner, due }) => ({ text, owner, due })),
-    [
+  const analysis = MeetingAudio.normaliseMeetingAnalysis({
+    schemaVersion: 1,
+    promptVersion: 1,
+    model: "test-analyst",
+    shortSummary:
+      "The meeting confirmed the revised scope and assigned delivery of the final schedule.",
+    summarySourceSegmentIds: ["decision", "jordan-action"],
+    highlights: [
       {
-        text: "Jordan will send the final schedule by Friday.",
+        text: "The customer approved the revised scope.",
+        sourceSegmentIds: ["decision"],
+      },
+      {
+        text: "The customer approved the revised scope.",
+        sourceSegmentIds: ["decision"],
+      },
+      {
+        text: "This unsupported highlight must be removed.",
+        sourceSegmentIds: ["missing"],
+      },
+    ],
+    decisions: [
+      {
+        decision: "Use the revised scope.",
+        context: "The customer approved it.",
+        owner: "Not specified",
+        sourceSegmentIds: ["decision"],
+      },
+    ],
+    actionItems: [
+      {
+        task: "Send the final schedule.",
         owner: "Jordan",
-        due: "by Friday",
-      },
-      {
-        text: "I need to confirm the email mapping tomorrow.",
-        owner: "Alex Morgan",
-        due: "tomorrow",
-      },
-      {
-        text: "We still need to decide which archive to use.",
-        owner: "Team",
-        due: null,
+        dueDate: "Friday",
+        priority: "High",
+        notes: "Use the revised scope.",
+        sourceSegmentIds: ["jordan-action"],
       },
     ],
-  );
-  const transcriptText = transcript.map((segment) => segment.text).join(" ");
-  for (const text of [
-    ...brief.highlights,
-    ...brief.decisions,
-    ...brief.actions.map((action) => action.text),
-  ]) {
-    assert.ok(transcriptText.includes(text), `${text} must exist in transcript`);
-  }
-  assert.equal(new Set(brief.highlights).size, brief.highlights.length);
+  }, transcript);
+
+  assert.equal(analysis.model, "test-analyst");
+  assert.deepEqual(analysis.summarySourceSegmentIds, [
+    "decision",
+    "jordan-action",
+  ]);
+  assert.deepEqual(analysis.highlights, [
+    {
+      text: "The customer approved the revised scope.",
+      sourceSegmentIds: ["decision"],
+    },
+  ]);
+  assert.deepEqual(analysis.decisions[0], {
+    decision: "Use the revised scope.",
+    context: "The customer approved it.",
+    owner: "Not specified",
+    sourceSegmentIds: ["decision"],
+  });
+  assert.deepEqual(analysis.actionItems[0], {
+    task: "Send the final schedule.",
+    owner: "Jordan",
+    dueDate: "Friday",
+    priority: "High",
+    notes: "Use the revised scope.",
+    sourceSegmentIds: ["jordan-action"],
+  });
 });
 
-test("does not invent decisions or generic review actions", () => {
-  const brief = MeetingAudio.buildExtractiveBrief([
-    {
-      id: "status",
-      speakerId: "remote-1",
-      speaker: "Speaker 1",
-      text: "The ingestion flow currently processes email records.",
-    },
-  ]);
-
-  assert.deepEqual(brief.decisions, []);
-  assert.deepEqual(brief.actions, []);
-  assert.deepEqual(brief.highlights, [
-    "The ingestion flow currently processes email records.",
-  ]);
+test("rejects ungrounded or oversized summaries", () => {
+  const transcript = [{ id: "one", text: "A supported statement." }];
   assert.equal(
-    brief.highlights.includes("Review the recording and transcript"),
-    false,
-  );
-});
-
-test("deduplicates overlapping transcript text and extracts unassigned work", () => {
-  const brief = MeetingAudio.buildExtractiveBrief([
-    {
-      id: "first",
-      speakerId: "remote-1",
-      speaker: "Speaker 1",
-      text: "Job configuration is set up. We need someone to do the ingestion channel because we have not done emails yet.",
-    },
-    {
-      id: "overlap",
-      speakerId: "remote-1",
-      speaker: "Speaker 1",
-      text: "Job configuration is set up. We need someone to do the ingestion channel because we have not done emails yet.",
-    },
-  ]);
-
-  assert.equal(
-    brief.highlights.filter((text) => text === "Job configuration is set up.")
-      .length,
-    1,
-  );
-  assert.deepEqual(
-    brief.actions.map(({ text, owner }) => ({ text, owner })),
-    [
+    MeetingAudio.normaliseMeetingAnalysis(
       {
-        text: "We need someone to do the ingestion channel because we have not done emails yet.",
-        owner: "Unassigned",
+        shortSummary: "An unsupported summary.",
+        summarySourceSegmentIds: ["missing"],
       },
-    ],
+      transcript,
+    ),
+    null,
   );
+  assert.equal(
+    MeetingAudio.normaliseMeetingAnalysis(
+      {
+        shortSummary: Array.from({ length: 300 }, () => "word").join(" "),
+        summarySourceSegmentIds: ["one"],
+      },
+      transcript,
+    ),
+    null,
+  );
+});
+
+test("keeps explicit empty decision and action results without placeholders", () => {
+  const analysis = MeetingAudio.normaliseMeetingAnalysis(
+    {
+      shortSummary: "The meeting provided a status update.",
+      summarySourceSegmentIds: ["status"],
+      highlights: [],
+      decisions: [],
+      actionItems: [],
+    },
+    [{ id: "status", text: "The release remains on schedule." }],
+  );
+
+  assert.deepEqual(analysis.highlights, []);
+  assert.deepEqual(analysis.decisions, []);
+  assert.deepEqual(analysis.actionItems, []);
 });
 
 test("desktop connector discovers, pairs, and verifies the local service", async () => {
@@ -620,6 +615,49 @@ test("transcription client sends pairing token and all source assets", async () 
     Array.from(calls[0].options.body.keys()),
     ["microphone", "meeting", "mixed", "metadata"],
   );
+});
+
+test("analysis client sends transcript JSON without recording assets", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          schemaVersion: 1,
+          shortSummary: "The scope was confirmed.",
+          summarySourceSegmentIds: ["segment-one"],
+          highlights: [],
+          decisions: [],
+          actionItems: [],
+        };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    token: "pairing-secret",
+    fetchImpl,
+  });
+
+  const result = await client.analyzeTranscript({
+    meetingTitle: "Scope review",
+    segments: [{ id: "segment-one", text: "We confirmed the scope." }],
+  });
+
+  assert.equal(result.shortSummary, "The scope was confirmed.");
+  assert.equal(calls[0].url, "http://127.0.0.1:8765/v1/analyses");
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+  assert.equal(
+    calls[0].options.headers["X-NotesBuddy-Pairing-Token"],
+    "pairing-secret",
+  );
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    meetingTitle: "Scope review",
+    segments: [{ id: "segment-one", text: "We confirmed the scope." }],
+  });
 });
 
 test("local client controls Windows output capture and downloads WAV audio", async () => {

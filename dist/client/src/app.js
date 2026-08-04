@@ -1,8 +1,8 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.5");
-const SUMMARY_VERSION = 2;
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.6");
+const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
 const MEETING_ACTIVITY_HANGOVER_MS = 900;
@@ -129,54 +129,91 @@ function normaliseInsightText(value) {
     .trim();
 }
 
-function applyTranscriptBriefToMeeting(meeting, brief) {
-  if (!meeting || !brief) return false;
+function applyMeetingAnalysisToMeeting(meeting, rawAnalysis) {
+  if (!meeting || !rawAnalysis) return false;
+  const analysis = MeetingAudio.normaliseMeetingAnalysis(
+    rawAnalysis,
+    meeting.transcript,
+  );
+  if (!analysis) return false;
   const previousActions = new Map(
     (Array.isArray(meeting.actions) ? meeting.actions : []).map((action) => [
       normaliseInsightText(action.text),
       action,
     ]),
   );
-  meeting.overview = brief.overview;
-  meeting.highlights = [...brief.highlights];
-  meeting.decisions = [...brief.decisions];
-  meeting.actions = brief.actions.map((action, index) => {
-    const previous = previousActions.get(normaliseInsightText(action.text));
+  const transcriptById = new Map(
+    (meeting.transcript || []).map((segment) => [segment.id, segment]),
+  );
+  const sourceSpeakerId = (sourceSegmentIds) => {
+    const speakerIds = new Set(
+      sourceSegmentIds
+        .map((segmentId) => transcriptById.get(segmentId)?.speakerId)
+        .filter(Boolean),
+    );
+    return speakerIds.size === 1 ? [...speakerIds][0] : null;
+  };
+  meeting.overview = analysis.shortSummary;
+  meeting.highlights = analysis.highlights;
+  meeting.decisions = analysis.decisions.map((decision) => ({
+    ...decision,
+    sourceSpeakerId: sourceSpeakerId(decision.sourceSegmentIds),
+  }));
+  meeting.actions = analysis.actionItems.map((action, index) => {
+    const previous = previousActions.get(normaliseInsightText(action.task));
     const stableKey = String(
-      action.groundingKey || `${action.sourceSegmentId || "segment"}-${index}`,
+      `${action.sourceSegmentIds.join("-") || "segment"}-${index}`,
     ).replace(/[^a-z0-9_-]+/gi, "-");
     return {
-      id: `${meeting.id}-transcript-action-${stableKey}`,
-      text: action.text,
+      id: `${meeting.id}-analysis-action-${stableKey}`,
+      text: action.task,
       owner: action.owner,
-      due: action.due || null,
+      dueDate: action.dueDate,
+      priority: action.priority,
+      notes: action.notes,
       done: Boolean(previous?.done),
       grounded: true,
-      sourceSegmentId: action.sourceSegmentId || null,
-      sourceStartMs: Number(action.sourceStartMs) || 0,
-      sourceSpeakerId: action.sourceSpeakerId || null,
+      sourceSegmentIds: action.sourceSegmentIds,
+      sourceSpeakerId: sourceSpeakerId(action.sourceSegmentIds),
     };
   });
   meeting.summaryVersion = SUMMARY_VERSION;
   meeting.summaryGeneratedAt = new Date().toISOString();
+  meeting.analysis = {
+    status: "completed",
+    schemaVersion: analysis.schemaVersion,
+    promptVersion: analysis.promptVersion,
+    model: analysis.model,
+    generatedAt: meeting.summaryGeneratedAt,
+    error: null,
+  };
+  return true;
+}
+
+function resetMeetingAnalysis(meeting, status = "not-requested", error = null) {
+  if (!meeting) return false;
+  meeting.overview = meeting.transcript?.length
+    ? "Professional analysis has not been generated for this transcript yet."
+    : "A completed transcript is required before NotesBuddy can create a professional meeting analysis.";
+  meeting.highlights = [];
+  meeting.decisions = [];
+  meeting.actions = [];
+  meeting.summaryVersion = SUMMARY_VERSION;
+  meeting.analysis = {
+    status,
+    error,
+    generatedAt: null,
+  };
   return true;
 }
 
 function migrateMeetingInsights(meeting, profile, { enabled = true } = {}) {
+  void profile;
   if (!meeting || meeting.summaryVersion === SUMMARY_VERSION) return false;
-  const brief = enabled
-    ? MeetingAudio.buildExtractiveBrief(meeting.transcript, {
-        localOwnerName: profile?.name || "You",
-      })
-    : null;
-  if (brief) {
-    applyTranscriptBriefToMeeting(meeting, brief);
-  } else {
-    meeting.highlights = [];
-    meeting.decisions = [];
-    meeting.actions = [];
-    meeting.summaryVersion = SUMMARY_VERSION;
-  }
+  resetMeetingAnalysis(
+    meeting,
+    enabled && meeting.transcript?.length ? "outdated" : "not-requested",
+  );
   return true;
 }
 
@@ -928,29 +965,52 @@ function summaryView(meeting) {
     : [];
   const decisions = Array.isArray(meeting.decisions) ? meeting.decisions : [];
   const actions = Array.isArray(meeting.actions) ? meeting.actions : [];
+  const analysisStatus = meeting.analysis?.status || "not-requested";
+  const analysisRunning = analysisStatus === "processing";
+  const analysisUsedOnlineService =
+    analysisStatus === "completed" && Boolean(runtimeHostedTranscriptionEndpoint);
+  const canAnalyze =
+    meeting.transcription?.status === "completed" &&
+    Boolean(meeting.transcript?.length);
+  const summaryParagraphs = MeetingAudio.cleanTranscriptText(meeting.overview)
+    .split(/\n{2,}/)
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
+    .join("");
+  const analysisNotice = analysisRunning
+    ? `<div class="analysis-notice analysis-notice--working">${icon("refresh", 15)}<span><strong>Analyzing the complete transcript</strong><small>Building evidence-grounded summary, decisions, and actions…</small></span></div>`
+    : analysisStatus === "failed"
+      ? `<div class="analysis-notice analysis-notice--error">${icon("x", 15)}<span><strong>Professional analysis could not be completed</strong><small>${escapeHtml(meeting.analysis?.error || "Try refreshing from the transcript again.")}</small></span></div>`
+      : analysisStatus === "outdated"
+        ? `<div class="analysis-notice">${icon("refresh", 15)}<span><strong>This meeting uses the previous summary format</strong><small>Refresh it to create the new evidence-grounded analysis.</small></span></div>`
+        : "";
   return `<div class="summary-layout">
     <div class="summary-main">
       <section class="summary-lead">
-        <div class="summary-lead__heading"><div><span class="eyebrow">Meeting brief</span><h2>The short version</h2></div><button type="button" class="text-button" data-action="regenerate">${icon("refresh", 14)}Refresh from transcript</button></div>
-        <p>${escapeHtml(meeting.overview)}</p>
+        <div class="summary-lead__heading"><div><span class="eyebrow">1 · Meeting brief</span><h2>Short summary</h2></div><button type="button" class="text-button" data-action="regenerate" ${canAnalyze && !analysisRunning ? "" : "disabled"}>${icon("refresh", 14)}${analysisRunning ? "Analyzing…" : "Refresh from transcript"}</button></div>
+        ${analysisNotice}
+        <div class="summary-lead__body">${summaryParagraphs}</div>
       </section>
       <section class="summary-section">
-        <div class="summary-section__heading"><span class="section-icon section-icon--teal">${icon("sparkles", 17)}</span><div><span class="eyebrow">What mattered</span><h2>Key highlights</h2></div></div>
-        <div class="highlight-grid">${highlights.length ? highlights.map((item, index) => `<article><span>${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(item)}</p></article>`).join("") : `<div class="insight-empty">No transcript-grounded highlights are available yet.</div>`}</div>
+        <div class="summary-section__heading"><span class="section-icon section-icon--teal">${icon("sparkles", 17)}</span><div><span class="eyebrow">2 · What mattered</span><h2>Key highlights</h2></div></div>
+        <div class="highlight-grid">${highlights.length ? highlights.map((item, index) => `<article><span>${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(typeof item === "string" ? item : item.text)}</p></article>`).join("") : `<div class="insight-empty">No key highlights were identified from the transcript.</div>`}</div>
       </section>
       <section class="summary-section">
-        <div class="summary-section__heading"><span class="section-icon section-icon--violet">${icon("clipboard", 17)}</span><div><span class="eyebrow">Locked in</span><h2>Decisions</h2></div></div>
-        <div class="decision-list">${decisions.length ? decisions.map((item) => `<div>${icon("check", 15)}<span>${escapeHtml(item)}</span></div>`).join("") : `<div>${icon("check", 15)}<span>No transcript sentence explicitly stated a decision.</span></div>`}</div>
+        <div class="summary-section__heading"><span class="section-icon section-icon--violet">${icon("clipboard", 17)}</span><div><span class="eyebrow">3 · Locked in</span><h2>Decisions</h2></div></div>
+        <div class="decision-list">${decisions.length ? decisions.map((item) => {
+          const decision = typeof item === "string" ? { decision: item, context: "Not specified", owner: "Not specified" } : item;
+          return `<div>${icon("check", 15)}<span><strong>${escapeHtml(decision.decision)}</strong>${decision.context && decision.context !== "Not specified" ? `<small>${escapeHtml(decision.context)}</small>` : ""}<em>Responsible: ${escapeHtml(decision.owner || "Not specified")}</em></span></div>`;
+        }).join("") : `<div>${icon("check", 15)}<span><strong>No confirmed decisions were recorded.</strong></span></div>`}</div>
       </section>
       <section class="summary-section">
-        <div class="summary-section__heading action-heading"><span class="section-icon section-icon--coral">${icon("checkCircle", 17)}</span><div><span class="eyebrow">Keep moving</span><h2>Action items</h2></div><span class="item-count">${actions.filter((action) => !action.done).length} open</span></div>
-        <div class="action-list">${actions.length ? actions.map((action) => `<button type="button" data-action="toggle-action" data-id="${action.id}" class="${action.done ? "action-item--done" : ""}"><span class="action-check">${action.done ? icon("check", 13) : ""}</span><span class="action-text">${escapeHtml(action.text)}</span><span class="action-owner">${escapeHtml(action.owner)}</span>${action.due ? `<span class="action-due">${escapeHtml(action.due)}</span>` : ""}</button>`).join("") : `<div class="insight-empty">No transcript-grounded action items were identified.</div>`}</div>
+        <div class="summary-section__heading action-heading"><span class="section-icon section-icon--coral">${icon("checkCircle", 17)}</span><div><span class="eyebrow">4 · Keep moving</span><h2>Action items</h2></div><span class="item-count">${actions.filter((action) => !action.done).length} open</span></div>
+        <div class="action-list">${actions.length ? `<div class="action-list__header"><span></span><span>Task</span><span>Owner</span><span>Due date</span><span>Priority</span><span>Notes</span></div>${actions.map((action) => `<button type="button" data-action="toggle-action" data-id="${action.id}" class="${action.done ? "action-item--done" : ""}"><span class="action-check">${action.done ? icon("check", 13) : ""}</span><span class="action-text">${escapeHtml(action.text)}</span><span class="action-owner">${escapeHtml(action.owner || "Not specified")}</span><span class="action-due">${escapeHtml(action.dueDate || action.due || "Not specified")}</span><span class="action-priority action-priority--${escapeHtml((action.priority || "Medium").toLowerCase())}">${escapeHtml(action.priority || "Medium")}</span><span class="action-notes">${escapeHtml(action.notes || "Not specified")}</span></button>`).join("")}` : `<div class="insight-empty">No action items were recorded.</div>`}</div>
       </section>
     </div>
     <aside class="meeting-context">
       <section><span class="eyebrow">People</span><h3>In this conversation</h3><div class="people-list">${meeting.participants.map((person) => `<div>${avatar(person.initials, person.color, true)}<span>${escapeHtml(person.name)}</span></div>`).join("")}</div></section>
       <section><span class="eyebrow">Topics</span><div class="context-tags">${meeting.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div></section>
-      <section class="privacy-context"><div>${icon("lock", 15)}<strong>Stored locally</strong></div><p>The recording and meeting record are stored on this device.</p></section>
+      <section class="privacy-context"><div>${icon("lock", 15)}<strong>${analysisUsedOnlineService ? "Local record · online analysis" : "Stored locally"}</strong></div><p>${analysisUsedOnlineService ? "The recording and meeting remain in this browser. The completed transcript was sent to the configured online service to produce this analysis." : "The recording and meeting record are stored on this device."}</p></section>
     </aside>
   </div>`;
 }
@@ -1166,9 +1226,11 @@ function settingsPanel() {
       }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus);
   const privacyMessage = hosted
     ? hybrid
-      ? "Recordings stay in this browser. While the desktop companion is unavailable, requested transcription uses the temporary online service."
-      : "Recordings stay in this browser until transcription is requested. Selected audio is then sent securely to the public service and removed from its temporary storage after processing."
-    : "Audio and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.";
+      ? "Recordings stay in this browser. While the desktop companion is unavailable, requested transcription uses the temporary online service. Professional analysis sends only the completed transcript to the configured online service."
+      : "Recordings stay in this browser until transcription is requested. Selected audio is sent to the public service and removed from its temporary storage after processing; professional analysis sends the completed transcript."
+    : runtimeHostedTranscriptionEndpoint
+      ? "Audio transcription stays on this device. Professional analysis sends only the completed transcript to the configured online service. Browser speech recognition may use your browser provider’s service."
+      : "Audio, transcripts, and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.";
   const transcriptionSettings = hybrid
     ? `<section class="settings-section">
         <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
@@ -1202,7 +1264,7 @@ function settingsPanel() {
         <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
       </section>
       ${transcriptionSettings}
-      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create meeting brief", "Build an honest brief from available transcript text.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
+      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After speaker transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
   </div>`;
@@ -2593,11 +2655,6 @@ async function finishCapture() {
         },
       ]
     : [];
-  const draftBrief = state.settings.autoSummarize
-    ? MeetingAudio.buildExtractiveBrief(segments, {
-        localOwnerName: currentUserName(),
-      })
-    : null;
   const meeting = {
     id,
     audioId: primaryAsset?.id || null,
@@ -2628,15 +2685,18 @@ async function finishCapture() {
       "Local audio",
       ...(recordingAssets.meeting ? ["Meeting audio"] : []),
     ],
-    overview: draftBrief
-      ? draftBrief.overview
-      : transcriptText
-        ? `This meeting contains synchronized local audio and ${segments.length} draft browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Run speaker transcription to create the authoritative diarized transcript.`
+    overview: transcriptText
+      ? `This meeting contains synchronized local audio and ${segments.length} draft browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Run speaker transcription before generating the professional analysis.`
       : "This meeting contains locally stored audio. Speaker transcription has not run, and NotesBuddy did not generate sample transcript text.",
     highlights: [],
     decisions: [],
     actions: [],
     summaryVersion: SUMMARY_VERSION,
+    analysis: {
+      status: "not-requested",
+      error: null,
+      generatedAt: null,
+    },
     transcript: segments,
     transcription: {
       status: segments.length ? "draft" : "not-requested",
@@ -2647,7 +2707,6 @@ async function finishCapture() {
     notes: "",
   };
   MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
-  if (draftBrief) applyTranscriptBriefToMeeting(meeting, draftBrief);
   state.meetings.unshift(meeting);
   state.selectedMeetingId = id;
   state.view = "meeting";
@@ -2669,8 +2728,17 @@ function meetingMarkdown(meeting) {
   const actionItems = meeting.actions
     .map(
       (action) =>
-        `- [${action.done ? "x" : " "}] ${action.text} — ${action.owner}${action.due ? ` · ${action.due}` : ""}`,
+        `- [${action.done ? "x" : " "}] **${action.text}**\n  - Owner: ${action.owner || "Not specified"}\n  - Due date: ${action.dueDate || action.due || "Not specified"}\n  - Priority: ${action.priority || "Medium"}\n  - Notes: ${action.notes || "Not specified"}`,
     )
+    .join("\n");
+  const highlights = meeting.highlights
+    .map((item) => `- ${typeof item === "string" ? item : item.text}`)
+    .join("\n");
+  const decisions = meeting.decisions
+    .map((item) => {
+      if (typeof item === "string") return `- ${item}`;
+      return `- **${item.decision}**\n  - Context: ${item.context || "Not specified"}\n  - Responsible: ${item.owner || "Not specified"}`;
+    })
     .join("\n");
   const transcript = meeting.transcript
     .map(
@@ -2684,7 +2752,7 @@ function meetingMarkdown(meeting) {
         `- ${speaker.id === "local-user" ? `You (${currentUserName()})` : speaker.displayName}`,
     )
     .join("\n");
-  return `# ${meeting.title}\n\n${longDate(meeting.dateISO)} · ${meeting.duration}\n\n## Overview\n\n${meeting.overview}\n\n## Speakers\n\n${speakers || "No speakers identified."}\n\n## Highlights\n\n${meeting.highlights.map((item) => `- ${item}`).join("\n")}\n\n## Decisions\n\n${meeting.decisions.map((item) => `- ${item}`).join("\n")}\n\n## Action items\n\n${actionItems}\n\n## Transcript\n\n${transcript || "No transcript available."}\n\n## My notes\n\n${meeting.notes || "No personal notes."}\n`;
+  return `# ${meeting.title}\n\n${longDate(meeting.dateISO)} · ${meeting.duration}\n\n## 1. Short Summary\n\n${meeting.overview}\n\n## 2. Key Highlights\n\n${highlights || "No key highlights were identified."}\n\n## 3. Decisions\n\n${decisions || "No confirmed decisions were recorded."}\n\n## 4. Action Items\n\n${actionItems || "No action items were recorded."}\n\n## Speakers\n\n${speakers || "No speakers identified."}\n\n## Transcript\n\n${transcript || "No transcript available."}\n\n## My notes\n\n${meeting.notes || "No personal notes."}\n`;
 }
 
 function selectedMeeting() {
@@ -2801,6 +2869,88 @@ function createTranscriptionClient() {
         ? state.companion.pairingToken
         : state.settings.transcriptionToken,
   });
+}
+
+function createMeetingAnalysisClient() {
+  if (runtimeHostedTranscriptionEndpoint) {
+    return new MeetingAudio.TranscriptionClient({
+      endpoint: runtimeHostedTranscriptionEndpoint,
+      mode: "hosted",
+      token: "",
+    });
+  }
+  return createTranscriptionClient();
+}
+
+async function analyzeMeeting(meeting = selectedMeeting()) {
+  if (!meeting?.transcript?.length) {
+    showToast(
+      "No completed transcript",
+      "Run speaker transcription before generating the meeting analysis.",
+    );
+    return false;
+  }
+  if (meeting.transcription?.status !== "completed") {
+    showToast(
+      "Speaker transcription required",
+      "The professional analysis uses the complete processed transcript, not the live browser draft.",
+    );
+    return false;
+  }
+  if (meeting.analysis?.status === "processing") return false;
+
+  meeting.analysis = {
+    ...(meeting.analysis || {}),
+    status: "processing",
+    error: null,
+    requestedAt: new Date().toISOString(),
+  };
+  save();
+  render();
+  try {
+    const result = await createMeetingAnalysisClient().analyzeTranscript({
+      meetingTitle: meeting.title,
+      segments: meeting.transcript.map((segment) => ({
+        id: segment.id,
+        speaker: MeetingAudio.speakerLabel(
+          meeting,
+          segment.speakerId,
+          segment.speaker,
+        ),
+        timestamp: segment.timestamp,
+        startMs: segment.startMs,
+        endMs: segment.endMs,
+        text: segment.text,
+      })),
+    });
+    if (!applyMeetingAnalysisToMeeting(meeting, result)) {
+      throw new Error(
+        "The service returned analysis that was not grounded in this transcript.",
+      );
+    }
+    save();
+    render();
+    showToast(
+      "Professional analysis ready",
+      "Summary, highlights, decisions, and action items were rebuilt from the complete transcript.",
+    );
+    return true;
+  } catch (error) {
+    meeting.analysis = {
+      ...(meeting.analysis || {}),
+      status: "failed",
+      error:
+        error?.message ||
+        "Professional meeting analysis is temporarily unavailable.",
+    };
+    save();
+    render();
+    showToast(
+      "Meeting analysis failed",
+      meeting.analysis.error,
+    );
+    return false;
+  }
 }
 
 async function loadMeetingRecordingBlobs(meeting) {
@@ -2956,21 +3106,12 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
       },
     });
     MeetingAudio.applyTranscriptionResult(meeting, completed, state.profile);
-    const brief = state.settings.autoSummarize
-      ? MeetingAudio.buildExtractiveBrief(meeting.transcript, {
-          localOwnerName: currentUserName(),
-        })
-      : null;
-    if (brief) {
-      applyTranscriptBriefToMeeting(meeting, brief);
-    } else {
-      meeting.overview = meeting.transcript.length
-        ? `Speaker transcription identified ${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} across ${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"}.`
-        : `The ${usesHostedTranscription() ? "public transcription service" : "local transcription companion"} did not return speech text, so NotesBuddy did not generate a transcript.`;
-      meeting.highlights = [];
-      meeting.decisions = [];
-      meeting.actions = [];
-      meeting.summaryVersion = SUMMARY_VERSION;
+    resetMeetingAnalysis(
+      meeting,
+      meeting.transcript.length ? "not-requested" : "unavailable",
+    );
+    if (!meeting.transcript.length) {
+      meeting.overview = `The ${usesHostedTranscription() ? "public transcription service" : "local transcription companion"} did not return speech text, so NotesBuddy did not generate an analysis.`;
     }
     save();
     render();
@@ -2978,6 +3119,9 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
       "Speaker transcript ready",
       `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified ${usesHostedTranscription() ? "by the public service" : "locally"}.`,
     );
+    if (state.settings.autoSummarize && meeting.transcript.length) {
+      await analyzeMeeting(meeting);
+    }
   } catch (error) {
     const cancelled =
       error?.name === "AbortError" || controller.signal.aborted;
@@ -3090,6 +3234,11 @@ async function importAudio(file) {
     decisions: [],
     actions: [],
     summaryVersion: SUMMARY_VERSION,
+    analysis: {
+      status: "not-requested",
+      error: null,
+      generatedAt: null,
+    },
     transcript: [],
     transcription: {
       status: "not-requested",
@@ -3338,23 +3487,7 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "regenerate") {
     const meeting = selectedMeeting();
-    const brief = MeetingAudio.buildExtractiveBrief(meeting?.transcript, {
-      localOwnerName: currentUserName(),
-    });
-    if (meeting && brief) {
-      applyTranscriptBriefToMeeting(meeting, brief);
-      save();
-      render();
-      showToast(
-        "Insights refreshed",
-        "Highlights, decisions, and actions were rebuilt only from this meeting's transcript.",
-      );
-    } else {
-      showToast(
-        "No transcript to summarize",
-        "Run speaker transcription first; NotesBuddy will not invent a brief.",
-      );
-    }
+    await analyzeMeeting(meeting);
     return;
   } else if (action === "setting-toggle") {
     state.settings[button.dataset.id] = !state.settings[button.dataset.id];

@@ -25,6 +25,12 @@ When transcription is requested:
 5. source files are removed after success, failure, or cancellation;
 6. the returned transcript is saved in the originating browser.
 
+When professional analysis is requested, the browser sends the completed
+speaker transcript—not recording audio—to `POST /v1/analyses` under the same
+anonymous session. The service uses the full transcript to produce a short
+summary, consolidated highlights, confirmed decisions, and structured action
+items. Every result cites supporting transcript segment IDs.
+
 The hosted service does not automatically know a person's real name. It returns
 **You**, **Speaker 1**, **Speaker 2**, and **Unknown speaker** labels that can be
 renamed in the browser.
@@ -40,6 +46,9 @@ renamed in the browser.
 - one serverless GPU container, which bounds concurrent model spend;
 - temporary job directories removed in a `finally` block;
 - model credentials held only in the host's secret manager.
+- analysis requests limited to 180,000 transcript characters;
+- server-side evidence, decision, action, owner, due-date, priority, context,
+  and notes validation before a result reaches the browser.
 
 These controls reduce accidental and basic automated abuse. They are not a
 substitute for accounts, CAPTCHA/attestation, a durable rate-limit store,
@@ -89,12 +98,20 @@ The response must include:
 {
   "status": "ok",
   "access": "anonymous-session",
+  "analysisAvailable": true,
+  "analysisModel": "Qwen/Qwen3-4B-Instruct-2507",
   "storage": "temporary job files only"
 }
 ```
 
-The first real job downloads and loads the Whisper and pyannote models into the
-`notesbuddy-model-cache` volume. It will take longer than later jobs.
+The first real transcription or analysis request downloads and loads the
+required Whisper, pyannote, or pinned Qwen instruction model into the
+`notesbuddy-model-cache` volume. It will take longer than later requests.
+
+The [Qwen3-4B-Instruct-2507 model](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)
+revision is pinned in `services/transcription/modal_app.py`.
+Model weights are cached in the host volume; meeting audio and transcript
+content are not intentionally written there.
 
 ## Connect the static client
 
@@ -121,7 +138,8 @@ The endpoint is public configuration. The Hugging Face token is not.
 
 - Keep `max_containers=1` during anonymous testing.
 - Configure a Modal spending limit/alert before sharing the link widely.
-- Monitor 429, 413, 5xx, queue depth, cold-start time, and transcription time.
+- Monitor 429, 413, 5xx, queue depth, cold-start time, transcription time, and
+  analysis latency/failure rate.
 - Use a short non-confidential test recording before real meetings.
 - Rotate the Hugging Face token if it is ever exposed.
 - Stop or delete the Modal deployment to stop public processing.

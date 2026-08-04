@@ -989,6 +989,7 @@ async function runMainWorkflow(browser, baseUrl) {
   });
 
   let multipartBody = "";
+  let analysisBody = null;
   let healthRouteCalls = 0;
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
@@ -1007,6 +1008,57 @@ async function runMainWorkflow(browser, baseUrl) {
       return;
     }
     if (request.method() === "POST") {
+      if (pathname === "/v1/analyses") {
+        analysisBody = JSON.parse(request.postData() || "{}");
+        await route.fulfill({
+          status: 200,
+          headers,
+          body: JSON.stringify({
+            schemaVersion: 1,
+            promptVersion: 1,
+            model: "synthetic-professional-analyst",
+            shortSummary:
+              "The meeting confirmed the revised scope and assigned follow-up on the proposal.\n\nThe team will send and review the revised proposal.",
+            summarySourceSegmentIds: [
+              "local-segment",
+              "remote-one",
+            ],
+            highlights: [
+              {
+                text: "The revised scope was confirmed.",
+                sourceSegmentIds: ["local-segment"],
+              },
+            ],
+            decisions: [
+              {
+                decision: "Use the revised scope.",
+                context: "The participants confirmed their agreement.",
+                owner: "Browser Tester",
+                sourceSegmentIds: ["local-segment"],
+              },
+            ],
+            actionItems: [
+              {
+                task: "Send the revised proposal.",
+                owner: "Browser Tester",
+                dueDate: "Not specified",
+                priority: "Medium",
+                notes: "Use the confirmed scope.",
+                sourceSegmentIds: ["local-segment"],
+              },
+              {
+                task: "Review the revised proposal.",
+                owner: "Speaker 1",
+                dueDate: "tomorrow",
+                priority: "Medium",
+                notes: "Not specified",
+                sourceSegmentIds: ["remote-one"],
+              },
+            ],
+          }),
+        });
+        return;
+      }
       multipartBody = request.postData() || "";
       await route.fulfill({
         status: 200,
@@ -1199,6 +1251,19 @@ async function runMainWorkflow(browser, baseUrl) {
   assert.match(multipartBody, /name="microphone"/);
   assert.match(multipartBody, /name="meeting"/);
   assert.match(multipartBody, /name="mixed"/);
+  await page
+    .getByText("Professional analysis ready", { exact: true })
+    .waitFor({ timeout: 10000 });
+  assert.equal(analysisBody.meetingTitle, "Untitled meeting");
+  assert.deepEqual(
+    analysisBody.segments.map(({ id, speaker }) => ({ id, speaker })),
+    [
+      { id: "local-segment", speaker: "You" },
+      { id: "remote-one", speaker: "Speaker 1" },
+      { id: "remote-two", speaker: "Speaker 2" },
+    ],
+    "analysis must receive the complete timestamped speaker transcript",
+  );
   await page.getByText("You", { exact: true }).first().waitFor();
   await page.getByText("Speaker 1", { exact: true }).first().waitFor();
   await page.getByText("Speaker 2", { exact: true }).first().waitFor();
@@ -1236,7 +1301,7 @@ async function runMainWorkflow(browser, baseUrl) {
   await page.locator("[data-action='tab'][data-id='summary']").click();
   await page
     .locator(".decision-list")
-    .getByText("We agreed to use the revised scope.", { exact: true })
+    .getByText("Use the revised scope.", { exact: true })
     .waitFor();
   assert.equal(
     await page.locator(".action-list button").count(),
@@ -1253,12 +1318,12 @@ async function runMainWorkflow(browser, baseUrl) {
   );
   assert.deepEqual(actionItems, [
     {
-      text: "I will send the revised proposal.",
+      text: "Send the revised proposal.",
       owner: "Browser Tester",
-      due: null,
+      due: "Not specified",
     },
     {
-      text: "I will review it tomorrow.",
+      text: "Review the revised proposal.",
       owner: "Jordan Lee",
       due: "tomorrow",
     },
@@ -1267,6 +1332,30 @@ async function runMainWorkflow(browser, baseUrl) {
     await page.getByText("Review the recording and transcript", { exact: true }).count(),
     0,
   );
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 320, height: 720 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const summaryLayout = await page.evaluate(() => {
+      const action = document.querySelector(".action-list button");
+      return {
+        viewportWidth: innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        actionRight: Math.ceil(action?.getBoundingClientRect().right || 0),
+      };
+    });
+    assert.ok(
+      summaryLayout.documentWidth <= summaryLayout.viewportWidth,
+      `structured summary must not overflow at ${viewport.width}px`,
+    );
+    assert.ok(
+      summaryLayout.actionRight <= summaryLayout.viewportWidth,
+      `structured actions must remain reachable at ${viewport.width}px`,
+    );
+  }
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.locator("[data-action='tab'][data-id='transcript']").click();
 
@@ -1497,7 +1586,7 @@ async function runLiveGuestAttribution(browser, baseUrl) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript; charset=utf-8",
-      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.5", transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
+      body: `globalThis.NotesBuddyRuntime = Object.freeze({ appVersion: "2026.08.6", transcriptionMode: "local", transcriptionEndpoint: "http://127.0.0.1:8765" });`,
     });
   });
 
@@ -1649,27 +1738,29 @@ async function runLegacyInsightMigration(browser, baseUrl) {
   await completeOnboarding(page, "Migration Tester");
   await page.locator("[data-action='meeting']").first().click();
   await page
-    .locator(".decision-list")
-    .getByText("We agreed to keep the ingestion flow.", { exact: true })
+    .getByText("This meeting uses the previous summary format", {
+      exact: true,
+    })
     .waitFor();
   await page
-    .locator(".action-list")
-    .getByText("I will send the configuration tomorrow.", { exact: true })
+    .getByText("No confirmed decisions were recorded.", { exact: true })
+    .waitFor();
+  await page
+    .getByText("No action items were recorded.", { exact: true })
     .waitFor();
   assert.equal(
     await page.getByText("Review the recording and transcript", { exact: true }).count(),
     0,
-    "legacy placeholder actions must be replaced from stored transcript evidence",
+    "legacy placeholder actions must be removed instead of regenerated by keywords",
   );
   const migrated = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("notesbuddy-meetings") || "[]")[0],
   );
-  assert.equal(migrated.summaryVersion, 2);
-  assert.deepEqual(
-    migrated.actions.map((action) => action.text),
-    ["I will send the configuration tomorrow."],
-  );
-  assert.equal(migrated.actions[0].done, true);
+  assert.equal(migrated.summaryVersion, 3);
+  assert.equal(migrated.analysis.status, "outdated");
+  assert.deepEqual(migrated.highlights, []);
+  assert.deepEqual(migrated.decisions, []);
+  assert.deepEqual(migrated.actions, []);
   await context.close();
 }
 
@@ -1719,7 +1810,7 @@ async function runDirectFileLoad(browser) {
     await runExistingUserUpdateNotification(browser, baseUrl);
     await runHybridFallbackWorkflow(browser, baseUrl);
     console.log(
-      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, live You/Guest draft attribution, signal detection, pause/resume, stable controls, source persistence/default playback, transcript-grounded insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
+      "Browser smoke passed: direct-file load, version display, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, live You/Guest draft attribution, signal detection, pause/resume, stable controls, source persistence/default playback, structured meeting analysis, obsolete-insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
   } finally {
     await browser?.close();

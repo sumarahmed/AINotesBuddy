@@ -8,6 +8,29 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.6 - 2026-08-04
+
+### Added
+
+- Professional whole-transcript analysis using a centrally managed instruction
+  model and a strict structured JSON contract
+- Evidence citations for the summary, highlights, decisions, and action items
+- Structured action fields for owner, due date, priority, and notes
+- Server-side grounding checks that reject unsupported content and normalize
+  invented owners, dates, urgency, context, and notes
+
+### Changed
+
+- **Refresh from transcript** now requests a new professional analysis from the
+  complete processed speaker transcript
+- Existing keyword-generated insights are marked outdated and cleared so they
+  can never be presented as current analysis
+
+### Removed
+
+- Browser keyword scoring and sentence-picking for summaries, highlights,
+  decisions, and action items
+
 ## 2026.08.4 - 2026-08-04
 
 ### Added

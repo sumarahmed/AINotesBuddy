@@ -50,6 +50,9 @@ flowchart LR
     Whisper --> Alignment["Timestamp alignment + echo de-duplication"]
     Pyannote --> Alignment
     Alignment --> Client
+    Client -->|"completed transcript only"| Analyzer["Hosted meeting analyst"]
+    Analyzer --> Grounding["Evidence and field validation"]
+    Grounding --> Client
     Client --> LocalStorage
 ```
 
@@ -76,7 +79,7 @@ Framework-independent browser module containing:
 - transcript result normalization;
 - cross-source echo de-duplication;
 - speaker rename propagation;
-- extractive brief generation;
+- structured analysis-response validation;
 - companion discovery, automatic pairing, and health verification;
 - local-pairing and hosted anonymous-session API client.
 
@@ -97,6 +100,7 @@ Owns:
 - IndexedDB storage and `localStorage` metadata;
 - audio hydration, playback, seeking, source download;
 - transcription job lifecycle and cancellation;
+- professional-analysis lifecycle, migration, rendering, and refresh;
 - speaker roster, rename UI, search, copy, export, notes, and actions.
 
 Timer, live transcript, source-status, and interrupted-share warning updates
@@ -273,23 +277,28 @@ The special `local-user` display label is always **You**. Its descriptive name
 and initials come from the local profile. Changing the profile synchronizes
 existing local speaker metadata and locally owned follow-ups.
 
-## Transcript and brief integrity
+## Transcript and analysis integrity
 
 - Browser recognition is marked as a draft.
 - A completed companion result replaces the draft authoritatively.
 - Empty model results produce an empty transcript.
 - Unknown assignments remain **Unknown speaker**.
-- Highlights contain only transcript sentences, ranked for explicit decisions,
-  commitments, deadlines, risks, and substantive meeting content.
-- Decisions require explicit transcript wording such as agreed, approved, or
-  decided; pending decisions are not presented as completed decisions.
-- Action items require an explicit commitment, assignment, request, or next
-  step. Their text, owner, and due phrase remain grounded in the supporting
-  transcript sentence.
-- Overlapping or repeated transcript sentences are collapsed before insight
-  extraction.
+- The browser does not generate insights from keywords or placeholder text.
+- Professional analysis receives the complete finalized speaker transcript,
+  not the provisional live browser draft and not recording audio.
+- The model must return structured JSON and cite real transcript segment IDs
+  for the summary and every highlight, decision, and action item.
+- Server validation requires lexical support in cited evidence, explicit
+  decision/commitment language, and real evidence for owners and due dates.
+- Unsupported decision context and action notes become **Not specified**;
+  unsupported High/Low priority becomes **Medium**.
+- Suggestions and unresolved questions are never accepted as confirmed
+  decisions. Items without valid evidence are removed.
+- The short summary is limited to 299 words. Duplicate list items are removed.
+- Existing keyword-generated records are cleared and marked outdated during
+  migration; the user can refresh a completed transcript into the new schema.
 - Empty recordings and imports do not receive generic review actions.
-- Refreshing a brief with no transcript shows an unavailable message rather
+- Refreshing an analysis with no completed transcript shows an unavailable message rather
   than inventing content.
 
 ## Build and deployment boundary

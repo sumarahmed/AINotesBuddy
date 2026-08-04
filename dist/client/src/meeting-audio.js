@@ -560,6 +560,17 @@
             : speaker.displayName;
       }
     }
+    for (const decision of meeting.decisions || []) {
+      if (
+        decision.sourceSpeakerId === speakerId ||
+        (previousDisplayName && decision.owner === previousDisplayName)
+      ) {
+        decision.owner =
+          speakerId === "local-user"
+            ? cleanName(profile?.name, "You")
+            : speaker.displayName;
+      }
+    }
     meeting.participants = (meeting.speakers || []).map((item) => ({
       name:
         item.id === "local-user"
@@ -574,201 +585,118 @@
     return true;
   }
 
-  const DECISION_PATTERNS = [
-    /\b(?:decided|agreed|approved|confirmed|selected|chose|chosen|settled|committed)\b/i,
-    /\b(?:decision|agreement|approval|consensus)\s+(?:is|was|to)\b/i,
-    /\b(?:going with|will use|will proceed|will move forward|are moving forward)\b/i,
-  ];
-  const PENDING_DECISION_PATTERNS = [
-    /\b(?:need|needs|needed|have|has|had)\s+to\s+(?:decide|agree|approve|confirm|choose)\b/i,
-    /\b(?:not|never|haven't|hasn't|hadn't|didn't|don't|cannot|can't)\b[^.!?]{0,40}\b(?:decided|agreed|approved|confirmed|chosen)\b/i,
-    /\b(?:no decision|decision pending|still undecided)\b/i,
-  ];
-  const ACTION_PATTERNS = [
-    /\b(?:i|we|you|they|he|she|someone|somebody|the team|team)\s+(?:will|shall|must|should|need(?:s)? to|have to|has to|am going to|are going to|is going to)\b/i,
-    /\bwe\s+(?:still\s+|also\s+)?need\s+to\b/i,
-    /\bwe\s+need\s+(?:someone|somebody)\s+to\b/i,
-    /\b(?:i'll|we'll|you'll|they'll)\b/i,
-    /\b(?:action item|next step|follow[- ]?up|to[- ]?do)\b/i,
-    /\b(?:can|could)\s+you\s+\w+/i,
-    /\bplease\s+(?:send|review|prepare|complete|submit|update|create|schedule|confirm|share|follow)\b/i,
-    /\b[\p{Lu}][\p{L}'-]+(?:\s+[\p{Lu}][\p{L}'-]+){0,2}\s+(?:will|must|should|needs? to|has to|is going to)\b/u,
-  ];
-
-  function splitTranscriptStatements(text) {
-    const statements = [];
-    for (const line of cleanTranscriptText(text).split(/\n+/)) {
-      const matches = line.match(/[^.!?]+(?:[.!?]+|$)/g) || [];
-      for (const match of matches) {
-        const statement = cleanTranscriptText(match);
-        if (statement) statements.push(statement);
+  function analysisSourceIds(value, validIds) {
+    const sourceIds = [];
+    for (const rawId of Array.isArray(value) ? value : []) {
+      const sourceId = cleanName(rawId, "");
+      if (sourceId && validIds.has(sourceId) && !sourceIds.includes(sourceId)) {
+        sourceIds.push(sourceId);
       }
     }
-    return statements;
+    return sourceIds.slice(0, 12);
   }
 
-  function isNearDuplicateText(first, second) {
-    const firstNormalised = normaliseText(first);
-    const secondNormalised = normaliseText(second);
-    if (!firstNormalised || !secondNormalised) return false;
-    if (firstNormalised === secondNormalised) return true;
-    const shortestLength = Math.min(
-      firstNormalised.length,
-      secondNormalised.length,
+  function normaliseMeetingAnalysis(rawAnalysis, transcript) {
+    if (!rawAnalysis || typeof rawAnalysis !== "object") return null;
+    const validIds = new Set(
+      (Array.isArray(transcript) ? transcript : [])
+        .map((segment) => cleanName(segment?.id, ""))
+        .filter(Boolean),
+    );
+    const shortSummary = cleanTranscriptText(rawAnalysis.shortSummary);
+    const summarySourceSegmentIds = analysisSourceIds(
+      rawAnalysis.summarySourceSegmentIds,
+      validIds,
     );
     if (
-      shortestLength >= 24 &&
-      (firstNormalised.includes(secondNormalised) ||
-        secondNormalised.includes(firstNormalised))
+      !shortSummary ||
+      shortSummary.split(/\s+/).length >= 300 ||
+      !summarySourceSegmentIds.length
     ) {
-      return true;
+      return null;
     }
-    return textSimilarity(first, second) >= 0.72;
-  }
 
-  function isDecisionStatement(text) {
-    return (
-      !PENDING_DECISION_PATTERNS.some((pattern) => pattern.test(text)) &&
-      DECISION_PATTERNS.some((pattern) => pattern.test(text))
-    );
-  }
-
-  function isActionStatement(text) {
-    return ACTION_PATTERNS.some((pattern) => pattern.test(text));
-  }
-
-  function actionOwner(statement, { localOwnerName = "You" } = {}) {
-    const text = statement.text;
-    const explicitName = text.match(
-      /\b([\p{Lu}][\p{L}'-]+(?:\s+[\p{Lu}][\p{L}'-]+){0,2})\s+(?:will|must|should|needs? to|has to|is going to)\b/u,
-    );
-    if (explicitName) {
-      const name = cleanName(explicitName[1], "Unassigned");
-      if (!/^(?:i|we|you|they|he|she|team|the team)$/i.test(name)) {
-        return name;
-      }
-    }
-    if (/\b(?:someone|somebody|can you|could you|please)\b/i.test(text)) {
-      return "Unassigned";
-    }
-    if (/\b(?:we|we'll|the team|team)\b/i.test(text)) return "Team";
-    if (/\b(?:i|i'll)\b/i.test(text)) {
-      if (statement.speakerId === "local-user") {
-        return cleanName(localOwnerName, "You");
-      }
-      return cleanName(statement.speaker, "Unassigned");
-    }
-    return "Unassigned";
-  }
-
-  function actionDue(text) {
-    const match = text.match(
-      /\b(?:(?:by|before|on)\s+)?(?:today|tomorrow|tonight|eod|eow|end of (?:the )?(?:day|week|month)|this (?:week|month)|next (?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/i,
-    );
-    return match ? match[0] : null;
-  }
-
-  function highlightScore(statement) {
-    const words = normaliseText(statement.text).split(" ").filter(Boolean);
-    let score = Math.min(4, words.length / 8);
-    if (isDecisionStatement(statement.text)) score += 9;
-    if (isActionStatement(statement.text)) score += 7;
-    if (
-      /\b(?:because|problem|risk|goal|customer|client|deadline|important|blocked|issue|result|requirement|configuration|ingestion|delivery)\b/i.test(
-        statement.text,
-      )
-    ) {
-      score += 3;
-    }
-    if (/\d/.test(statement.text)) score += 1;
-    if (/^(?:yeah|okay|ok|right|well|so|and then|you know|i mean)\b/i.test(statement.text)) {
-      score -= 2;
-    }
-    return score;
-  }
-
-  function buildExtractiveBrief(
-    segments,
-    { localOwnerName = "You" } = {},
-  ) {
-    const statements = [];
-    for (const [segmentIndex, segment] of (
-      Array.isArray(segments) ? segments : []
-    ).entries()) {
-      const segmentStatements = splitTranscriptStatements(segment?.text);
-      segmentStatements.forEach((text, statementIndex) => {
-        const normalised = normaliseText(text);
-        if (!normalised || normalised.split(" ").length < 2) return;
-        const candidate = {
-          text,
-          normalised,
-          order: statements.length,
-          segmentId: cleanName(segment?.id, `segment-${segmentIndex}`),
-          statementIndex,
-          startMs: Math.max(0, Number(segment?.startMs) || 0),
-          speakerId: cleanName(segment?.speakerId, ""),
-          speaker: cleanName(segment?.speaker, "Unknown speaker"),
-        };
-        const duplicateIndex = statements.findIndex((existing) =>
-          isNearDuplicateText(existing.text, candidate.text),
-        );
-        if (duplicateIndex < 0) {
-          statements.push(candidate);
-        } else if (
-          candidate.normalised.length > statements[duplicateIndex].normalised.length
-        ) {
-          candidate.order = statements[duplicateIndex].order;
-          statements[duplicateIndex] = candidate;
-        }
-      });
-    }
-    if (!statements.length) return null;
-
-    const substantive = statements.filter((statement) => {
-      const wordCount = statement.normalised.split(" ").length;
-      return wordCount >= 4 && statement.normalised.length >= 18;
-    });
-    const rankedHighlights = [...substantive].sort(
-      (first, second) =>
-        highlightScore(second) - highlightScore(first) ||
-        first.order - second.order,
-    );
     const highlights = [];
-    for (const statement of rankedHighlights) {
-      if (
-        highlights.some((existing) =>
-          isNearDuplicateText(existing, statement.text),
-        )
-      ) {
+    const seenHighlights = new Set();
+    for (const rawItem of Array.isArray(rawAnalysis.highlights)
+      ? rawAnalysis.highlights
+      : []) {
+      const text = cleanTranscriptText(rawItem?.text);
+      const sourceSegmentIds = analysisSourceIds(
+        rawItem?.sourceSegmentIds,
+        validIds,
+      );
+      const key = normaliseText(text);
+      if (!text || !sourceSegmentIds.length || !key || seenHighlights.has(key)) {
         continue;
       }
-      highlights.push(statement.text);
-      if (highlights.length === 3) break;
+      seenHighlights.add(key);
+      highlights.push({ text, sourceSegmentIds });
+      if (highlights.length >= 12) break;
     }
-    if (!highlights.length) highlights.push(statements[0].text);
 
-    const decisions = statements
-      .filter((statement) => isDecisionStatement(statement.text))
-      .slice(0, 6)
-      .map((statement) => statement.text);
-    const actions = statements
-      .filter((statement) => isActionStatement(statement.text))
-      .slice(0, 12)
-      .map((statement) => ({
-        text: statement.text,
-        owner: actionOwner(statement, { localOwnerName }),
-        due: actionDue(statement.text),
-        groundingKey: `${statement.segmentId}:${statement.statementIndex}`,
-        sourceSegmentId: statement.segmentId,
-        sourceStartMs: statement.startMs,
-        sourceSpeakerId: statement.speakerId || null,
-      }));
+    const decisions = [];
+    const seenDecisions = new Set();
+    for (const rawItem of Array.isArray(rawAnalysis.decisions)
+      ? rawAnalysis.decisions
+      : []) {
+      const decision = cleanTranscriptText(rawItem?.decision);
+      const sourceSegmentIds = analysisSourceIds(
+        rawItem?.sourceSegmentIds,
+        validIds,
+      );
+      const key = normaliseText(decision);
+      if (!decision || !sourceSegmentIds.length || !key || seenDecisions.has(key)) {
+        continue;
+      }
+      seenDecisions.add(key);
+      decisions.push({
+        decision,
+        context: cleanTranscriptText(rawItem?.context) || "Not specified",
+        owner: cleanName(rawItem?.owner, "Not specified"),
+        sourceSegmentIds,
+      });
+      if (decisions.length >= 12) break;
+    }
+
+    const actionItems = [];
+    const seenActions = new Set();
+    for (const rawItem of Array.isArray(rawAnalysis.actionItems)
+      ? rawAnalysis.actionItems
+      : []) {
+      const task = cleanTranscriptText(rawItem?.task);
+      const sourceSegmentIds = analysisSourceIds(
+        rawItem?.sourceSegmentIds,
+        validIds,
+      );
+      const key = normaliseText(task);
+      if (!task || !sourceSegmentIds.length || !key || seenActions.has(key)) {
+        continue;
+      }
+      seenActions.add(key);
+      const priority = cleanName(rawItem?.priority, "Medium");
+      actionItems.push({
+        task,
+        owner: cleanName(rawItem?.owner, "Not specified"),
+        dueDate: cleanName(rawItem?.dueDate, "Not specified"),
+        priority: ["High", "Medium", "Low"].includes(priority)
+          ? priority
+          : "Medium",
+        notes: cleanTranscriptText(rawItem?.notes) || "Not specified",
+        sourceSegmentIds,
+      });
+      if (actionItems.length >= 30) break;
+    }
 
     return {
-      overview: highlights.slice(0, 2).join(" "),
+      schemaVersion: Number(rawAnalysis.schemaVersion) || 1,
+      promptVersion: Number(rawAnalysis.promptVersion) || 1,
+      model: cleanName(rawAnalysis.model, "Professional meeting analyst"),
+      shortSummary,
+      summarySourceSegmentIds,
       highlights,
       decisions,
-      actions,
+      actionItems,
     };
   }
 
@@ -1174,6 +1102,18 @@
       });
     }
 
+    analyzeTranscript({ meetingTitle = "", segments = [] } = {}) {
+      if (!Array.isArray(segments) || !segments.length) {
+        throw new Error("A completed transcript is required for meeting analysis.");
+      }
+      return this.request("/v1/analyses", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingTitle, segments }),
+      });
+    }
+
     getJob(jobId) {
       return this.request(
         `/v1/transcriptions/${encodeURIComponent(jobId)}`,
@@ -1214,7 +1154,6 @@
     CompanionConnector,
     TranscriptionClient,
     applyTranscriptionResult,
-    buildExtractiveBrief,
     cleanName,
     cleanTranscriptText,
     compareVersions,
@@ -1225,6 +1164,7 @@
     getRecordingAssets,
     initialsForName,
     isVersionOutdated,
+    normaliseMeetingAnalysis,
     parseTimestamp,
     primaryRecordingSource,
     provisionalDraftSpeaker,

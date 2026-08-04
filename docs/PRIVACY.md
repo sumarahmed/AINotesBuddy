@@ -13,7 +13,7 @@ application's control.
 | --- | --- | --- |
 | Local profile name, initials, ID | Browser `localStorage` | Until site data is cleared |
 | Meeting metadata, speakers, rename mappings | Browser `localStorage` | Until meeting/site data is deleted |
-| Transcript, extractive brief, actions, notes | Browser `localStorage` | Until meeting/site data is deleted |
+| Transcript, professional analysis, actions, notes | Browser `localStorage` | Until meeting/site data is deleted |
 | Hybrid companion endpoint | Static runtime configuration | Deployment controlled |
 | Automatic companion pairing token | Browser page memory | Expiry, reload, or companion restart |
 | Companion setup confirmation | Browser `localStorage` | Until site settings are cleared |
@@ -26,6 +26,7 @@ application's control.
 | Local companion job audio | Random OS temporary directory | Removed after job success, failure, or cancellation |
 | Hosted job audio | Host container temporary directory | Removed after job success, failure, or cancellation |
 | Hosted job status/result | Host process memory | One hour by default or until process eviction |
+| Professional-analysis request/result | Host process memory during the HTTPS request; returned to the originating browser | Request completion or process eviction |
 | Hashed hosted client network key | Host process memory | Rate-limit window/session cleanup |
 | Companion pairing token | Local OS user configuration directory | Until token file is deleted |
 | Companion update response | Companion process memory | Until the next check or application exit |
@@ -183,6 +184,32 @@ Anonymous mode does not provide verified identity, subscription entitlement,
 durable account deletion, or strong protection against distributed abuse. It
 is a public prototype boundary only.
 
+## Professional meeting analysis
+
+Professional analysis is a separate request from audio transcription. It runs
+only after the browser has a completed, non-draft speaker transcript. The
+browser sends the meeting title plus timestamped speaker text and stable segment
+IDs to `POST /v1/analyses`; it does not include microphone, meeting, or mixed
+recording Blobs in this request.
+
+In the public hybrid deployment, this request uses the configured hosted
+service even when the desktop companion performed audio transcription locally.
+The Summary view and Settings disclose this boundary. A fully local development
+deployment can instead configure an analyzer on the loopback service.
+
+The hosted analyzer processes the transcript in memory and returns a structured
+result with supporting segment IDs. NotesBuddy does not intentionally write the
+analysis request or result to the persistent model-cache volume. Normal
+application logs do not include transcript request bodies. The compute and
+hosting providers can still process network/request metadata under their own
+policies.
+
+The browser validates all returned evidence IDs before saving the result. The
+server additionally removes unsupported items and normalizes unsupported
+owners, dates, priorities, context, and notes. These safeguards reduce model
+fabrication but do not make automated analysis infallible; users should verify
+high-impact conclusions against the transcript.
+
 ## Model access and caches
 
 The pyannote community model requires gated initial access. For public Windows
@@ -192,7 +219,7 @@ Customers do not provide a token. The build token is never written to the
 executable or installer. Source developers and hosted operators may instead
 provide their own process/secret-manager token.
 
-Speech/diarization models are cached locally or in a host-mounted model-cache
+Speech, diarization, and hosted analysis models are cached locally or in a host-mounted model-cache
 volume. Model cache files contain model weights, not meeting audio. Their size
 and deletion method are controlled by the model libraries/provider.
 

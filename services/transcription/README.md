@@ -167,6 +167,7 @@ DELETE /v1/system-audio/captures/{captureId}
 POST   /v1/transcriptions
 GET    /v1/transcriptions/{jobId}
 DELETE /v1/transcriptions/{jobId}
+POST   /v1/analyses
 ```
 
 `GET /v1/companion` returns only non-secret discovery metadata. Packaged desktop
@@ -202,6 +203,14 @@ The completed response includes clock-aligned segments:
 
 If no speech is detected, `segments` is empty. The test engine and production
 engine never generate placeholder transcript text.
+
+`POST /v1/analyses` accepts JSON containing `meetingTitle` and a non-empty
+`segments` array. It returns a versioned short summary, highlights, confirmed
+decisions, and structured action items. The production analyzer requires every
+item to cite a real request segment ID and applies server-side grounding checks
+before returning it. Local companion builds report `analysisAvailable: false`
+unless `NOTESBUDDY_ANALYSIS_MODEL` is configured; the public hosted deployment
+configures the managed analyzer.
 
 System-audio routes are local-companion-only and pairing protected. Only one
 capture can run at a time. The stop route returns a stereo 48 kHz WAV and
