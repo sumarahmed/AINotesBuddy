@@ -27,7 +27,7 @@ from desktop_app import (
 
 class DesktopUtilityTests(unittest.TestCase):
     def test_companion_uses_year_month_minor_release_version(self) -> None:
-        self.assertEqual(COMPANION_VERSION, "2026.08.4")
+        self.assertEqual(COMPANION_VERSION, "2026.08.5")
 
     def test_companion_compares_release_versions_numerically(self) -> None:
         self.assertEqual(version_parts("companion-v2026.08.3"), (2026, 8, 3))
@@ -36,14 +36,14 @@ class DesktopUtilityTests(unittest.TestCase):
 
     def test_latest_release_selects_trusted_windows_installer(self) -> None:
         payload = {
-            "tag_name": "companion-v2026.08.5",
-            "html_url": f"{RELEASES_URL}/tag/companion-v2026.08.5",
+            "tag_name": "companion-v2026.08.6",
+            "html_url": f"{RELEASES_URL}/tag/companion-v2026.08.6",
             "assets": [
                 {
-                    "name": "NotesBuddy-Companion-Setup-2026.08.5.exe",
+                    "name": "NotesBuddy-Companion-Setup-2026.08.6.exe",
                     "browser_download_url": (
-                        f"{RELEASES_URL}/download/companion-v2026.08.5/"
-                        "NotesBuddy-Companion-Setup-2026.08.5.exe"
+                        f"{RELEASES_URL}/download/companion-v2026.08.6/"
+                        "NotesBuddy-Companion-Setup-2026.08.6.exe"
                     ),
                 }
             ],
@@ -68,11 +68,11 @@ class DesktopUtilityTests(unittest.TestCase):
         result = fetch_latest_companion_release(opener=opener, timeout=2)
 
         self.assertTrue(result["available"])
-        self.assertEqual(result["latestVersion"], "2026.08.5")
+        self.assertEqual(result["latestVersion"], "2026.08.6")
         self.assertTrue(str(result["downloadUrl"]).endswith(".exe"))
         self.assertEqual(captured["timeout"], 2)
         self.assertIn(
-            "NotesBuddy-Companion/2026.08.4",
+            "NotesBuddy-Companion/2026.08.5",
             captured["request"].get_header("User-agent"),
         )
 

@@ -8,6 +8,16 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.9 - 2026-08-12
+
+### Fixed
+
+- Short or quiet recordings no longer fail speaker transcription with
+  `'DiarizeOutput' object is not iterable`.
+- Recognized meeting words are preserved as an unknown remote speaker when
+  diarization detects no usable speaker turns.
+- Windows companion 2026.08.5 includes corrected pyannote 4 result handling.
+
 ## 2026.08.8 - 2026-08-04
 
 ### Added

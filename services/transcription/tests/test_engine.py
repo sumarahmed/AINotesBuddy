@@ -134,6 +134,15 @@ class FakeAnnotation:
         yield FakeTurn(1.9, 2.8), "track-b", "VOICE_A"
 
 
+class FakeEmptyAnnotation:
+    def __bool__(self):
+        return False
+
+    def itertracks(self, *, yield_label):
+        assert yield_label is True
+        return iter(())
+
+
 class FakeDiarizationPipeline:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -231,6 +240,56 @@ class LocalEngineAdapterTests(unittest.TestCase):
             [segment["speakerId"] for segment in result["segments"]],
             ["local-user"],
         )
+
+    def test_empty_pyannote_4_output_preserves_transcription(self) -> None:
+        empty = FakeEmptyAnnotation()
+        self.engine._diarization = lambda _audio: SimpleNamespace(
+            exclusive_speaker_diarization=empty,
+            speaker_diarization=empty,
+        )
+
+        result = self._process(
+            microphone_path=None,
+            meeting_path=Path("meeting.webm"),
+            mixed_path=None,
+            metadata={},
+            cancel_event=threading.Event(),
+            progress=lambda _value, _stage: None,
+        )
+
+        self.assertEqual(
+            [segment["speakerId"] for segment in result["segments"]],
+            ["remote-unknown"],
+        )
+        self.assertEqual(
+            [segment["text"] for segment in result["segments"]],
+            ["Remote one. Remote two."],
+        )
+
+    def test_regular_annotation_is_used_when_exclusive_is_unavailable(self) -> None:
+        regular = FakeAnnotation()
+        output = SimpleNamespace(
+            exclusive_speaker_diarization=None,
+            speaker_diarization=regular,
+        )
+
+        self.assertIs(self.engine._annotation_from_output(output), regular)
+
+    def test_unsupported_diarization_wrapper_has_actionable_error(self) -> None:
+        self.engine._diarization = lambda _audio: SimpleNamespace()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "unsupported diarization result",
+        ):
+            self._process(
+                microphone_path=None,
+                meeting_path=Path("meeting.webm"),
+                mixed_path=None,
+                metadata={},
+                cancel_event=threading.Event(),
+                progress=lambda _value, _stage: None,
+            )
 
 
 if __name__ == "__main__":

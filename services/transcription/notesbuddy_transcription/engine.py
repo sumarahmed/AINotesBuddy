@@ -288,11 +288,22 @@ class LocalDiarizationEngine:
 
     @staticmethod
     def _annotation_from_output(output: object) -> object:
-        return (
-            getattr(output, "exclusive_speaker_diarization", None)
-            or getattr(output, "speaker_diarization", None)
-            or output
-        )
+        """Return the annotation without testing it for truthiness.
+
+        ``pyannote.audio`` 4 returns a ``DiarizeOutput`` wrapper.  Its
+        annotations can be empty for short or quiet recordings, and an empty
+        ``Annotation`` evaluates to ``False``.  A boolean ``or`` chain would
+        therefore discard both valid empty annotations and try to iterate the
+        non-iterable wrapper itself.
+        """
+
+        exclusive = getattr(output, "exclusive_speaker_diarization", None)
+        if exclusive is not None:
+            return exclusive
+        regular = getattr(output, "speaker_diarization", None)
+        if regular is not None:
+            return regular
+        return output
 
     def _diarize(
         self,
@@ -337,7 +348,14 @@ class LocalDiarizationEngine:
                     )
                 )
         else:
-            for item in annotation:
+            try:
+                iterator = iter(annotation)
+            except TypeError as error:
+                raise RuntimeError(
+                    "The speaker model returned an unsupported diarization "
+                    "result. Reinstall or update NotesBuddy Companion."
+                ) from error
+            for item in iterator:
                 if len(item) == 2:
                     turn, label = item
                 elif len(item) >= 3:
