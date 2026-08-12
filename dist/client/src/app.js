@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.8");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.9");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
