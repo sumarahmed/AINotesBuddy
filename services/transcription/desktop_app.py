@@ -25,7 +25,7 @@ from teams_detection import (
     teams_capture_url,
 )
 
-COMPANION_VERSION = "2026.08.6"
+COMPANION_VERSION = "2026.08.7"
 DEFAULT_PORT = 8765
 DEFAULT_WEB_URL = "https://sumarahmed.github.io/AINotesBuddy/"
 AUTOSTART_VALUE_NAME = "NotesBuddyCompanion"
@@ -230,6 +230,7 @@ class CompanionServer:
 
     def __init__(self, *, port: int, empty_engine: bool = False) -> None:
         from notesbuddy_transcription.security import ensure_pairing_token
+        from notesbuddy_transcription.components import ComponentManager
 
         companion_endpoint(port)
         self.port = port
@@ -239,6 +240,7 @@ class CompanionServer:
         self.thread: threading.Thread | None = None
         self.started_here = False
         self.error: str | None = None
+        self.components = ComponentManager()
 
     def start(self) -> str:
         if probe_companion(self.port) is not None:
@@ -256,6 +258,7 @@ class CompanionServer:
                 pairing_token=self.token,
                 allow_browser_pairing=True,
                 companion_version=COMPANION_VERSION,
+                component_manager=self.components,
             )
             config = uvicorn.Config(
                 api,

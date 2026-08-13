@@ -35,6 +35,14 @@ local CPU. It reports the selected device to the website and falls back to CPU
 `int8` if CUDA cannot initialize. A connected companion processes recordings
 of every length locally.
 
+Version `2026.08.7` separates the application from reusable AI components.
+The core installer does not contain model weights or CUDA/cuDNN. On first
+connection the website offers Balanced (`faster-whisper-base`) or Accurate
+(`faster-whisper-small`) speech, installs speaker recognition, and adds the
+NVIDIA pack only on a compatible machine. Components live under
+`%LOCALAPPDATA%\NotesBuddy\components`, are SHA-256 verified, resume after an
+interrupted download, and remain installed across application upgrades.
+
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
@@ -45,8 +53,8 @@ of every length locally.
 4. Leave the companion running in the Windows notification area.
 5. Return to the website and choose **I've installed it — check connection**.
    NotesBuddy checks `http://127.0.0.1:8765`, pairs automatically, and verifies
-   the API, secure pairing, offline model bundle, and runtime packages before
-   showing **Desktop companion is working**.
+   the API and secure pairing. Choose a local model; NotesBuddy downloads and
+   verifies the reusable components before showing **Desktop companion is working**.
 6. If Chrome or Edge asks whether the site can access devices on the local
    network, allow it. The service remains bound to this computer only.
 7. Start a capture and ask another meeting participant to speak. The Meeting
@@ -96,7 +104,7 @@ Settings discloses which path is currently active.
 
 ## Offline models and publisher secret
 
-Public installers must include:
+Public releases provide independent reusable assets for:
 
 - `Systran/faster-whisper-small`;
 - `pyannote/speaker-diarization-community-1`.
@@ -119,16 +127,13 @@ In GitHub:
 2. Add a repository secret named `HF_TOKEN` containing the publisher's
    read-only, gated-model token.
 3. Run **Windows desktop companion** from the Actions tab with
-   `include_models` enabled to test a build.
-4. When ready, create and push a tag such as `companion-v2026.08.6`.
+   to test the core installer and all component packs.
+4. When ready, create and push a tag such as `companion-v2026.08.7`.
 
-The tag workflow runs service tests, prepares pinned offline models, builds a
+The tag workflow runs service tests, prepares pinned component archives, builds a
 PyInstaller one-directory application, executes the packaged `--self-test`,
 creates a per-user Inno Setup installer, uploads the Actions artifact, and
-attaches the installer to the matching GitHub Release.
-
-Do not publish a no-model workflow artifact as a functional release. That
-option exists only for quick packaging diagnostics.
+attaches the installer plus component ZIPs to the matching GitHub Release.
 
 ## Local developer build
 
@@ -140,8 +145,8 @@ py -3.11 -m venv .venv
 python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -r services\transcription\requirements-packaging.txt
 $env:HF_TOKEN = "publisher-build-token"
-python desktop\prepare_models.py --accept-pyannote-terms
-.\desktop\build.ps1 -Python python -Version 2026.08.6 -RequireModels
+python desktop\prepare_components.py --version 2026.08.7 --accept-pyannote-terms
+.\desktop\build.ps1 -Python python -Version 2026.08.7
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -150,7 +155,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.6 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.7 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 
@@ -165,9 +170,9 @@ For a dependency-light package smoke test, omit model preparation and run:
 
 **The companion opens but transcription fails**
 
-- Confirm the installer is a model-inclusive release.
-- Check that `models\faster-whisper-small` and
-  `models\speaker-diarization-community-1` are present in the installed bundle.
+- Open the website setup guide and confirm the selected model packs completed.
+- Check `%LOCALAPPDATA%\NotesBuddy\components` instead of the application
+  installation directory.
 - Keep the CPU defaults for the first test; model loading can take time.
 
 **Teams participants are missing**

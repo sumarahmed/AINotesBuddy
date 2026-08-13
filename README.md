@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.08.12` (`Year.Month.MinorRelease`)
+**Current version:** `2026.08.13` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -237,8 +237,9 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 - Direct system-output capture requires companion `2026.08.1` or later on
   Windows. The browser-only fallback still requires an explicit share prompt
   and some surface/browser combinations do not expose audio.
-- The Windows installer is large because it includes offline models. Publishing
-  it requires a one-time model-license review and gated build secret.
+- The small Windows installer downloads the selected speech model, speaker
+  model, and compatible NVIDIA pack once. Verified components remain installed
+  across companion application upgrades.
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,

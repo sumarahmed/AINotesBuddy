@@ -805,11 +805,6 @@
           "The running companion does not support automatic website pairing.",
         );
       }
-      if (companion.modelsReady !== true) {
-        throw new Error(
-          "The desktop companion is running, but its offline models are missing. Install the latest model-inclusive Windows release.",
-        );
-      }
       return companion;
     }
 
@@ -1024,6 +1019,37 @@
 
     health() {
       return this.request("/v1/health", { skipSession: true });
+    }
+
+    componentStatus() {
+      this.requireLocalSystemAudio();
+      return this.request("/v1/components", { cache: "no-store" });
+    }
+
+    installComponents(components) {
+      this.requireLocalSystemAudio();
+      return this.request("/v1/components/install", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ components }),
+      });
+    }
+
+    componentJob(jobId) {
+      this.requireLocalSystemAudio();
+      return this.request(
+        `/v1/components/jobs/${encodeURIComponent(jobId)}`,
+        { cache: "no-store" },
+      );
+    }
+
+    pauseComponentJob(jobId) {
+      this.requireLocalSystemAudio();
+      return this.request(
+        `/v1/components/jobs/${encodeURIComponent(jobId)}`,
+        { method: "DELETE", cache: "no-store" },
+      );
     }
 
     requireLocalSystemAudio() {
