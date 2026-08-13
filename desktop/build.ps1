@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "2026.08.5",
+    [string]$Version = "2026.08.6",
     [switch]$RequireModels,
     [switch]$SkipInstaller
 )

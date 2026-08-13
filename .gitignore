@@ -13,5 +13,6 @@ __pycache__/
 .venv/
 .verification/
 desktop/models/
+desktop/gpu-libs/
 desktop/out/
 desktop/release/

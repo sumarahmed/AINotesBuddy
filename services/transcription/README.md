@@ -121,12 +121,14 @@ authentication still apply to the actual API request.
 
 ## Model configuration
 
-Defaults are chosen for broad CPU compatibility:
+Defaults automatically use CUDA when CTranslate2 can see the local NVIDIA GPU;
+otherwise faster-whisper uses CPU `int8`. The distributable companion keeps
+pyannote on CPU to avoid bundling the multi-gigabyte CUDA PyTorch runtime:
 
 ```powershell
 $env:NOTESBUDDY_WHISPER_MODEL = "small"
-$env:NOTESBUDDY_MODEL_DEVICE = "cpu"
-$env:NOTESBUDDY_WHISPER_COMPUTE_TYPE = "int8"
+$env:NOTESBUDDY_MODEL_DEVICE = "auto"
+Remove-Item Env:NOTESBUDDY_WHISPER_COMPUTE_TYPE -ErrorAction SilentlyContinue
 ```
 
 Example CUDA configuration, only after installing a matching PyTorch/CUDA

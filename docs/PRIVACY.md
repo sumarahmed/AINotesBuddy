@@ -148,11 +148,10 @@ keeps recent job status/results in process memory for one hour by default (and
 evicts older completed entries when its bounded job table fills). It has no
 job database or cloud synchronization.
 
-The website's default `hybrid` mode uses this local path for recordings shorter
-than 8 minutes. Recordings of 8 minutes or longer use the configured hosted GPU
-by default to avoid near-real-time CPU processing. Users can turn off **Speed up
-long recordings online** before starting or retrying transcription to keep
-audio processing local. If the companion is absent, incompatible, blocked by
+The website's default `hybrid` mode uses this local path for recordings of
+every length while a compatible companion is connected. It automatically uses
+a supported local NVIDIA GPU and falls back to the local CPU when required. If
+the companion is absent, incompatible, blocked by
 browser local-network permission, or cannot pair, the UI also shows **online
 fallback** and uses the hosted service. Both cases cross the device boundary
 described below.

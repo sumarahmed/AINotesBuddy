@@ -29,6 +29,12 @@ recording still starts only after the user selects **Start capture**. The
 control panel includes an on/off preference, and short audio activity is
 debounced to reduce ringtone and device-test notifications.
 
+Version `2026.08.6` prefers a compatible NVIDIA GPU automatically for
+faster-whisper speech transcription, while speaker diarization remains on the
+local CPU. It reports the selected device to the website and falls back to CPU
+`int8` if CUDA cannot initialize. A connected companion processes recordings
+of every length locally.
+
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
@@ -114,7 +120,7 @@ In GitHub:
    read-only, gated-model token.
 3. Run **Windows desktop companion** from the Actions tab with
    `include_models` enabled to test a build.
-4. When ready, create and push a tag such as `companion-v2026.08.5`.
+4. When ready, create and push a tag such as `companion-v2026.08.6`.
 
 The tag workflow runs service tests, prepares pinned offline models, builds a
 PyInstaller one-directory application, executes the packaged `--self-test`,
@@ -131,11 +137,11 @@ Use Python 3.11 on Windows:
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -r services\transcription\requirements-packaging.txt
 $env:HF_TOKEN = "publisher-build-token"
 python desktop\prepare_models.py --accept-pyannote-terms
-.\desktop\build.ps1 -Python python -Version 2026.08.5 -RequireModels
+.\desktop\build.ps1 -Python python -Version 2026.08.6 -RequireModels
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -144,7 +150,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.5 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.6 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 

@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.11");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.12");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -559,6 +559,15 @@ function usesHybridTranscription() {
   return runtimeTranscriptionMode === "hybrid";
 }
 
+function localAcceleratorLabel() {
+  const accelerator = String(
+    state.companion.metadata?.accelerator || "local CPU",
+  );
+  return state.companion.metadata?.gpuAvailable
+    ? accelerator
+    : "local CPU";
+}
+
 function transcriptionRouteForMeeting(meeting) {
   return MeetingAudio.selectTranscriptionRoute({
     runtimeMode: runtimeTranscriptionMode,
@@ -566,6 +575,7 @@ function transcriptionRouteForMeeting(meeting) {
     durationSeconds: meetingDurationSeconds(meeting),
     accelerateLongRecordings: state.settings.accelerateLongRecordings,
     hostedEndpoint: runtimeHostedTranscriptionEndpoint,
+    companionConnected: state.companion.status === "connected",
   });
 }
 
@@ -1081,9 +1091,7 @@ function transcriptionWorkspace(meeting) {
     ? accelerated
       ? `This ${durationLabel(meetingDurationSeconds(meeting))} recording will use faster online GPU processing. Audio is removed from temporary service storage after the job.`
       : "Audio is sent to the public transcription service for this job and removed from its temporary storage after processing."
-    : meetingDurationSeconds(meeting) >= MeetingAudio.LONG_RECORDING_SECONDS
-      ? "Private on-device processing is selected. Long recordings can take close to their recorded duration on a CPU; enable faster processing in Settings to use the online GPU."
-      : "Uses the paired local companion. Audio is processed on this computer and temporary service files are removed.";
+    : `Uses the paired local companion with ${escapeHtml(localAcceleratorLabel())}. Audio is processed on this computer and temporary service files are removed.`;
   const failureDescription = route === "hosted"
     ? "The public transcription service could not complete this job."
     : "The local companion could not complete this job.";
@@ -1091,7 +1099,7 @@ function transcriptionWorkspace(meeting) {
   const elapsedSeconds = meeting.transcription?.requestedAt
     ? Math.max(0, Math.round((Date.now() - Date.parse(meeting.transcription.requestedAt)) / 1000))
     : 0;
-  const runningDescription = `${escapeHtml(meeting.transcription?.stage || statusLabel)} · ${progress}% · ${escapeHtml(durationLabel(elapsedSeconds))} elapsed · ${route === "hosted" ? "online GPU" : "this computer"}`;
+  const runningDescription = `${escapeHtml(meeting.transcription?.stage || statusLabel)} · ${progress}% · ${escapeHtml(durationLabel(elapsedSeconds))} elapsed · ${route === "hosted" ? "online GPU" : localAcceleratorLabel()}`;
   return `<section class="transcription-workspace transcription-workspace--${escapeHtml(status)}">
     <div>
       <span class="eyebrow">Speaker transcription</span>
@@ -1278,7 +1286,7 @@ function settingsPanel() {
         unavailable: "unavailable",
       }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus);
   const privacyMessage = hybrid
-    ? "Recordings stay in this browser. Meetings of 8 minutes or longer use the temporary online GPU by default for faster transcription; turn off faster long-recording processing to keep audio transcription on this device. Professional analysis sends only the completed transcript online."
+    ? "When the companion is connected, speaker transcription stays on this computer for recordings of every length and uses a compatible local NVIDIA GPU automatically. The online service is used only when the companion is unavailable. Professional analysis sends only the completed transcript online."
     : hosted
       ? "Recordings stay in this browser until transcription is requested. Selected audio is sent to the public service and removed from its temporary storage after processing; professional analysis sends the completed transcript."
     : runtimeHostedTranscriptionEndpoint
@@ -1288,8 +1296,7 @@ function settingsPanel() {
     ? `<section class="settings-section">
         <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
         <div class="service-check"><span class="service-check__status service-check__status--${updateRequired ? "update" : escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
-        <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} to receive the latest capture and security fixes.` : hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is available for private processing. Pairing is automatic and expires when the companion restarts.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
-        ${toggle("accelerateLongRecordings", "Speed up long recordings online", "For recordings of 8 minutes or longer, use the hosted GPU instead of waiting for CPU-speed local processing. Turn this off for local-only audio transcription.")}
+        <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} for automatic local GPU acceleration.` : hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is using ${escapeHtml(localAcceleratorLabel())}. All recording lengths are processed locally while it remains connected.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
         <div class="companion-actions"><button type="button" class="button button--quiet" data-action="show-companion-setup">Setup guide</button><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}${updateRequired ? "Download update" : "Windows downloads"}</a></div>
       </section>`
     : hosted
@@ -1308,7 +1315,7 @@ function settingsPanel() {
   const autoTranscribeDescription = hosted
     ? "Send saved source tracks to the public transcription service after capture."
     : hybrid
-      ? "Process saved tracks automatically; meetings of 8 minutes or longer use the online GPU when faster processing is enabled."
+      ? "Process saved tracks automatically on the connected companion, with online fallback only when it is unavailable."
       : "Send saved local tracks to the paired localhost companion after capture.";
   return `<div class="drawer-backdrop" data-action="close-settings">
     <aside class="settings-drawer" data-panel="settings">
@@ -2875,7 +2882,7 @@ async function connectLocalCompanion({
       state.companion = {
         status: "connected",
         pairingToken: connection.token,
-        metadata: connection.companion,
+        metadata: { ...connection.companion, ...connection.health },
         expiresAt: connection.expiresAt,
         error: null,
       };
@@ -2888,7 +2895,7 @@ async function connectLocalCompanion({
       if (!silent) {
         showToast(
           "Desktop companion connected",
-          `${connection.health?.engine || "Local transcription"} will process audio on this computer.`,
+          `${connection.health?.accelerator || connection.health?.engine || "Local transcription"} will process audio on this computer.`,
         );
       }
       return true;

@@ -33,6 +33,14 @@ test("routes long hybrid recordings to hosted acceleration without changing shor
   assert.equal(
     MeetingAudio.selectTranscriptionRoute({
       ...common,
+      durationSeconds: 3600,
+      companionConnected: true,
+    }),
+    "local",
+  );
+  assert.equal(
+    MeetingAudio.selectTranscriptionRoute({
+      ...common,
       durationSeconds: 23 * 60,
     }),
     "hosted",
