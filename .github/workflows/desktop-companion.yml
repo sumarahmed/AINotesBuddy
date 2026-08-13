@@ -118,6 +118,9 @@ jobs:
             $version = "2026.08.7"
           }
           ./desktop/build.ps1 -Python python -Version $version
+          Get-ChildItem desktop/release/NotesBuddyCompanion-Setup-*.exe, desktop/components-release/*.zip |
+            Select-Object Name, Length |
+            Format-Table -AutoSize
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v6

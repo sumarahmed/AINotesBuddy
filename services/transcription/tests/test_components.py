@@ -24,6 +24,14 @@ def archive_bytes(files: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
+def lzma_archive_bytes(files: dict[str, bytes]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_LZMA) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return output.getvalue()
+
+
 class FakeResponse(io.BytesIO):
     status = 200
 
@@ -76,6 +84,14 @@ class ComponentManagerTests(unittest.TestCase):
             self.assertEqual(job["status"], "completed")
             self.assertTrue((manager.root / "models/faster-whisper-selected/model.bin").is_file())
             self.assertTrue(manager.status()["components"]["whisper-small"]["installed"])
+
+    def test_lzma_component_pack_is_supported(self) -> None:
+        payload = lzma_archive_bytes({"cudnn64_9.dll": b"gpu-runtime" * 100})
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory, payload)
+            job = self.wait(manager, manager.start_install(["whisper-small"])["jobId"])
+            self.assertEqual(job["status"], "completed")
+            self.assertTrue((manager.root / "models/faster-whisper-selected/cudnn64_9.dll").is_file())
 
     def test_invalid_checksum_is_rejected_without_replacing_existing_component(self) -> None:
         payload = archive_bytes({"model.bin": b"new"})

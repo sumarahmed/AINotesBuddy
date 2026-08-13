@@ -20,13 +20,18 @@ MODELS = (
 )
 
 
-def _zip_directory(source: Path, destination: Path) -> None:
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+def _zip_directory(
+    source: Path,
+    destination: Path,
+    *,
+    compression: int = zipfile.ZIP_DEFLATED,
+) -> None:
+    with zipfile.ZipFile(destination, "w", compression=compression, compresslevel=9) as archive:
         for path in sorted(source.rglob("*")):
             if not path.is_file() or ".cache" in path.parts:
                 continue
             info = zipfile.ZipInfo(path.relative_to(source).as_posix(), (2026, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_type = compression
             info.external_attr = 0o644 << 16
             with path.open("rb") as input_file, archive.open(info, "w", force_zip64=True) as output_file:
                 shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
@@ -90,7 +95,9 @@ def main() -> int:
     if not arguments.gpu_libs.is_dir():
         raise RuntimeError("The pinned NVIDIA runtime directory is missing.")
     gpu_archive = output / f"NotesBuddy-nvidia-cuda12-{arguments.version}.zip"
-    _zip_directory(arguments.gpu_libs, gpu_archive)
+    # CUDA/cuDNN DLLs compress poorly with Deflate. ZIP-LZMA remains readable
+    # by Python's standard library and avoids making users download ~1.25 GB.
+    _zip_directory(arguments.gpu_libs, gpu_archive, compression=zipfile.ZIP_LZMA)
     key, value = _asset("nvidia-cuda12", "NVIDIA acceleration pack", arguments.version, "gpu", "accelerator", gpu_archive)
     components[key] = value
     manifest = {"schemaVersion": 1, "releaseVersion": arguments.version, "components": components}
