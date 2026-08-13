@@ -55,11 +55,13 @@
     accelerateLongRecordings = true,
     hostedEndpoint = "",
     longRecordingSeconds = LONG_RECORDING_SECONDS,
+    companionConnected = false,
   } = {}) {
     const canAccelerate =
       runtimeMode === "hybrid" &&
       currentMode === "local" &&
       Boolean(String(hostedEndpoint || "").trim()) &&
+      companionConnected !== true &&
       accelerateLongRecordings !== false &&
       Number(durationSeconds) >= Number(longRecordingSeconds);
     return canAccelerate ? "hosted" : currentMode;

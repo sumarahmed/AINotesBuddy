@@ -8,6 +8,19 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.12 - 2026-08-13
+
+### Changed
+
+- A connected Windows companion now remains the preferred transcription path
+  for recordings of every length instead of sending long meetings online.
+- Companion 2026.08.6 automatically runs faster-whisper's dominant speech
+  workload on a compatible local NVIDIA GPU, uses optimized single-beam
+  decoding, and safely falls back to CPU `int8` if CUDA cannot initialize.
+  Speaker diarization remains local and runs on CPU in the distributable build.
+- Companion discovery and health now report the active accelerator, model
+  device, and compute type so the website can show where processing runs.
+
 ## 2026.08.11 - 2026-08-13
 
 ### Fixed

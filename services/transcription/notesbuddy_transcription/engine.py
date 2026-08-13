@@ -20,6 +20,42 @@ class EngineCancelled(RuntimeError):
 ProgressCallback = Callable[[float, str], None]
 
 
+def local_accelerator(requested_device: str = "auto") -> dict[str, object]:
+    """Resolve the fastest locally supported inference device.
+
+    faster-whisper uses CTranslate2, which performs the dominant speech model
+    workload. Pyannote can remain on CPU when the distributable companion uses
+    CPU PyTorch. Explicit configuration remains authoritative for operators.
+    """
+
+    requested = str(requested_device or "auto").strip().lower() or "auto"
+    if requested != "auto":
+        return {
+            "requested": requested,
+            "device": requested,
+            "name": "Configured CUDA" if requested.startswith("cuda") else "CPU",
+            "available": requested.startswith("cuda"),
+        }
+    try:
+        import ctranslate2
+        cuda_available = bool(ctranslate2.get_cuda_device_count() > 0)
+        if cuda_available:
+            return {
+                "requested": "auto",
+                "device": "cuda",
+                "name": "NVIDIA GPU",
+                "available": True,
+            }
+    except (ImportError, OSError, RuntimeError):
+        pass
+    return {
+        "requested": "auto",
+        "device": "cpu",
+        "name": "CPU",
+        "available": False,
+    }
+
+
 def packaged_models_root() -> Path | None:
     configured = os.getenv("NOTESBUDDY_MODEL_DIR", "").strip()
     if configured:
@@ -99,10 +135,17 @@ class LocalDiarizationEngine:
             or os.getenv("NOTESBUDDY_WHISPER_MODEL", "").strip()
             or bundled_model_reference("faster-whisper-small", "small")
         )
-        self.device = device or os.getenv("NOTESBUDDY_MODEL_DEVICE", "cpu")
-        self.compute_type = compute_type or os.getenv(
-            "NOTESBUDDY_WHISPER_COMPUTE_TYPE",
-            "int8",
+        self.requested_device = (
+            device or os.getenv("NOTESBUDDY_MODEL_DEVICE", "auto")
+        )
+        self.accelerator = local_accelerator(self.requested_device)
+        self.device = str(self.accelerator["device"])
+        configured_compute_type = (
+            compute_type
+            or os.getenv("NOTESBUDDY_WHISPER_COMPUTE_TYPE", "").strip()
+        )
+        self.compute_type = configured_compute_type or (
+            "float16" if self.device.startswith("cuda") else "int8"
         )
         self.diarization_model_name = (
             diarization_model
@@ -146,6 +189,13 @@ class LocalDiarizationEngine:
         return {
             "ready": ready,
             "source": source,
+            "device": self.device,
+            "computeType": self.compute_type,
+            "accelerator": str(self.accelerator.get("name") or "CPU"),
+            "gpuAvailable": bool(self.accelerator.get("available")),
+            "diarizationDevice": "cuda"
+            if self.device.startswith("cuda") and self._torch_cuda_available()
+            else "cpu",
             "status": (
                 "offline models ready"
                 if ready and bundled_models_ready
@@ -167,11 +217,32 @@ class LocalDiarizationEngine:
                         "faster-whisper is not installed. Install the companion "
                         "requirements before transcribing."
                     ) from error
-                self._whisper = WhisperModel(
-                    self.whisper_model_name,
-                    device=self.device,
-                    compute_type=self.compute_type,
-                )
+                try:
+                    self._whisper = WhisperModel(
+                        self.whisper_model_name,
+                        device=self.device,
+                        compute_type=self.compute_type,
+                    )
+                except (RuntimeError, OSError) as error:
+                    if not (
+                        str(self.requested_device).lower() == "auto"
+                        and self.device.startswith("cuda")
+                    ):
+                        raise
+                    self.device = "cpu"
+                    self.compute_type = "int8"
+                    self.accelerator = {
+                        "requested": "auto",
+                        "device": "cpu",
+                        "name": "CPU (CUDA initialization failed)",
+                        "available": False,
+                        "fallbackReason": str(error)[:240],
+                    }
+                    self._whisper = WhisperModel(
+                        self.whisper_model_name,
+                        device="cpu",
+                        compute_type="int8",
+                    )
         return self._whisper
 
     def _load_diarization(self):
@@ -213,15 +284,27 @@ class LocalDiarizationEngine:
                         use_auth_token=self.hugging_face_token,
                     )
 
-                if self.device.lower().startswith("cuda"):
+                if (
+                    self.device.lower().startswith("cuda")
+                    and self._torch_cuda_available()
+                ):
                     try:
                         import torch
 
                         self._diarization.to(torch.device(self.device))
-                    except (ImportError, RuntimeError):
+                    except (ImportError, RuntimeError, AssertionError):
                         # The pipeline remains on its supported default device.
                         pass
         return self._diarization
+
+    @staticmethod
+    def _torch_cuda_available() -> bool:
+        try:
+            import torch
+
+            return bool(torch.cuda.is_available())
+        except (ImportError, RuntimeError, AssertionError):
+            return False
 
     @staticmethod
     def _probability(word: object) -> float | None:
@@ -242,6 +325,7 @@ class LocalDiarizationEngine:
             str(path),
             word_timestamps=True,
             vad_filter=True,
+            beam_size=1,
         )
         words: list[Word] = []
         for segment in model_segments:

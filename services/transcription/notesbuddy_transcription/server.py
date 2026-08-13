@@ -618,6 +618,12 @@ def create_app(
             "modelsReady": bool(model_status.get("ready")),
             "modelSource": str(model_status.get("source") or "unknown"),
             "modelStatus": str(model_status.get("status") or "unknown"),
+            "modelDevice": str(model_status.get("device") or "unknown"),
+            "modelComputeType": str(
+                model_status.get("computeType") or "unknown"
+            ),
+            "accelerator": str(model_status.get("accelerator") or "CPU"),
+            "gpuAvailable": bool(model_status.get("gpuAvailable")),
             "analysisAvailable": bool(analysis_status.get("ready")),
             "analysisModel": analysis_status.get("model"),
             "systemAudioCapture": bool(system_audio_status["available"]),
@@ -666,6 +672,12 @@ def create_app(
             "modelsReady": bool(model_status.get("ready")),
             "modelSource": str(model_status.get("source") or "unknown"),
             "modelStatus": str(model_status.get("status") or "unknown"),
+            "modelDevice": str(model_status.get("device") or "unknown"),
+            "modelComputeType": str(
+                model_status.get("computeType") or "unknown"
+            ),
+            "accelerator": str(model_status.get("accelerator") or "CPU"),
+            "gpuAvailable": bool(model_status.get("gpuAvailable")),
             "analysisAvailable": bool(analysis_status.get("ready")),
             "analysisModel": analysis_status.get("model"),
             "systemAudioCapture": bool(system_audio_status["available"]),

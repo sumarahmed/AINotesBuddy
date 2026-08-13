@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 project_root = Path(SPECPATH).parent
 service_root = project_root / "services" / "transcription"
 model_root = project_root / "desktop" / "models"
+gpu_lib_root = project_root / "desktop" / "gpu-libs"
 
 datas = [
     (
@@ -39,6 +40,10 @@ for package in (
 
 if model_root.is_dir():
     datas.append((str(model_root), "models"))
+
+if gpu_lib_root.is_dir():
+    for gpu_library in gpu_lib_root.glob("*.dll"):
+        binaries.append((str(gpu_library), "."))
 
 analysis = Analysis(
     [str(service_root / "desktop_app.py")],

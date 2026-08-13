@@ -1,11 +1,11 @@
 // Public, non-secret deployment configuration. Never put service credentials here.
 globalThis.NotesBuddyRuntime = Object.freeze({
-  appVersion: "2026.08.11",
-  latestCompanionVersion: "2026.08.5",
+  appVersion: "2026.08.12",
+  latestCompanionVersion: "2026.08.6",
   transcriptionMode: "hybrid",
   localCompanionEndpoint: "http://127.0.0.1:8765",
   transcriptionEndpoint:
     "https://sumarahmed--notesbuddy-public-transcription-public-api.modal.run",
   companionDownloadUrl:
-    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.5/NotesBuddyCompanion-Setup-2026.08.5.exe",
+    "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.6/NotesBuddyCompanion-Setup-2026.08.6.exe",
 });

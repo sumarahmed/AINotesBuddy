@@ -31,7 +31,17 @@ revisions in `MODEL_MANIFEST.json` for every build.
 - Declared license: BSD-3-Clause
 - The companion uses its Windows/WASAPI backend only while the user has an
   active NotesBuddy recording. Preserve the upstream software notice in
-  distributed packages.
+distributed packages.
+
+## Optional NVIDIA acceleration runtime
+
+- Runtime: NVIDIA cuBLAS CUDA 12 and cuDNN 9 redistributable DLLs
+- Build source: the fixed GitHub release asset ID `236181970` from
+  <https://github.com/Purfview/whisper-standalone-win/releases/tag/libs>
+- Upstream licenses: NVIDIA CUDA Toolkit and cuDNN software license agreements
+- The release workflow verifies the immutable asset ID, name, and byte size
+  before packaging. Review NVIDIA's redistribution terms before each public
+  companion release and preserve all required notices.
 
 This file is an engineering control, not legal advice. Complete a license and
 privacy review before publishing a public installer.

@@ -10,16 +10,16 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from notesbuddy_transcription.engine import LocalDiarizationEngine
+from notesbuddy_transcription.engine import LocalDiarizationEngine, local_accelerator
 
 
 class FakeWhisper:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def transcribe(self, path, *, word_timestamps, vad_filter):
+    def transcribe(self, path, *, word_timestamps, vad_filter, beam_size):
         self.calls.append(Path(path).name)
-        self.last_options = (word_timestamps, vad_filter)
+        self.last_options = (word_timestamps, vad_filter, beam_size)
         if "microphone" in str(path):
             words = [
                 SimpleNamespace(
@@ -86,6 +86,43 @@ class FakeWhisper:
 
 
 class BundledModelConfigurationTests(unittest.TestCase):
+    def test_automatic_device_uses_cuda_when_both_runtimes_see_the_gpu(self) -> None:
+        fake_ctranslate = SimpleNamespace(get_cuda_device_count=lambda: 1)
+        with patch.dict(
+            "sys.modules",
+            {"ctranslate2": fake_ctranslate},
+        ):
+            accelerator = local_accelerator("auto")
+        self.assertEqual(accelerator["device"], "cuda")
+        self.assertEqual(accelerator["name"], "NVIDIA GPU")
+
+    def test_explicit_cpu_configuration_never_probes_cuda(self) -> None:
+        accelerator = local_accelerator("cpu")
+        self.assertEqual(accelerator["device"], "cpu")
+        self.assertFalse(accelerator["available"])
+
+    def test_automatic_cuda_initialization_safely_retries_on_cpu(self) -> None:
+        attempts = []
+
+        class FakeWhisperModel:
+            def __init__(self, _model, *, device, compute_type):
+                attempts.append((device, compute_type))
+                if device == "cuda":
+                    raise RuntimeError("CUDA runtime unavailable")
+
+        engine = LocalDiarizationEngine(device="cpu")
+        engine.requested_device = "auto"
+        engine.device = "cuda"
+        engine.compute_type = "float16"
+        with patch.dict(
+            "sys.modules",
+            {"faster_whisper": SimpleNamespace(WhisperModel=FakeWhisperModel)},
+        ):
+            engine._load_whisper()
+        self.assertEqual(attempts, [("cuda", "float16"), ("cpu", "int8")])
+        self.assertEqual(engine.device, "cpu")
+        self.assertIn("initialization failed", engine.accelerator["name"])
+
     def test_bundled_models_are_preferred_without_a_user_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             model_root = Path(directory)
