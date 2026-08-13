@@ -28,8 +28,6 @@ for package in (
     "pycaw",
     "pystray",
     "soundcard",
-    "torch",
-    "torchaudio",
     "windows_toasts",
 ):
     try:
