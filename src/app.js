@@ -3213,7 +3213,8 @@ async function cancelMeetingTranscription(meeting = selectedMeeting()) {
   transcriptionControllers.get(meeting.id)?.abort();
   const jobId = meeting.transcription?.jobId;
   if (jobId) {
-    (transcriptionClients.get(meeting.id) || createTranscriptionClient())
+    (transcriptionClients.get(meeting.id) ||
+      createTranscriptionClient({ mode: meeting.transcription?.route }))
       .cancelJob(jobId)
       .catch(() => {});
   }
