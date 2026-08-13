@@ -24,6 +24,44 @@ test("compares Year.Month.MinorRelease versions including legacy companions", ()
   );
 });
 
+test("routes long hybrid recordings to hosted acceleration without changing short or private jobs", () => {
+  const common = {
+    runtimeMode: "hybrid",
+    currentMode: "local",
+    hostedEndpoint: "https://transcribe.example.test",
+  };
+  assert.equal(
+    MeetingAudio.selectTranscriptionRoute({
+      ...common,
+      durationSeconds: 23 * 60,
+    }),
+    "hosted",
+  );
+  assert.equal(
+    MeetingAudio.selectTranscriptionRoute({
+      ...common,
+      durationSeconds: 7 * 60,
+    }),
+    "local",
+  );
+  assert.equal(
+    MeetingAudio.selectTranscriptionRoute({
+      ...common,
+      durationSeconds: 23 * 60,
+      accelerateLongRecordings: false,
+    }),
+    "local",
+  );
+  assert.equal(
+    MeetingAudio.selectTranscriptionRoute({
+      ...common,
+      runtimeMode: "local",
+      durationSeconds: 23 * 60,
+    }),
+    "local",
+  );
+});
+
 test("migrates a legacy single recording without losing its audio id", () => {
   const meeting = {
     audioId: "legacy-audio",
