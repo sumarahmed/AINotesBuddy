@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.12");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.13");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -353,6 +353,7 @@ const state = {
     error: null,
   },
   companionUpdateDismissed: false,
+  componentJob: null,
   playbackSourceByMeeting: {},
   toasts: [],
   capture: {
@@ -1369,6 +1370,39 @@ function companionOnboarding() {
       </section>
     </div>`;
   }
+  if (
+    connected &&
+    state.companion.metadata?.components?.ready !== true &&
+    state.companion.metadata?.componentSetupAvailable
+  ) {
+    const job = state.componentJob || state.companion.metadata?.components?.activeJob;
+    const running = job && ["queued", "downloading", "installing"].includes(job.status);
+    const progress = Math.max(0, Math.min(100, Math.round((Number(job?.progress) || 0) * 100)));
+    const gpuExtra = state.companion.metadata?.gpuAvailable
+      ? " An NVIDIA acceleration pack will also be installed for this computer."
+      : " This computer will use the CPU runtime.";
+    const available = state.companion.metadata?.components?.components || {};
+    const sharedBytes = Number(available["speaker-diarization"]?.downloadBytes || 0) +
+      (state.companion.metadata?.gpuAvailable ? Number(available["nvidia-cuda12"]?.downloadBytes || 0) : 0);
+    const baseSize = formatBytes(sharedBytes + Number(available["whisper-base"]?.downloadBytes || 0));
+    const smallSize = formatBytes(sharedBytes + Number(available["whisper-small"]?.downloadBytes || 0));
+    return `<div class="companion-setup-backdrop">
+      <section class="companion-setup-card" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
+        <span class="eyebrow">One-time local setup</span>
+        <h1 id="companion-setup-title">Choose transcription quality</h1>
+        <p>The app is installed. Download reusable local AI components once; future companion updates keep them in place.${escapeHtml(gpuExtra)}</p>
+        <div class="component-options">
+          <button type="button" data-action="install-components" data-preset="base" ${running ? "disabled" : ""}><strong>Balanced · ${escapeHtml(baseSize)}</strong><span>Smaller download · faster setup · good everyday accuracy</span></button>
+          <button type="button" data-action="install-components" data-preset="small" ${running ? "disabled" : ""}><strong>Accurate · ${escapeHtml(smallSize)}</strong><span>Larger download · recommended for meetings and names</span><em>Recommended</em></button>
+        </div>
+        ${running ? `<div class="component-progress" aria-live="polite"><div><span>${escapeHtml(job.stage || "Preparing components")}</span><b>${progress}%</b></div><i><span style="width:${progress}%"></span></i><small>You can leave this page open. An interrupted download resumes from the saved partial file.</small><button type="button" class="button button--quiet" data-action="pause-components">Pause download</button></div>` : ""}
+        ${job?.status === "paused" ? `<div class="companion-setup__status">Download paused. Choose Balanced or Accurate again to resume it.</div>` : ""}
+        ${job?.status === "failed" ? `<div class="companion-setup__status">${escapeHtml(job.error || "Component installation failed. Please retry.")}</div>` : ""}
+        <button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>
+        <small class="companion-setup__note">${icon("shield", 13)}Every downloaded pack is verified with SHA-256 before installation.</small>
+      </section>
+    </div>`;
+  }
   if (connected) {
     return `<div class="companion-setup-backdrop">
       <section class="companion-setup-card companion-setup-card--success" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
@@ -1404,6 +1438,41 @@ function companionOnboarding() {
       <small class="companion-setup__note">${icon("lock", 13)}Windows 10/11 · Per-user installation · No administrator access required</small>
     </section>
   </div>`;
+}
+
+async function installCompanionComponents(preset) {
+  const client = createTranscriptionClient({ mode: "local" });
+  const requested = [
+    preset === "base" ? "whisper-base" : "whisper-small",
+    "speaker-diarization",
+    ...(state.companion.metadata?.gpuAvailable ? ["nvidia-cuda12"] : []),
+  ];
+  try {
+    state.componentJob = await client.installComponents(requested);
+    render();
+    while (["queued", "downloading", "installing"].includes(state.componentJob.status)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 600));
+      state.componentJob = await client.componentJob(state.componentJob.jobId);
+      render();
+    }
+    if (state.componentJob.status !== "completed") {
+      throw new Error(state.componentJob.error || "Component installation failed.");
+    }
+    const health = await client.health();
+    state.companion.metadata = { ...state.companion.metadata, ...health };
+    state.componentJob = null;
+    render();
+    showToast("Local AI components ready", `${health.accelerator || "Local processing"} is ready for transcription.`);
+  } catch (error) {
+    state.componentJob = { ...(state.componentJob || {}), status: "failed", error: error?.message || "Component installation failed." };
+    render();
+  }
+}
+
+async function pauseCompanionComponents() {
+  if (!state.componentJob?.jobId) return;
+  const client = createTranscriptionClient({ mode: "local" });
+  await client.pauseComponentJob(state.componentJob.jobId);
 }
 
 function companionUpdateNotice() {
@@ -2890,6 +2959,12 @@ async function connectLocalCompanion({
       state.settings.transcriptionEndpoint = connection.endpoint;
       state.settings.transcriptionToken = "";
       state.transcriptionServiceStatus = "connected";
+      if (
+        state.companion.metadata?.componentSetupAvailable &&
+        state.companion.metadata?.components?.ready !== true
+      ) {
+        state.companionSetupOpen = true;
+      }
       save();
       render();
       if (!silent) {
@@ -3464,6 +3539,12 @@ app.addEventListener("click", async (event) => {
     state.settingsOpen = false;
   } else if (action === "check-companion-setup") {
     await connectLocalCompanion({ silent: true, force: true });
+    return;
+  } else if (action === "install-components") {
+    await installCompanionComponents(button.dataset.preset || "small");
+    return;
+  } else if (action === "pause-components") {
+    await pauseCompanionComponents();
     return;
   } else if (action === "complete-companion-setup") {
     if (state.companion.status !== "connected") return;

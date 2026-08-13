@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import json
+import subprocess
 import sys
 import threading
 from importlib.util import find_spec
@@ -18,6 +20,23 @@ class EngineCancelled(RuntimeError):
 
 
 ProgressCallback = Callable[[float, str], None]
+_DLL_DIRECTORY_HANDLES: list[Any] = []
+
+
+def activate_optional_gpu_runtime() -> bool:
+    """Expose the persistent NVIDIA pack to Windows without changing PATH."""
+    configured = os.getenv("NOTESBUDDY_GPU_LIB_DIR", "").strip()
+    if not configured or not hasattr(os, "add_dll_directory"):
+        return False
+    directory = Path(configured).expanduser().resolve()
+    if not directory.is_dir():
+        return False
+    try:
+        if not _DLL_DIRECTORY_HANDLES:
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(directory)))
+        return True
+    except OSError:
+        return False
 
 
 def local_accelerator(requested_device: str = "auto") -> dict[str, object]:
@@ -37,6 +56,7 @@ def local_accelerator(requested_device: str = "auto") -> dict[str, object]:
             "available": requested.startswith("cuda"),
         }
     try:
+        activate_optional_gpu_runtime()
         import ctranslate2
         cuda_available = bool(ctranslate2.get_cuda_device_count() > 0)
         if cuda_available:
@@ -133,7 +153,7 @@ class LocalDiarizationEngine:
         self.whisper_model_name = (
             whisper_model
             or os.getenv("NOTESBUDDY_WHISPER_MODEL", "").strip()
-            or bundled_model_reference("faster-whisper-small", "small")
+            or bundled_model_reference("faster-whisper-selected", "small")
         )
         self.requested_device = (
             device or os.getenv("NOTESBUDDY_MODEL_DEVICE", "auto")
@@ -159,15 +179,26 @@ class LocalDiarizationEngine:
             "HF_TOKEN",
             "",
         )
+        self.speaker_worker = Path(os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip()) if os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip() else None
         self._whisper = None
         self._diarization = None
         self._load_lock = threading.Lock()
 
     def configuration_status(self) -> dict[str, object]:
-        dependencies_ready = all(
-            module_available(package)
-            for package in ("faster_whisper", "pyannote.audio", "torch")
+        if (
+            str(self.requested_device).strip().lower() == "auto"
+            and self._whisper is None
+            and self.device == "cpu"
+        ):
+            refreshed = local_accelerator("auto")
+            if bool(refreshed.get("available")):
+                self.accelerator = refreshed
+                self.device = "cuda"
+                self.compute_type = "float16"
+        speaker_runtime_ready = bool(self.speaker_worker and self.speaker_worker.is_file()) or all(
+            module_available(package) for package in ("pyannote.audio", "torch")
         )
+        dependencies_ready = module_available("faster_whisper") and speaker_runtime_ready
         bundled_models_ready = all(
             Path(model).is_dir()
             for model in (
@@ -395,6 +426,8 @@ class LocalDiarizationEngine:
         *,
         cancel_event: threading.Event,
     ) -> list[SpeakerTurn]:
+        if self.speaker_worker and self.speaker_worker.is_file():
+            return self._diarize_with_worker(path, cancel_event=cancel_event)
         pipeline = self._load_diarization()
         try:
             import soundfile
@@ -454,6 +487,53 @@ class LocalDiarizationEngine:
                     )
                 )
         return turns
+
+    def _diarize_with_worker(
+        self,
+        path: Path,
+        *,
+        cancel_event: threading.Event,
+    ) -> list[SpeakerTurn]:
+        assert self.speaker_worker is not None
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        process = subprocess.Popen(
+            [
+                str(self.speaker_worker),
+                "--audio",
+                str(path),
+                "--model",
+                str(self.diarization_model_name),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            creationflags=creation_flags,
+        )
+        while process.poll() is None:
+            if cancel_event.wait(0.1):
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                raise EngineCancelled("Transcription cancelled")
+        stdout, stderr = process.communicate()
+        try:
+            payload = json.loads(stdout or "{}")
+        except ValueError as error:
+            raise RuntimeError("The local speaker worker returned invalid output.") from error
+        if process.returncode != 0 or payload.get("status") != "ok":
+            detail = str(payload.get("error") or stderr or "Speaker recognition failed.").strip()
+            raise RuntimeError(detail[:1000])
+        return [
+            SpeakerTurn(
+                start_ms=max(0, round(float(turn.get("start", 0)) * 1000)),
+                end_ms=max(0, round(float(turn.get("end", 0)) * 1000)),
+                label=str(turn.get("speaker") or "UNKNOWN"),
+            )
+            for turn in payload.get("turns", [])
+            if isinstance(turn, dict)
+        ]
 
     def process(
         self,

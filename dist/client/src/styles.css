@@ -3409,6 +3409,84 @@ kbd {
   color: var(--ink-faint);
 }
 
+.component-options {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.component-options button {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 15px 16px;
+  color: var(--ink);
+  text-align: left;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.component-options button:hover:not(:disabled) {
+  border-color: var(--teal);
+  box-shadow: 0 5px 18px rgba(23, 111, 103, 0.1);
+}
+
+.component-options button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.component-options strong {
+  font-size: 12px;
+}
+
+.component-options span,
+.component-progress small {
+  font-size: 9px;
+  color: var(--ink-faint);
+}
+
+.component-options em {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 3px 6px;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 750;
+  color: var(--teal-deep);
+  background: var(--teal-pale);
+  border-radius: 999px;
+}
+
+.component-progress {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+}
+
+.component-progress > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+}
+
+.component-progress > i {
+  height: 7px;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.component-progress > i > span {
+  display: block;
+  height: 100%;
+  background: var(--teal);
+  border-radius: inherit;
+  transition: width 180ms ease;
+}
+
 .companion-setup__success-icon {
   display: grid;
   width: 58px;

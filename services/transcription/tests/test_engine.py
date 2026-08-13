@@ -126,7 +126,7 @@ class BundledModelConfigurationTests(unittest.TestCase):
     def test_bundled_models_are_preferred_without_a_user_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             model_root = Path(directory)
-            whisper = model_root / "faster-whisper-small"
+            whisper = model_root / "faster-whisper-selected"
             diarization = model_root / "speaker-diarization-community-1"
             whisper.mkdir()
             diarization.mkdir()
@@ -156,6 +156,26 @@ class BundledModelConfigurationTests(unittest.TestCase):
                 status = engine.configuration_status()
             self.assertTrue(status["ready"])
             self.assertEqual(status["source"], "bundled")
+
+    def test_reusable_speaker_worker_returns_local_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
+            worker.touch()
+            engine = LocalDiarizationEngine(device="cpu")
+            engine.speaker_worker = worker
+
+            class Process:
+                returncode = 0
+
+                def poll(self):
+                    return 0
+
+                def communicate(self):
+                    return ('{"status":"ok","turns":[{"start":1.25,"end":2.5,"speaker":"VOICE_1"}]}', "")
+
+            with patch("notesbuddy_transcription.engine.subprocess.Popen", return_value=Process()):
+                turns = engine._diarize_with_worker(Path("meeting.wav"), cancel_event=threading.Event())
+            self.assertEqual([(turn.start_ms, turn.end_ms, turn.label) for turn in turns], [(1250, 2500, "VOICE_1")])
 
 
 class FakeTurn:

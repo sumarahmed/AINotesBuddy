@@ -279,6 +279,7 @@ def create_app(
     allow_browser_pairing: bool | None = None,
     companion_version: str | None = None,
     system_audio_capture: object | None = None,
+    component_manager: object | None = None,
 ) -> FastAPI:
     active_engine = engine or engine_from_environment()
     active_analyzer = analyzer or analyzer_from_environment()
@@ -518,6 +519,12 @@ def create_app(
             ),
         }
 
+    def component_configuration() -> dict[str, Any] | None:
+        if hosted or component_manager is None:
+            return None
+        status_provider = getattr(component_manager, "status", None)
+        return dict(status_provider()) if callable(status_provider) else None
+
     def _raise_system_audio_error(error: BaseException) -> NoReturn:
         if isinstance(error, SystemAudioCaptureNotFound):
             status_code = 404
@@ -604,6 +611,7 @@ def create_app(
         model_status = model_configuration()
         analysis_status = analysis_configuration()
         system_audio_status = system_audio_configuration()
+        component_status = component_configuration()
         return {
             "product": "NotesBuddy Desktop Companion",
             "version": companion_version or "development",
@@ -629,6 +637,8 @@ def create_app(
             "systemAudioCapture": bool(system_audio_status["available"]),
             "systemAudioBackend": system_audio_status["backend"],
             "storage": "temporary job files only",
+            "componentSetupAvailable": component_status is not None,
+            "components": component_status,
         }
 
     @app.post("/v1/pairings")
@@ -662,6 +672,7 @@ def create_app(
         model_status = model_configuration()
         analysis_status = analysis_configuration()
         system_audio_status = system_audio_configuration()
+        component_status = component_configuration()
         return {
             "status": "ok",
             "engine": getattr(
@@ -684,7 +695,49 @@ def create_app(
             "systemAudioBackend": system_audio_status["backend"],
             "storage": "temporary job files only",
             "access": "anonymous-session" if hosted else "local-pairing",
+            "componentSetupAvailable": component_status is not None,
+            "components": component_status,
         }
+
+    @app.get("/v1/components", dependencies=[Depends(health_access)])
+    def component_status(response: Response) -> dict[str, Any]:
+        if hosted or component_manager is None:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        response.headers["Cache-Control"] = "no-store"
+        return dict(component_manager.status())
+
+    @app.post("/v1/components/install", dependencies=[Depends(health_access)])
+    def install_components(payload: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        if hosted or component_manager is None:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        requested = payload.get("components") if isinstance(payload, dict) else None
+        if not isinstance(requested, list):
+            raise HTTPException(status_code=400, detail="A component list is required.")
+        try:
+            return dict(component_manager.start_install(requested))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/v1/components/jobs/{job_id}", dependencies=[Depends(health_access)])
+    def component_job(job_id: str, response: Response) -> dict[str, Any]:
+        if hosted or component_manager is None:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        result = component_manager.job(job_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Component job was not found.")
+        response.headers["Cache-Control"] = "no-store"
+        return dict(result)
+
+    @app.delete("/v1/components/jobs/{job_id}", dependencies=[Depends(health_access)])
+    def pause_component_job(job_id: str) -> dict[str, Any]:
+        if hosted or component_manager is None:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        result = component_manager.pause(job_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Component job was not found.")
+        return dict(result)
 
     @app.post("/v1/system-audio/captures")
     def start_system_audio_capture(

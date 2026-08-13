@@ -133,6 +133,22 @@ class FakeSystemAudioManager:
             self.discard(capture_id)
 
 
+class FakeComponentManager:
+    def __init__(self) -> None:
+        self.jobs = {}
+
+    def status(self):
+        return {"ready": False, "components": {"whisper-small": {"installed": False}}, "activeJob": None}
+
+    def start_install(self, requested):
+        job = {"jobId": "component-job", "requested": requested, "status": "queued", "stage": "queued", "progress": 0.0, "error": None}
+        self.jobs[job["jobId"]] = job
+        return job
+
+    def job(self, job_id):
+        return self.jobs.get(job_id)
+
+
 @unittest.skipIf(TestClient is None, "FastAPI test dependencies are not installed")
 class LocalApiTests(unittest.TestCase):
     @classmethod
@@ -140,6 +156,7 @@ class LocalApiTests(unittest.TestCase):
         from notesbuddy_transcription.server import create_app
 
         cls.system_audio = FakeSystemAudioManager()
+        cls.components = FakeComponentManager()
         cls.client = TestClient(
             create_app(
                 engine=EmptyEngine(),
@@ -147,6 +164,7 @@ class LocalApiTests(unittest.TestCase):
                 pairing_token=PAIRING_TOKEN,
                 allowed_origins=["http://127.0.0.1:4173"],
                 system_audio_capture=cls.system_audio,
+                component_manager=cls.components,
             )
         )
         cls.headers = {"X-NotesBuddy-Pairing-Token": PAIRING_TOKEN}
@@ -161,6 +179,22 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(response.json()["storage"], "temporary job files only")
         self.assertTrue(response.json()["analysisAvailable"])
         self.assertEqual(response.json()["analysisModel"], "fake-analysis-model")
+        self.assertTrue(response.json()["componentSetupAvailable"])
+
+    def test_component_install_routes_require_pairing_and_report_jobs(self) -> None:
+        self.assertEqual(self.client.get("/v1/components").status_code, 401)
+        started = self.client.post(
+            "/v1/components/install",
+            headers=self.headers,
+            json={"components": ["whisper-small"]},
+        )
+        self.assertEqual(started.status_code, 200)
+        job = self.client.get(
+            f"/v1/components/jobs/{started.json()['jobId']}",
+            headers=self.headers,
+        )
+        self.assertEqual(job.status_code, 200)
+        self.assertEqual(job.json()["requested"], ["whisper-small"])
 
     def test_analysis_requires_pairing_and_returns_structured_result(self) -> None:
         payload = {

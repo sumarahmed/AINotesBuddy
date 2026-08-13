@@ -717,27 +717,19 @@ test("desktop connector rejects incompatible or manually paired services", async
   );
 });
 
-test("desktop connector rejects an installation without offline models", async () => {
+test("desktop connector pairs before optional offline models are installed", async () => {
+  const calls = [];
   const connector = new MeetingAudio.CompanionConnector({
-    fetchImpl: async () => ({
-      ok: true,
-      status: 200,
-      async json() {
-        return {
-          product: "NotesBuddy Desktop Companion",
-          apiVersion: 1,
-          status: "available",
-          browserPairing: true,
-          modelsReady: false,
-        };
-      },
-    }),
+    fetchImpl: async (url) => {
+      calls.push(url);
+      if (url.endsWith("/v1/companion")) return { ok: true, status: 200, async json() { return { product: "NotesBuddy Desktop Companion", apiVersion: 1, status: "available", browserPairing: true, modelsReady: false }; } };
+      if (url.endsWith("/v1/pairings")) return { ok: true, status: 200, async json() { return { pairingToken: "valid-browser-pairing-token-long-enough" }; } };
+      return { ok: true, status: 200, async json() { return { status: "ok", modelsReady: false }; } };
+    },
   });
-
-  await assert.rejects(
-    connector.connect(),
-    /offline models are missing/,
-  );
+  const connected = await connector.connect();
+  assert.equal(connected.health.modelsReady, false);
+  assert.equal(calls.length, 3);
 });
 
 test("transcription client sends pairing token and all source assets", async () => {

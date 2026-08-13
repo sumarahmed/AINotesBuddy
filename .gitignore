@@ -14,5 +14,7 @@ __pycache__/
 .verification/
 desktop/models/
 desktop/gpu-libs/
+desktop/components-release/
 desktop/out/
+desktop/out-speaker/
 desktop/release/

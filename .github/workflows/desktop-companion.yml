@@ -2,12 +2,6 @@ name: Windows desktop companion
 
 on:
   workflow_dispatch:
-    inputs:
-      include_models:
-        description: Bundle offline transcription and diarization models
-        required: true
-        default: true
-        type: boolean
   push:
     tags:
       - "companion-v*"
@@ -24,7 +18,6 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
-      INCLUDE_MODELS: ${{ github.event_name != 'workflow_dispatch' || inputs.include_models }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
@@ -80,14 +73,30 @@ jobs:
             Move-Item -Destination $gpuLibs -Force
           Remove-Item -LiteralPath $archive -Force
 
-      - name: Prepare offline models
-        if: env.INCLUDE_MODELS == 'true'
+      - name: Prepare reusable component packs
         shell: pwsh
         run: |
           if (-not $env:HF_TOKEN) {
             throw "Add the gated-model read token as the repository secret HF_TOKEN."
           }
-          python desktop/prepare_models.py --accept-pyannote-terms
+          $version = "${{ github.ref_name }}".Replace("companion-v", "")
+          if (-not $version -or $version -eq "${{ github.ref_name }}") {
+            $version = "2026.08.7"
+          }
+          python -m PyInstaller --noconfirm --clean --distpath desktop/out-speaker/dist --workpath desktop/out-speaker/work desktop/NotesBuddySpeakerWorker.spec
+          & desktop/out-speaker/dist/NotesBuddySpeakerWorker/NotesBuddySpeakerWorker.exe --self-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "The reusable speaker worker failed its packaged self-test."
+          }
+          python desktop/prepare_components.py --version $version --accept-pyannote-terms
+          $speakerCheck = Join-Path $env:RUNNER_TEMP "notesbuddy-speaker-check"
+          New-Item -ItemType Directory -Path $speakerCheck -Force | Out-Null
+          $speakerArchive = Get-ChildItem desktop/components-release -Filter "NotesBuddy-speaker-diarization-*.zip" | Select-Object -First 1
+          Expand-Archive -LiteralPath $speakerArchive.FullName -DestinationPath $speakerCheck -Force
+          & (Join-Path $speakerCheck "NotesBuddySpeakerWorker.exe") --self-test --model (Join-Path $speakerCheck "model")
+          if ($LASTEXITCODE -ne 0) {
+            throw "The speaker component could not load its packaged model."
+          }
 
       - name: Run service tests
         shell: pwsh
@@ -104,18 +113,19 @@ jobs:
       - name: Build and self-test Windows installer
         shell: pwsh
         run: |
-          $requireModels = $env:INCLUDE_MODELS -eq "true"
           $version = "${{ github.ref_name }}".Replace("companion-v", "")
           if (-not $version -or $version -eq "${{ github.ref_name }}") {
-            $version = "2026.08.6"
+            $version = "2026.08.7"
           }
-          ./desktop/build.ps1 -Python python -Version $version -RequireModels:$requireModels
+          ./desktop/build.ps1 -Python python -Version $version
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v6
         with:
           name: NotesBuddy-Windows-Companion
-          path: desktop/release/NotesBuddyCompanion-Setup-*.exe
+          path: |
+            desktop/release/NotesBuddyCompanion-Setup-*.exe
+            desktop/components-release/*.zip
           if-no-files-found: error
 
       - name: Publish tagged installer
@@ -126,9 +136,10 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $installer = Get-ChildItem -LiteralPath desktop/release -Filter "NotesBuddyCompanion-Setup-*.exe" | Select-Object -First 1
+          $assets = @($installer.FullName) + @(Get-ChildItem -LiteralPath desktop/components-release -Filter "*.zip" | ForEach-Object FullName)
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $installer.FullName --clobber
+            gh release upload $tag @assets --clobber
           } else {
-            gh release create $tag $installer.FullName --generate-notes --title "NotesBuddy Desktop Companion $tag"
+            gh release create $tag @assets --generate-notes --title "NotesBuddy Desktop Companion $tag"
           }

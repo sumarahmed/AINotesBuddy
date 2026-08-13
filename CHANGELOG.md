@@ -8,6 +8,19 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.13 - 2026-08-13
+
+### Changed
+
+- Companion 2026.08.7 uses a smaller core installer. Balanced/Accurate speech
+  models, speaker recognition, and NVIDIA acceleration are reusable first-run
+  component packs stored outside the application directory.
+- Component downloads report progress, resume partial transfers, verify
+  SHA-256 before extraction, reject unsafe archive paths, and survive companion
+  application upgrades.
+- CPU-only computers skip the NVIDIA pack; compatible NVIDIA computers install
+  it automatically with the selected local model.
+
 ## 2026.08.12 - 2026-08-13
 
 ### Changed
