@@ -148,10 +148,14 @@ keeps recent job status/results in process memory for one hour by default (and
 evicts older completed entries when its bounded job table fills). It has no
 job database or cloud synchronization.
 
-The website's default `hybrid` mode attempts this local path first. If the
-companion is absent, incompatible, blocked by browser local-network permission,
-or cannot pair, the UI shows **online fallback** and uses the configured hosted
-service. That fallback crosses the device boundary described below.
+The website's default `hybrid` mode uses this local path for recordings shorter
+than 8 minutes. Recordings of 8 minutes or longer use the configured hosted GPU
+by default to avoid near-real-time CPU processing. Users can turn off **Speed up
+long recordings online** before starting or retrying transcription to keep
+audio processing local. If the companion is absent, incompatible, blocked by
+browser local-network permission, or cannot pair, the UI also shows **online
+fallback** and uses the hosted service. Both cases cross the device boundary
+described below.
 
 First-entry setup is marked complete only after a successful companion health
 check and explicit user confirmation. Choosing the online fallback stores a

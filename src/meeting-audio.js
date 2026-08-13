@@ -3,6 +3,7 @@
 
   const SPEAKER_COLORS = ["violet", "amber", "coral", "teal"];
   const RECORDING_SOURCES = ["mixed", "microphone", "meeting"];
+  const LONG_RECORDING_SECONDS = 8 * 60;
 
   function createId(prefix) {
     const uniquePart =
@@ -45,6 +46,23 @@
       if (leftParts[index] > rightParts[index]) return 1;
     }
     return 0;
+  }
+
+  function selectTranscriptionRoute({
+    runtimeMode = "local",
+    currentMode = "local",
+    durationSeconds = 0,
+    accelerateLongRecordings = true,
+    hostedEndpoint = "",
+    longRecordingSeconds = LONG_RECORDING_SECONDS,
+  } = {}) {
+    const canAccelerate =
+      runtimeMode === "hybrid" &&
+      currentMode === "local" &&
+      Boolean(String(hostedEndpoint || "").trim()) &&
+      accelerateLongRecordings !== false &&
+      Number(durationSeconds) >= Number(longRecordingSeconds);
+    return canAccelerate ? "hosted" : currentMode;
   }
 
   function isVersionOutdated(installedVersion, latestVersion) {
@@ -1151,6 +1169,7 @@
   globalObject.NotesBuddyMeetingAudio = Object.freeze({
     RECORDING_SOURCES,
     SPEAKER_COLORS,
+    LONG_RECORDING_SECONDS,
     CompanionConnector,
     TranscriptionClient,
     applyTranscriptionResult,
@@ -1172,6 +1191,7 @@
     recordingAssetIds,
     recordingDownloadName,
     renameSpeaker,
+    selectTranscriptionRoute,
     speakerLabel,
     textSimilarity,
   });

@@ -6,7 +6,7 @@ the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
 The published version uses `Year.Month.MinorRelease`. The current release is
-`2026.08.9`; `package.json` represents it as `2026.8.9` for semantic-version
+`2026.08.10`; `package.json` represents it as `2026.8.10` for semantic-version
 compatibility.
 
 ## Browser settings
@@ -17,7 +17,8 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | --- | --- | --- |
 | Meeting audio | On | Capture default Windows output through a compatible companion; otherwise ask for a browser tab/window/screen audio source |
 | Browser live transcript draft | On | Use browser speech recognition for draft text and meeting-output timestamps for provisional **You**/**Guest** attribution when supported |
-| Automatically identify speakers | Off | Start the paired local job after saving a recording |
+| Automatically identify speakers | Off | Start transcription after saving a recording, using the selected long-recording processing policy |
+| Speed up long recordings online | On in hybrid mode | Send recordings of 8 minutes or longer to the hosted GPU; turn off to keep audio transcription on the local CPU |
 | Create professional meeting analysis | On | After final speaker transcription, send the complete transcript to the configured analysis service and build a grounded summary, highlights, confirmed decisions, and structured actions |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
 | Transcription mode | From `src/runtime-config.js` | `hybrid`, `local`, or centrally managed `hosted` |
@@ -28,6 +29,9 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 In `hybrid` mode, the browser first discovers and pairs with the fixed loopback
 companion. The automatic token remains only in page memory. If discovery or
 pairing fails, the centrally managed endpoint becomes the online fallback.
+By default, recordings of 8 minutes or longer also use that hosted endpoint to
+avoid near-real-time CPU processing. The user can disable this behavior in
+Settings before starting or retrying transcription.
 Hybrid and hosted users never see URL/token inputs or configure the owner's
 model token. Explicit `local` mode retains manual CLI fields for development.
 Deferring installation sets only a `sessionStorage` flag; it does not
@@ -41,13 +45,14 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
-| Product version | `2026.08.9` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
+| Product version | `2026.08.10` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
 | Latest companion version | `2026.08.5` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
 | Runtime transcription mode | `hybrid` | Public non-secret setting in `src/runtime-config.js` |
 | Local companion endpoint | `http://127.0.0.1:8765` | Fixed loopback discovery/API address |
 | Hosted fallback endpoint | Deployment URL | Used when the companion is unavailable |
+| Long-recording acceleration threshold | 8 minutes | Hybrid jobs at or above this duration use the hosted GPU unless disabled in Settings |
 | Analysis model | `Qwen/Qwen3-4B-Instruct-2507` at a pinned revision | Hosted instruction model configured only in `services/transcription/modal_app.py`; never downloaded by the browser |
 | Analysis schema/prompt version | Schema `1`, prompt `2` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
 | Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |

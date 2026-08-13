@@ -8,6 +8,17 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.10 - 2026-08-13
+
+### Changed
+
+- Hybrid installations now send recordings of 8 minutes or longer to the
+  hosted GPU by default instead of processing near real-time on the local CPU.
+- Added a **Speed up long recordings online** privacy control for users who
+  prefer local-only audio transcription.
+- Speaker transcription now displays its processing stage, percentage,
+  elapsed time, and whether work is running online or on this computer.
+
 ## 2026.08.9 - 2026-08-12
 
 ### Fixed

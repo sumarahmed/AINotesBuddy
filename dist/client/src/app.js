@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.9");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.10");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -298,6 +298,7 @@ const defaultSettings = {
   systemAudio: true,
   browserTranscription: true,
   autoTranscribe: false,
+  accelerateLongRecordings: true,
   transcriptionMode:
     runtimeTranscriptionMode === "hybrid"
       ? "hosted"
@@ -389,6 +390,7 @@ let activeAudioUrl;
 let toastId = 0;
 let companionConnectionPromise;
 const transcriptionControllers = new Map();
+const transcriptionClients = new Map();
 
 function createEmptyCaptureRuntime() {
   return {
@@ -548,6 +550,16 @@ function usesHostedTranscription() {
 
 function usesHybridTranscription() {
   return runtimeTranscriptionMode === "hybrid";
+}
+
+function transcriptionRouteForMeeting(meeting) {
+  return MeetingAudio.selectTranscriptionRoute({
+    runtimeMode: runtimeTranscriptionMode,
+    currentMode: state.settings.transcriptionMode,
+    durationSeconds: meetingDurationSeconds(meeting),
+    accelerateLongRecordings: state.settings.accelerateLongRecordings,
+    hostedEndpoint: runtimeHostedTranscriptionEndpoint,
+  });
 }
 
 function companionSystemAudioAvailable() {
@@ -1054,17 +1066,31 @@ function transcriptionWorkspace(meeting) {
       : status === "failed"
         ? "Retry speaker transcription"
         : "Transcribe and identify speakers";
-  const serviceDescription = usesHostedTranscription()
-    ? "Audio is sent to the public transcription service for this job and removed from its temporary storage after processing."
-    : "Uses the paired local companion. Audio is processed on this computer and temporary service files are removed.";
-  const failureDescription = usesHostedTranscription()
+  const route = isRunning
+    ? meeting.transcription?.route || state.settings.transcriptionMode
+    : transcriptionRouteForMeeting(meeting);
+  const accelerated = route === "hosted" && !usesHostedTranscription();
+  const serviceDescription = route === "hosted"
+    ? accelerated
+      ? `This ${durationLabel(meetingDurationSeconds(meeting))} recording will use faster online GPU processing. Audio is removed from temporary service storage after the job.`
+      : "Audio is sent to the public transcription service for this job and removed from its temporary storage after processing."
+    : meetingDurationSeconds(meeting) >= MeetingAudio.LONG_RECORDING_SECONDS
+      ? "Private on-device processing is selected. Long recordings can take close to their recorded duration on a CPU; enable faster processing in Settings to use the online GPU."
+      : "Uses the paired local companion. Audio is processed on this computer and temporary service files are removed.";
+  const failureDescription = route === "hosted"
     ? "The public transcription service could not complete this job."
     : "The local companion could not complete this job.";
+  const progress = Math.min(100, Math.max(0, Math.round(Number(meeting.transcription?.progress || 0) * 100)));
+  const elapsedSeconds = meeting.transcription?.requestedAt
+    ? Math.max(0, Math.round((Date.now() - Date.parse(meeting.transcription.requestedAt)) / 1000))
+    : 0;
+  const runningDescription = `${escapeHtml(meeting.transcription?.stage || statusLabel)} · ${progress}% · ${escapeHtml(durationLabel(elapsedSeconds))} elapsed · ${route === "hosted" ? "online GPU" : "this computer"}`;
   return `<section class="transcription-workspace transcription-workspace--${escapeHtml(status)}">
     <div>
       <span class="eyebrow">Speaker transcription</span>
       <h3>${escapeHtml(statusLabel)}</h3>
-      <p>${status === "completed" ? `${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"} · ${(meeting.speakers || []).length} speaker${(meeting.speakers || []).length === 1 ? "" : "s"}` : status === "failed" ? escapeHtml(meeting.transcription?.error || failureDescription) : serviceDescription}</p>
+      <p>${status === "completed" ? `${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"} · ${(meeting.speakers || []).length} speaker${(meeting.speakers || []).length === 1 ? "" : "s"}` : status === "failed" ? escapeHtml(meeting.transcription?.error || failureDescription) : isRunning ? runningDescription : serviceDescription}</p>
+      ${isRunning ? `<div class="transcription-progress" role="progressbar" aria-label="Speaker transcription progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><i style="width:${progress}%"></i></div>` : ""}
     </div>
     <div class="transcription-workspace__actions">
       ${isRunning ? `<button type="button" class="button button--quiet" data-action="cancel-transcription">Cancel</button>` : ""}
@@ -1244,10 +1270,10 @@ function settingsPanel() {
         fallback: "online fallback",
         unavailable: "unavailable",
       }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus);
-  const privacyMessage = hosted
-    ? hybrid
-      ? "Recordings stay in this browser. While the desktop companion is unavailable, requested transcription uses the temporary online service. Professional analysis sends only the completed transcript to the configured online service."
-      : "Recordings stay in this browser until transcription is requested. Selected audio is sent to the public service and removed from its temporary storage after processing; professional analysis sends the completed transcript."
+  const privacyMessage = hybrid
+    ? "Recordings stay in this browser. Meetings of 8 minutes or longer use the temporary online GPU by default for faster transcription; turn off faster long-recording processing to keep audio transcription on this device. Professional analysis sends only the completed transcript online."
+    : hosted
+      ? "Recordings stay in this browser until transcription is requested. Selected audio is sent to the public service and removed from its temporary storage after processing; professional analysis sends the completed transcript."
     : runtimeHostedTranscriptionEndpoint
       ? "Audio transcription stays on this device. Professional analysis sends only the completed transcript to the configured online service. Browser speech recognition may use your browser provider’s service."
       : "Audio, transcripts, and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.";
@@ -1255,7 +1281,8 @@ function settingsPanel() {
     ? `<section class="settings-section">
         <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
         <div class="service-check"><span class="service-check__status service-check__status--${updateRequired ? "update" : escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
-        <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} to receive the latest capture and security fixes.` : hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is processing audio privately on this computer. Pairing is automatic and expires when the companion restarts.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
+        <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} to receive the latest capture and security fixes.` : hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is available for private processing. Pairing is automatic and expires when the companion restarts.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
+        ${toggle("accelerateLongRecordings", "Speed up long recordings online", "For recordings of 8 minutes or longer, use the hosted GPU instead of waiting for CPU-speed local processing. Turn this off for local-only audio transcription.")}
         <div class="companion-actions"><button type="button" class="button button--quiet" data-action="show-companion-setup">Setup guide</button><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}${updateRequired ? "Download update" : "Windows downloads"}</a></div>
       </section>`
     : hosted
@@ -1273,7 +1300,9 @@ function settingsPanel() {
       </section>`;
   const autoTranscribeDescription = hosted
     ? "Send saved source tracks to the public transcription service after capture."
-    : "Send saved local tracks to the paired localhost companion after capture.";
+    : hybrid
+      ? "Process saved tracks automatically; meetings of 8 minutes or longer use the online GPU when faster processing is enabled."
+      : "Send saved local tracks to the paired localhost companion after capture.";
   return `<div class="drawer-backdrop" data-action="close-settings">
     <aside class="settings-drawer" data-panel="settings">
       <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
@@ -2880,11 +2909,16 @@ async function connectLocalCompanion({
   }
 }
 
-function createTranscriptionClient() {
+function createTranscriptionClient({ mode, endpoint } = {}) {
+  const selectedMode = mode || state.settings.transcriptionMode;
   return new MeetingAudio.TranscriptionClient({
-    endpoint: state.settings.transcriptionEndpoint,
-    mode: state.settings.transcriptionMode,
-    token: usesHostedTranscription()
+    endpoint:
+      endpoint ||
+      (selectedMode === "hosted"
+        ? runtimeHostedTranscriptionEndpoint || state.settings.transcriptionEndpoint
+        : state.settings.transcriptionEndpoint),
+    mode: selectedMode,
+    token: selectedMode === "hosted"
       ? ""
       : usesHybridTranscription()
         ? state.companion.pairingToken
@@ -3059,12 +3093,16 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
 
   const controller = new AbortController();
   transcriptionControllers.set(meeting.id, controller);
-  let client = createTranscriptionClient();
+  const jobMode = transcriptionRouteForMeeting(meeting);
+  let client = createTranscriptionClient({ mode: jobMode });
+  transcriptionClients.set(meeting.id, client);
   meeting.transcription = {
     ...(meeting.transcription || {}),
     status: "queued",
     error: null,
     progress: 0,
+    stage: jobMode === "hosted" ? "uploading to online GPU" : "preparing local processing",
+    route: jobMode,
     requestedAt: new Date().toISOString(),
   };
   save();
@@ -3081,7 +3119,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
           meetingId: meeting.id,
           captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
           captureClockVersion: meeting.captureClockVersion || 1,
-          ...(usesHostedTranscription()
+          ...(jobMode === "hosted"
             ? {}
             : { localSpeakerName: currentUserName() }),
           durationMs: Math.max(
@@ -3096,13 +3134,14 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
     } catch (error) {
       if (
         !usesHybridTranscription() ||
-        usesHostedTranscription() ||
+        jobMode === "hosted" ||
         error?.status !== 401
       ) {
         throw error;
       }
       await connectLocalCompanion({ silent: true, force: true });
-      client = createTranscriptionClient();
+      client = createTranscriptionClient({ mode: "local" });
+      transcriptionClients.set(meeting.id, client);
       created = await createJob();
     }
     meeting.transcription = {
@@ -3111,7 +3150,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
       jobId: created.jobId,
       provider:
         created.engine ||
-        (usesHostedTranscription()
+        (jobMode === "hosted"
           ? "public-transcription-service"
           : "local-companion"),
     };
@@ -3123,7 +3162,9 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
       onProgress(job) {
         meeting.transcription.status = job.status || "processing";
         meeting.transcription.progress = Number(job.progress) || 0;
+        meeting.transcription.stage = String(job.stage || "processing");
         save();
+        render();
       },
     });
     MeetingAudio.applyTranscriptionResult(meeting, completed, state.profile);
@@ -3138,7 +3179,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
     render();
     showToast(
       "Speaker transcript ready",
-      `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified ${usesHostedTranscription() ? "by the public service" : "locally"}.`,
+      `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified ${jobMode === "hosted" ? "by the online GPU" : "locally"}.`,
     );
     if (state.settings.autoSummarize && meeting.transcript.length) {
       await analyzeMeeting(meeting);
@@ -3163,6 +3204,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
     }
   } finally {
     transcriptionControllers.delete(meeting.id);
+    transcriptionClients.delete(meeting.id);
   }
 }
 
@@ -3171,7 +3213,9 @@ async function cancelMeetingTranscription(meeting = selectedMeeting()) {
   transcriptionControllers.get(meeting.id)?.abort();
   const jobId = meeting.transcription?.jobId;
   if (jobId) {
-    createTranscriptionClient().cancelJob(jobId).catch(() => {});
+    (transcriptionClients.get(meeting.id) || createTranscriptionClient())
+      .cancelJob(jobId)
+      .catch(() => {});
   }
   meeting.transcription = {
     ...(meeting.transcription || {}),
