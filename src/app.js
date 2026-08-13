@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.10");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.11");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -514,6 +514,13 @@ function durationLabel(totalSeconds) {
   if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`;
   if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
   return `${(seconds / 3600).toFixed(1)} hrs`;
+}
+
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
 function meetingDurationSeconds(meeting) {
@@ -3110,11 +3117,12 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
 
   try {
     const blobs = await loadMeetingRecordingBlobs(meeting);
+    const uploadBlobs = MeetingAudio.selectTranscriptionBlobs(blobs);
     const createJob = () =>
       client.createJob({
-        microphoneBlob: blobs.microphone,
-        meetingBlob: blobs.meeting,
-        mixedBlob: blobs.mixed,
+        microphoneBlob: uploadBlobs.microphone,
+        meetingBlob: uploadBlobs.meeting,
+        mixedBlob: uploadBlobs.mixed,
         metadata: {
           meetingId: meeting.id,
           captureStartedAt: meeting.captureStartedAt || meeting.dateISO,
@@ -3127,6 +3135,17 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
             Number(meeting.durationSeconds || 0) * 1000,
           ),
         },
+        signal: controller.signal,
+        onUploadProgress:
+          jobMode === "hosted"
+            ? ({ loaded, total, ratio }) => {
+                const percent = Math.min(100, Math.max(0, Math.round(ratio * 100)));
+                meeting.transcription.stage = `uploading audio ${percent}% (${formatBytes(loaded)} of ${formatBytes(total)})`;
+                meeting.transcription.progress = Math.min(0.08, ratio * 0.08);
+                save();
+                render();
+              }
+            : undefined,
       });
     let created;
     try {

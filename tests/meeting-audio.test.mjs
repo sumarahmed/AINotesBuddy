@@ -62,6 +62,121 @@ test("routes long hybrid recordings to hosted acceleration without changing shor
   );
 });
 
+test("omits the redundant mixed upload when isolated audio exists", () => {
+  const microphone = new Blob(["microphone"]);
+  const meeting = new Blob(["meeting"]);
+  const mixed = new Blob(["mixed"]);
+  assert.deepEqual(
+    MeetingAudio.selectTranscriptionBlobs({ microphone, meeting, mixed }),
+    { microphone, meeting, mixed: null },
+  );
+  assert.deepEqual(MeetingAudio.selectTranscriptionBlobs({ mixed }), {
+    microphone: null,
+    meeting: null,
+    mixed,
+  });
+});
+
+test("hosted uploads report byte progress before the transcription job is created", async () => {
+  const original = globalThis.XMLHttpRequest;
+  const progress = [];
+  class FakeUploadRequest {
+    constructor() {
+      this.upload = {};
+      this.headers = {};
+      this.status = 200;
+      this.response = { jobId: "job-upload-progress", status: "queued" };
+    }
+    open(method, url) {
+      this.method = method;
+      this.url = url;
+    }
+    setRequestHeader(name, value) {
+      this.headers[name] = value;
+    }
+    send(body) {
+      this.body = body;
+      this.upload.onprogress?.({
+        lengthComputable: true,
+        loaded: 50,
+        total: 100,
+      });
+      queueMicrotask(() => this.onload?.());
+    }
+    abort() {
+      this.onabort?.();
+    }
+  }
+  globalThis.XMLHttpRequest = FakeUploadRequest;
+  try {
+    const client = new MeetingAudio.TranscriptionClient({
+      endpoint: "https://transcribe.example.test",
+      mode: "hosted",
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sessionToken: "progress-session",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      }),
+      sessionStorage: null,
+    });
+    const result = await client.createJob({
+      meetingBlob: new Blob(["meeting audio"]),
+      onUploadProgress: (event) => progress.push(event),
+    });
+    assert.equal(result.jobId, "job-upload-progress");
+    assert.deepEqual(progress, [{ loaded: 50, total: 100, ratio: 0.5 }]);
+  } finally {
+    globalThis.XMLHttpRequest = original;
+  }
+});
+
+test("cancelling a hosted upload aborts the active transfer", async () => {
+  const original = globalThis.XMLHttpRequest;
+  let activeRequest;
+  class PendingUploadRequest {
+    constructor() {
+      this.upload = {};
+      activeRequest = this;
+    }
+    open() {}
+    setRequestHeader() {}
+    send() {}
+    abort() {
+      this.onabort?.();
+    }
+  }
+  globalThis.XMLHttpRequest = PendingUploadRequest;
+  try {
+    const client = new MeetingAudio.TranscriptionClient({
+      endpoint: "https://transcribe.example.test",
+      mode: "hosted",
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sessionToken: "cancel-session",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      }),
+    });
+    const controller = new AbortController();
+    const pending = client.createJob({
+      meetingBlob: new Blob(["meeting audio"]),
+      onUploadProgress: () => {},
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(activeRequest);
+    controller.abort();
+    await assert.rejects(pending, (error) => error?.name === "AbortError");
+  } finally {
+    globalThis.XMLHttpRequest = original;
+  }
+});
+
 test("migrates a legacy single recording without losing its audio id", () => {
   const meeting = {
     audioId: "legacy-audio",

@@ -6,7 +6,7 @@ the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
 The published version uses `Year.Month.MinorRelease`. The current release is
-`2026.08.10`; `package.json` represents it as `2026.8.10` for semantic-version
+`2026.08.11`; `package.json` represents it as `2026.8.11` for semantic-version
 compatibility.
 
 ## Browser settings
@@ -45,7 +45,7 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
-| Product version | `2026.08.10` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
+| Product version | `2026.08.11` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
 | Latest companion version | `2026.08.5` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
