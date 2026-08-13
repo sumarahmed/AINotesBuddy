@@ -1250,7 +1250,7 @@ async function runMainWorkflow(browser, baseUrl) {
     .waitFor({ timeout: 10000 });
   assert.match(multipartBody, /name="microphone"/);
   assert.match(multipartBody, /name="meeting"/);
-  assert.match(multipartBody, /name="mixed"/);
+  assert.doesNotMatch(multipartBody, /name="mixed"/);
   await page
     .getByText("Professional analysis ready", { exact: true })
     .waitFor({ timeout: 10000 });

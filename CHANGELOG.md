@@ -8,6 +8,16 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.11 - 2026-08-13
+
+### Fixed
+
+- Hosted jobs now display real byte-level upload progress instead of appearing
+  stuck at 0% while a long recording transfers.
+- Dual-source meetings no longer upload the redundant mixed recording when
+  microphone and meeting tracks are already available.
+- Cancelling during upload now aborts the transfer immediately.
+
 ## 2026.08.10 - 2026-08-13
 
 ### Changed

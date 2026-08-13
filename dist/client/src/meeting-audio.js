@@ -65,6 +65,18 @@
     return canAccelerate ? "hosted" : currentMode;
   }
 
+  function selectTranscriptionBlobs({
+    microphone = null,
+    meeting = null,
+    mixed = null,
+  } = {}) {
+    return {
+      microphone,
+      meeting,
+      mixed: microphone || meeting ? null : mixed,
+    };
+  }
+
   function isVersionOutdated(installedVersion, latestVersion) {
     return compareVersions(installedVersion, latestVersion) === -1;
   }
@@ -1099,6 +1111,8 @@
       meetingBlob,
       mixedBlob,
       metadata = {},
+      onUploadProgress,
+      signal,
     }) {
       if (!microphoneBlob && !meetingBlob && !mixedBlob) {
         throw new Error("At least one recording source is required");
@@ -1114,9 +1128,106 @@
         form.append("mixed", mixedBlob, "mixed.webm");
       }
       form.append("metadata", JSON.stringify(metadata));
+      if (
+        this.mode === "hosted" &&
+        typeof onUploadProgress === "function" &&
+        typeof globalObject.XMLHttpRequest === "function"
+      ) {
+        return this.upload("/v1/transcriptions", {
+          body: form,
+          onUploadProgress,
+          signal,
+        });
+      }
       return this.request("/v1/transcriptions", {
         method: "POST",
         body: form,
+        signal,
+      });
+    }
+
+    async upload(
+      path,
+      { body, onUploadProgress, signal, retrySession = true } = {},
+    ) {
+      await this.ensureSession();
+      return new Promise((resolve, reject) => {
+        const request = new globalObject.XMLHttpRequest();
+        const abort = () => request.abort();
+        const finish = () => signal?.removeEventListener("abort", abort);
+        const fail = (message, status = 0) => {
+          finish();
+          const error = new Error(message);
+          error.status = status;
+          reject(error);
+        };
+        request.open("POST", `${this.endpoint}${path}`);
+        for (const [name, value] of Object.entries(this.headers())) {
+          request.setRequestHeader(name, value);
+        }
+        request.responseType = "json";
+        request.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            onUploadProgress?.({
+              loaded: event.loaded,
+              total: event.total,
+              ratio: event.loaded / event.total,
+            });
+          }
+        };
+        request.onerror = () =>
+          fail("The audio upload failed. Check your connection and retry.");
+        request.onabort = () => {
+          finish();
+          const error = new Error("Transcription cancelled");
+          error.name = "AbortError";
+          reject(error);
+        };
+        request.onload = async () => {
+          finish();
+          const payload =
+            request.response && typeof request.response === "object"
+              ? request.response
+              : (() => {
+                  try {
+                    return JSON.parse(request.responseText || "null");
+                  } catch {
+                    return null;
+                  }
+                })();
+          if (request.status === 401 && retrySession) {
+            this.clearSession();
+            try {
+              resolve(
+                await this.upload(path, {
+                  body,
+                  onUploadProgress,
+                  signal,
+                  retrySession: false,
+                }),
+              );
+            } catch (error) {
+              reject(error);
+            }
+            return;
+          }
+          if (request.status < 200 || request.status >= 300) {
+            fail(
+              payload?.detail ||
+                payload?.error ||
+                `Transcription service returned ${request.status}`,
+              request.status,
+            );
+            return;
+          }
+          resolve(payload);
+        };
+        if (signal?.aborted) {
+          request.abort();
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+        request.send(body);
       });
     }
 
@@ -1191,6 +1302,7 @@
     recordingAssetIds,
     recordingDownloadName,
     renameSpeaker,
+    selectTranscriptionBlobs,
     selectTranscriptionRoute,
     speakerLabel,
     textSimilarity,
