@@ -29,9 +29,17 @@ def activate_optional_gpu_runtime() -> bool:
     if not configured or not hasattr(os, "add_dll_directory"):
         return False
     directory = Path(configured).expanduser().resolve()
-    if not directory.is_dir():
+    required = ("cublas64_12.dll", "cudnn64_9.dll")
+    if not directory.is_dir() or not all(
+        (directory / filename).is_file() for filename in required
+    ):
         return False
     try:
+        path_entries = os.environ.get("PATH", "").split(os.pathsep)
+        if str(directory) not in path_entries:
+            os.environ["PATH"] = str(directory) + os.pathsep + os.environ.get(
+                "PATH", ""
+            )
         if not _DLL_DIRECTORY_HANDLES:
             _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(directory)))
         return True
@@ -56,7 +64,17 @@ def local_accelerator(requested_device: str = "auto") -> dict[str, object]:
             "available": requested.startswith("cuda"),
         }
     try:
-        activate_optional_gpu_runtime()
+        gpu_runtime_configured = bool(
+            os.getenv("NOTESBUDDY_GPU_LIB_DIR", "").strip()
+        )
+        gpu_runtime_active = activate_optional_gpu_runtime()
+        if os.name == "nt" and gpu_runtime_configured and not gpu_runtime_active:
+            return {
+                "requested": "auto",
+                "device": "cpu",
+                "name": "CPU (NVIDIA pack not installed)",
+                "available": False,
+            }
         import ctranslate2
         cuda_available = bool(ctranslate2.get_cuda_device_count() > 0)
         if cuda_available:
@@ -184,6 +202,18 @@ class LocalDiarizationEngine:
         self._diarization = None
         self._load_lock = threading.Lock()
 
+    def _fallback_to_cpu(self, error: BaseException, phase: str) -> None:
+        self._whisper = None
+        self.device = "cpu"
+        self.compute_type = "int8"
+        self.accelerator = {
+            "requested": "auto",
+            "device": "cpu",
+            "name": f"CPU (CUDA {phase} failed)",
+            "available": False,
+            "fallbackReason": str(error)[:240],
+        }
+
     def configuration_status(self) -> dict[str, object]:
         if (
             str(self.requested_device).strip().lower() == "auto"
@@ -260,15 +290,7 @@ class LocalDiarizationEngine:
                         and self.device.startswith("cuda")
                     ):
                         raise
-                    self.device = "cpu"
-                    self.compute_type = "int8"
-                    self.accelerator = {
-                        "requested": "auto",
-                        "device": "cpu",
-                        "name": "CPU (CUDA initialization failed)",
-                        "available": False,
-                        "fallbackReason": str(error)[:240],
-                    }
+                    self._fallback_to_cpu(error, "initialization")
                     self._whisper = WhisperModel(
                         self.whisper_model_name,
                         device="cpu",
@@ -346,6 +368,23 @@ class LocalDiarizationEngine:
             return None
 
     def _transcribe(
+        self,
+        path: Path,
+        *,
+        cancel_event: threading.Event,
+    ) -> tuple[list[Word], str | None]:
+        try:
+            return self._transcribe_once(path, cancel_event=cancel_event)
+        except (RuntimeError, OSError) as error:
+            if not (
+                str(self.requested_device).lower() == "auto"
+                and self.device.startswith("cuda")
+            ):
+                raise
+            self._fallback_to_cpu(error, "inference")
+            return self._transcribe_once(path, cancel_event=cancel_event)
+
+    def _transcribe_once(
         self,
         path: Path,
         *,

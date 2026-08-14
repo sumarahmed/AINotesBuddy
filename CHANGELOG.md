@@ -8,6 +8,23 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.15 - 2026-08-14
+
+### Fixed
+
+- Companion 2026.08.9 extracts deeply nested speaker-runtime files through
+  Windows extended paths instead of failing at the legacy 260-character limit.
+- Automatic acceleration now selects CPU when the optional NVIDIA runtime is
+  absent and retries once on CPU if CUDA fails during first inference.
+- The NVIDIA DLL directory is added to the companion process search path so
+  CTranslate2 can load cuBLAS and cuDNN from the reusable component pack.
+
+### Changed
+
+- Stable model packs are now versioned independently from the core companion.
+  Core-only upgrades reuse compatible Accurate, speaker, and NVIDIA components
+  instead of rebuilding and downloading multiple gigabytes again.
+
 ## 2026.08.14 - 2026-08-14
 
 ### Fixed

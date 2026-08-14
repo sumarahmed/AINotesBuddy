@@ -48,6 +48,12 @@ could fail with HTTP 416. A complete partial archive is verified and installed
 without another network request, stale oversized files are reset, and a server
 that rejects a resume request is retried once from the beginning.
 
+Version `2026.08.9` supports Windows extended paths while extracting the
+speaker runtime, activates optional NVIDIA DLLs through the process search
+path, and retries failed CUDA inference on CPU. Stable component checksums are
+independent of the core application version, so core-only upgrades reuse
+existing model and GPU packs.
+
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
@@ -114,11 +120,11 @@ Public releases provide independent reusable assets for:
 - `Systran/faster-whisper-small`;
 - `pyannote/speaker-diarization-community-1`.
 
-The publisher—not each customer—accepts the gated model conditions and stores a
-read-only token as the GitHub repository secret `HF_TOKEN`. The Windows release
-workflow uses it only while downloading weights. It packages local model
-directories, records immutable revisions in `MODEL_MANIFEST.json`, and does not
-write the token to an artifact.
+The publisher—not each customer—accepts the gated model conditions and uses a
+read-only `HF_TOKEN` only when intentionally preparing a new component release.
+Core companion releases reuse the pinned public component manifest and do not
+need the token. Component preparation records immutable model revisions and
+does not write the token to an artifact.
 
 Before public distribution, review
 [`desktop/MODEL_NOTICES.md`](../desktop/MODEL_NOTICES.md). The model preparation
@@ -126,19 +132,18 @@ step deliberately requires `--accept-pyannote-terms`.
 
 ## Create a release
 
-In GitHub:
+Run **Windows desktop companion** from the Actions tab to test a core installer.
+When ready, create and push a tag such as `companion-v2026.08.9`.
 
-1. Open **Settings → Secrets and variables → Actions**.
-2. Add a repository secret named `HF_TOKEN` containing the publisher's
-   read-only, gated-model token.
-3. Run **Windows desktop companion** from the Actions tab with
-   to test the core installer and all component packs.
-4. When ready, create and push a tag such as `companion-v2026.08.8`.
+The tag workflow runs service tests, builds a PyInstaller one-directory
+application, executes the packaged `--self-test`, creates a per-user Inno Setup
+installer, uploads the Actions artifact, and attaches the installer to the
+matching GitHub Release. It does not rebuild unchanged component ZIPs.
 
-The tag workflow runs service tests, prepares pinned component archives, builds a
-PyInstaller one-directory application, executes the packaged `--self-test`,
-creates a per-user Inno Setup installer, uploads the Actions artifact, and
-attaches the installer plus component ZIPs to the matching GitHub Release.
+Only when model, speaker-worker, or GPU contents intentionally change, configure
+the publisher's gated-model `HF_TOKEN`, run `desktop/prepare_components.py`,
+publish those component ZIPs, and update `desktop/component-manifest.json` with
+their immutable URLs, sizes, and checksums.
 
 ## Local developer build
 
@@ -147,11 +152,8 @@ Use Python 3.11 on Windows:
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -r services\transcription\requirements-packaging.txt
-$env:HF_TOKEN = "publisher-build-token"
-python desktop\prepare_components.py --version 2026.08.8 --accept-pyannote-terms
-.\desktop\build.ps1 -Python python -Version 2026.08.8
+.\desktop\build.ps1 -Python python -Version 2026.08.9
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -160,7 +162,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.8 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.9 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 

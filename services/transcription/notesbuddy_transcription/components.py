@@ -100,6 +100,26 @@ class ComponentManager:
     def _marker(self, component_id: str) -> Path:
         return self.root / ".installed" / f"{component_id}.json"
 
+    @staticmethod
+    def _accepted_checksums(component: dict[str, Any]) -> set[str]:
+        values = [component.get("sha256")]
+        compatible = component.get("compatibleSha256", [])
+        if isinstance(compatible, list):
+            values.extend(compatible)
+        return {
+            str(value).strip().lower()
+            for value in values
+            if str(value or "").strip()
+        }
+
+    @staticmethod
+    def _filesystem_path(path: Path) -> Path:
+        """Use Win32 extended paths for deeply nested packaged runtimes."""
+        if os.name != "nt":
+            return path
+        resolved = str(path.resolve())
+        return Path(resolved if resolved.startswith("\\\\?\\") else f"\\\\?\\{resolved}")
+
     def is_installed(self, component_id: str) -> bool:
         component = self._component(component_id)
         try:
@@ -109,7 +129,8 @@ class ComponentManager:
         target = self.root / str(component.get("destination") or component_id)
         return bool(
             target.is_dir()
-            and marker.get("sha256") == component.get("sha256")
+            and str(marker.get("sha256") or "").lower()
+            in self._accepted_checksums(component)
         )
 
     def status(self) -> dict[str, Any]:
@@ -237,7 +258,11 @@ class ComponentManager:
         if digest != expected_digest:
             partial.unlink(missing_ok=True)
             raise RuntimeError(f"Security check failed for {component.get('name', component_id)}.")
-        staging = self.root / ".staging" / f"{component_id}-{uuid4().hex}"
+        # Component packs can contain deeply nested Python package metadata.
+        # Keep the transient prefix deliberately short so extraction stays
+        # below the legacy Windows MAX_PATH limit even when the user profile
+        # and component names are relatively long.
+        staging = self.root / ".s" / uuid4().hex[:8]
         staging.mkdir(parents=True, exist_ok=False)
         with job.lock:
             job.status = "installing"
@@ -249,11 +274,11 @@ class ComponentManager:
                     resolved = (staging / member.filename).resolve()
                     if destination not in resolved.parents and resolved != destination:
                         raise RuntimeError("The component archive contains an unsafe path.")
-                archive.extractall(staging)
+                archive.extractall(self._filesystem_path(staging))
             target = self.root / str(component.get("destination") or component_id)
             backup = target.with_name(f"{target.name}.previous")
             if backup.exists():
-                shutil.rmtree(backup)
+                shutil.rmtree(self._filesystem_path(backup))
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 os.replace(target, backup)
@@ -263,7 +288,7 @@ class ComponentManager:
                 if backup.exists() and not target.exists():
                     os.replace(backup, target)
                 raise
-            shutil.rmtree(backup, ignore_errors=True)
+            shutil.rmtree(self._filesystem_path(backup), ignore_errors=True)
             marker = self._marker(component_id)
             marker.parent.mkdir(parents=True, exist_ok=True)
             for other_id, other in self.manifest().get("components", {}).items():
@@ -276,7 +301,7 @@ class ComponentManager:
             marker.write_text(json.dumps({"version": component.get("version"), "sha256": digest}, indent=2), encoding="utf-8")
             partial.unlink(missing_ok=True)
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(self._filesystem_path(staging), ignore_errors=True)
 
     @staticmethod
     def _sha256(path: Path) -> str:

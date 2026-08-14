@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import threading
@@ -10,7 +11,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from notesbuddy_transcription.engine import LocalDiarizationEngine, local_accelerator
+from notesbuddy_transcription import engine as engine_module
+from notesbuddy_transcription.engine import (
+    LocalDiarizationEngine,
+    activate_optional_gpu_runtime,
+    local_accelerator,
+)
 
 
 class FakeWhisper:
@@ -86,6 +92,27 @@ class FakeWhisper:
 
 
 class BundledModelConfigurationTests(unittest.TestCase):
+    def test_optional_gpu_runtime_is_added_to_the_process_dll_search_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            for filename in ("cublas64_12.dll", "cudnn64_9.dll"):
+                (runtime / filename).touch()
+            previous_handles = list(engine_module._DLL_DIRECTORY_HANDLES)
+            engine_module._DLL_DIRECTORY_HANDLES.clear()
+            try:
+                with patch.dict(
+                    "os.environ",
+                    {"NOTESBUDDY_GPU_LIB_DIR": str(runtime), "PATH": "existing"},
+                    clear=False,
+                ), patch.object(os, "add_dll_directory", return_value=object()):
+                    self.assertTrue(activate_optional_gpu_runtime())
+                    self.assertEqual(
+                        os.environ["PATH"].split(os.pathsep)[0],
+                        str(runtime.resolve()),
+                    )
+            finally:
+                engine_module._DLL_DIRECTORY_HANDLES[:] = previous_handles
+
     def test_automatic_device_uses_cuda_when_both_runtimes_see_the_gpu(self) -> None:
         fake_ctranslate = SimpleNamespace(get_cuda_device_count=lambda: 1)
         with patch.dict(
@@ -100,6 +127,18 @@ class BundledModelConfigurationTests(unittest.TestCase):
         accelerator = local_accelerator("cpu")
         self.assertEqual(accelerator["device"], "cpu")
         self.assertFalse(accelerator["available"])
+
+    def test_missing_optional_nvidia_pack_does_not_select_unusable_cuda(self) -> None:
+        fake_ctranslate = SimpleNamespace(get_cuda_device_count=lambda: 1)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            "os.environ",
+            {"NOTESBUDDY_GPU_LIB_DIR": str(Path(directory) / "missing")},
+            clear=False,
+        ), patch.dict("sys.modules", {"ctranslate2": fake_ctranslate}):
+            accelerator = local_accelerator("auto")
+
+        self.assertEqual(accelerator["device"], "cpu")
+        self.assertIn("pack not installed", accelerator["name"])
 
     def test_automatic_cuda_initialization_safely_retries_on_cpu(self) -> None:
         attempts = []
@@ -122,6 +161,47 @@ class BundledModelConfigurationTests(unittest.TestCase):
         self.assertEqual(attempts, [("cuda", "float16"), ("cpu", "int8")])
         self.assertEqual(engine.device, "cpu")
         self.assertIn("initialization failed", engine.accelerator["name"])
+
+    def test_automatic_cuda_inference_failure_retries_once_on_cpu(self) -> None:
+        attempts = []
+
+        class FakeWhisperModel:
+            def __init__(self, _model, *, device, compute_type):
+                self.device = device
+                attempts.append(("load", device, compute_type))
+
+            def transcribe(self, *_args, **_kwargs):
+                attempts.append(("transcribe", self.device))
+                if self.device == "cuda":
+                    raise RuntimeError("cublas64_12.dll is not found")
+                return [], SimpleNamespace(language="en")
+
+        engine = LocalDiarizationEngine(device="cpu")
+        engine.requested_device = "auto"
+        engine.device = "cuda"
+        engine.compute_type = "float16"
+        with patch.dict(
+            "sys.modules",
+            {"faster_whisper": SimpleNamespace(WhisperModel=FakeWhisperModel)},
+        ):
+            words, language = engine._transcribe(
+                Path("audio.wav"),
+                cancel_event=threading.Event(),
+            )
+
+        self.assertEqual(words, [])
+        self.assertEqual(language, "en")
+        self.assertEqual(
+            attempts,
+            [
+                ("load", "cuda", "float16"),
+                ("transcribe", "cuda"),
+                ("load", "cpu", "int8"),
+                ("transcribe", "cpu"),
+            ],
+        )
+        self.assertEqual(engine.device, "cpu")
+        self.assertIn("inference failed", engine.accelerator["name"])
 
     def test_bundled_models_are_preferred_without_a_user_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

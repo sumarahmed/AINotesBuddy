@@ -16,9 +16,7 @@ concurrency:
 jobs:
   windows-installer:
     runs-on: windows-latest
-    timeout-minutes: 120
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -31,71 +29,48 @@ jobs:
           cache: pip
           cache-dependency-path: |
             services/transcription/requirements-packaging.txt
-            services/transcription/requirements-desktop.txt
-            services/transcription/requirements-models.txt
+            services/transcription/requirements-companion-core.txt
+            services/transcription/requirements-api.txt
 
-      - name: Install CPU PyTorch and packaging dependencies
+      - name: Install core companion packaging dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r services/transcription/requirements-packaging.txt
 
-      - name: Prepare pinned faster-whisper CUDA runtime
+      - name: Verify pinned public component assets
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $assetApi = "https://api.github.com/repos/Purfview/whisper-standalone-win/releases/assets/236181970"
-          $headers = @{
-            Accept = "application/vnd.github+json"
-            "User-Agent" = "NotesBuddy-Companion-Build"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
-          $asset = Invoke-RestMethod -Uri $assetApi -Headers $headers
-          if ($asset.name -ne "cuBLAS.and.cuDNN_CUDA12_win_v3.7z" -or $asset.size -ne 849141159) {
-            throw "The pinned CUDA runtime asset metadata changed."
-          }
-          $archive = Join-Path $env:RUNNER_TEMP $asset.name
-          Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $archive
-          if ((Get-Item -LiteralPath $archive).Length -ne 849141159) {
-            throw "The CUDA runtime download is incomplete."
-          }
-          $gpuLibs = Join-Path $env:GITHUB_WORKSPACE "desktop\gpu-libs"
-          New-Item -ItemType Directory -Path $gpuLibs -Force | Out-Null
-          7z x $archive "-o$gpuLibs" -y
-          $required = @("cublas64_12.dll", "cudnn64_9.dll")
-          foreach ($name in $required) {
-            if (-not (Get-ChildItem -LiteralPath $gpuLibs -Filter $name -Recurse)) {
-              throw "Pinned CUDA runtime is missing $name."
+          $manifest = Get-Content desktop/component-manifest.json -Raw | ConvertFrom-Json
+          $releases = @{}
+          foreach ($component in $manifest.components.PSObject.Properties.Value) {
+            if ($component.url -notmatch '/releases/download/(?<tag>[^/]+)/(?<name>[^/]+)$') {
+              throw "Component URL is not a versioned GitHub Release asset: $($component.url)"
             }
-          }
-          Get-ChildItem -LiteralPath $gpuLibs -Filter "*.dll" -Recurse |
-            Where-Object DirectoryName -ne $gpuLibs |
-            Move-Item -Destination $gpuLibs -Force
-          Remove-Item -LiteralPath $archive -Force
-
-      - name: Prepare reusable component packs
-        shell: pwsh
-        run: |
-          if (-not $env:HF_TOKEN) {
-            throw "Add the gated-model read token as the repository secret HF_TOKEN."
-          }
-          $version = "${{ github.ref_name }}".Replace("companion-v", "")
-          if (-not $version -or $version -eq "${{ github.ref_name }}") {
-            $version = "2026.08.8"
-          }
-          python -m PyInstaller --noconfirm --clean --distpath desktop/out-speaker/dist --workpath desktop/out-speaker/work desktop/NotesBuddySpeakerWorker.spec
-          & desktop/out-speaker/dist/NotesBuddySpeakerWorker/NotesBuddySpeakerWorker.exe --self-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "The reusable speaker worker failed its packaged self-test."
-          }
-          python desktop/prepare_components.py --version $version --accept-pyannote-terms
-          $speakerCheck = Join-Path $env:RUNNER_TEMP "notesbuddy-speaker-check"
-          New-Item -ItemType Directory -Path $speakerCheck -Force | Out-Null
-          $speakerArchive = Get-ChildItem desktop/components-release -Filter "NotesBuddy-speaker-diarization-*.zip" | Select-Object -First 1
-          Expand-Archive -LiteralPath $speakerArchive.FullName -DestinationPath $speakerCheck -Force
-          & (Join-Path $speakerCheck "NotesBuddySpeakerWorker.exe") --self-test --model (Join-Path $speakerCheck "model")
-          if ($LASTEXITCODE -ne 0) {
-            throw "The speaker component could not load its packaged model."
+            $tag = $Matches.tag
+            $name = $Matches.name
+            if (-not $releases.ContainsKey($tag)) {
+              $headers = @{
+                Accept = "application/vnd.github+json"
+                Authorization = "Bearer $env:GH_TOKEN"
+                "X-GitHub-Api-Version" = "2022-11-28"
+              }
+              $releases[$tag] = Invoke-RestMethod `
+                -Uri "https://api.github.com/repos/sumarahmed/AINotesBuddy/releases/tags/$tag" `
+                -Headers $headers
+            }
+            $asset = $releases[$tag].assets | Where-Object name -eq $name | Select-Object -First 1
+            if (-not $asset) {
+              throw "Pinned component asset does not exist: $name"
+            }
+            if ($asset.size -ne $component.bytes) {
+              throw "Pinned component size changed: $name"
+            }
+            if ($asset.digest -ne "sha256:$($component.sha256)") {
+              throw "Pinned component checksum changed: $name"
+            }
           }
 
       - name: Run service tests
@@ -115,10 +90,10 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".Replace("companion-v", "")
           if (-not $version -or $version -eq "${{ github.ref_name }}") {
-            $version = "2026.08.8"
+            $version = "2026.08.9"
           }
           ./desktop/build.ps1 -Python python -Version $version
-          Get-ChildItem desktop/release/NotesBuddyCompanion-Setup-*.exe, desktop/components-release/*.zip |
+          Get-ChildItem desktop/release/NotesBuddyCompanion-Setup-*.exe |
             Select-Object Name, Length |
             Format-Table -AutoSize
 
@@ -126,9 +101,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: NotesBuddy-Windows-Companion
-          path: |
-            desktop/release/NotesBuddyCompanion-Setup-*.exe
-            desktop/components-release/*.zip
+          path: desktop/release/NotesBuddyCompanion-Setup-*.exe
           if-no-files-found: error
 
       - name: Publish tagged installer
@@ -139,10 +112,9 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $installer = Get-ChildItem -LiteralPath desktop/release -Filter "NotesBuddyCompanion-Setup-*.exe" | Select-Object -First 1
-          $assets = @($installer.FullName) + @(Get-ChildItem -LiteralPath desktop/components-release -Filter "*.zip" | ForEach-Object FullName)
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag @assets --clobber
+            gh release upload $tag $installer.FullName --clobber
           } else {
-            gh release create $tag @assets --generate-notes --title "NotesBuddy Desktop Companion $tag"
+            gh release create $tag $installer.FullName --generate-notes --title "NotesBuddy Desktop Companion $tag"
           }
