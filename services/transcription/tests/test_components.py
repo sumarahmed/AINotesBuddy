@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import time
 import unittest
-import os
+import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -131,6 +132,66 @@ class ComponentManagerTests(unittest.TestCase):
             job = self.wait(manager, manager.start_install(["whisper-small"])["jobId"])
             self.assertEqual(job["status"], "completed")
             self.assertEqual(requests[0].get_header("Range"), f"bytes={offset}-")
+
+    def test_complete_partial_is_verified_without_an_invalid_range_request(self) -> None:
+        payload = archive_bytes({"model.bin": b"complete-model"})
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory, payload)
+            partial = manager.root / ".downloads/whisper-small.zip.part"
+            partial.parent.mkdir(parents=True)
+            partial.write_bytes(payload)
+            manager.opener = lambda *_args, **_kwargs: self.fail(
+                "network request was not expected"
+            )
+
+            job = self.wait(manager, manager.start_install(["whisper-small"])["jobId"])
+
+            self.assertEqual(job["status"], "completed")
+            self.assertTrue((manager.root / "models/faster-whisper-selected/model.bin").is_file())
+
+    def test_oversized_partial_restarts_without_range(self) -> None:
+        payload = archive_bytes({"model.bin": b"fresh-model"})
+        with tempfile.TemporaryDirectory() as directory:
+            requests = []
+            manager = self.manager(directory, payload)
+            partial = manager.root / ".downloads/whisper-small.zip.part"
+            partial.parent.mkdir(parents=True)
+            partial.write_bytes(payload + b"stale")
+
+            def opener(request, **_kwargs):
+                requests.append(request)
+                return FakeResponse(payload)
+
+            manager.opener = opener
+            job = self.wait(manager, manager.start_install(["whisper-small"])["jobId"])
+
+            self.assertEqual(job["status"], "completed")
+            self.assertIsNone(requests[0].get_header("Range"))
+
+    def test_http_416_resets_partial_and_retries_once_from_zero(self) -> None:
+        payload = archive_bytes({"model.bin": b"range-recovery" * 20})
+        with tempfile.TemporaryDirectory() as directory:
+            requests = []
+            manager = self.manager(directory, payload)
+            partial = manager.root / ".downloads/whisper-small.zip.part"
+            partial.parent.mkdir(parents=True)
+            offset = len(payload) // 2
+            partial.write_bytes(payload[:offset])
+
+            def opener(request, **_kwargs):
+                requests.append(request)
+                if len(requests) == 1:
+                    raise urllib.error.HTTPError(
+                        request.full_url, 416, "Range Not Satisfiable", {}, None
+                    )
+                return FakeResponse(payload)
+
+            manager.opener = opener
+            job = self.wait(manager, manager.start_install(["whisper-small"])["jobId"])
+
+            self.assertEqual(job["status"], "completed")
+            self.assertEqual(requests[0].get_header("Range"), f"bytes={offset}-")
+            self.assertIsNone(requests[1].get_header("Range"))
 
     def test_component_environment_is_persistent_and_upgrade_independent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -81,7 +81,7 @@ jobs:
           }
           $version = "${{ github.ref_name }}".Replace("companion-v", "")
           if (-not $version -or $version -eq "${{ github.ref_name }}") {
-            $version = "2026.08.7"
+            $version = "2026.08.8"
           }
           python -m PyInstaller --noconfirm --clean --distpath desktop/out-speaker/dist --workpath desktop/out-speaker/work desktop/NotesBuddySpeakerWorker.spec
           & desktop/out-speaker/dist/NotesBuddySpeakerWorker/NotesBuddySpeakerWorker.exe --self-test
@@ -115,7 +115,7 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".Replace("companion-v", "")
           if (-not $version -or $version -eq "${{ github.ref_name }}") {
-            $version = "2026.08.7"
+            $version = "2026.08.8"
           }
           ./desktop/build.ps1 -Python python -Version $version
           Get-ChildItem desktop/release/NotesBuddyCompanion-Setup-*.exe, desktop/components-release/*.zip |

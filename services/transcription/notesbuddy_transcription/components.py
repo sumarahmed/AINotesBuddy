@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import threading
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
@@ -205,34 +206,35 @@ class ComponentManager:
         downloads.mkdir(parents=True, exist_ok=True)
         partial = downloads / f"{component_id}.zip.part"
         offset = partial.stat().st_size if partial.exists() else 0
-        headers = {"User-Agent": "NotesBuddy-Companion-Components/1"}
-        if offset:
-            headers["Range"] = f"bytes={offset}-"
-        request = urllib.request.Request(str(component["url"]), headers=headers)
-        with self.opener(request, timeout=60) as response:
-            if offset and getattr(response, "status", 200) != 206:
-                offset = 0
+        expected_digest = str(component.get("sha256") or "").lower()
+
+        # A previous run can be interrupted after the last byte is written but
+        # before verification/extraction. Requesting bytes=<size>- then causes
+        # GitHub to return HTTP 416 even though the local archive is complete.
+        if offset > expected_size:
+            partial.unlink(missing_ok=True)
+            offset = 0
+        elif offset == expected_size:
+            if self._sha256(partial) == expected_digest:
+                offset = expected_size
+            else:
                 partial.unlink(missing_ok=True)
-            mode = "ab" if offset else "wb"
-            with partial.open(mode) as output:
-                while True:
-                    if job.cancel_event.is_set():
-                        raise InterruptedError("Component download paused.")
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    output.write(chunk)
-                    offset += len(chunk)
-                    with job.lock:
-                        job.status = "downloading"
-                        job.stage = f"downloading {component.get('name', component_id)}"
-                        job.progress = min(0.98, (completed + min(offset, expected_size)) / total)
-        checksum = hashlib.sha256()
-        with partial.open("rb") as downloaded:
-            for chunk in iter(lambda: downloaded.read(1024 * 1024), b""):
-                checksum.update(chunk)
-        digest = checksum.hexdigest()
-        if digest.lower() != str(component.get("sha256") or "").lower():
+                offset = 0
+
+        if offset < expected_size:
+            offset = self._download(
+                job,
+                component_id,
+                component,
+                partial,
+                offset,
+                expected_size,
+                completed,
+                total,
+            )
+
+        digest = self._sha256(partial)
+        if digest != expected_digest:
             partial.unlink(missing_ok=True)
             raise RuntimeError(f"Security check failed for {component.get('name', component_id)}.")
         staging = self.root / ".staging" / f"{component_id}-{uuid4().hex}"
@@ -275,3 +277,62 @@ class ComponentManager:
             partial.unlink(missing_ok=True)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        checksum = hashlib.sha256()
+        with path.open("rb") as downloaded:
+            for chunk in iter(lambda: downloaded.read(1024 * 1024), b""):
+                checksum.update(chunk)
+        return checksum.hexdigest().lower()
+
+    def _download(
+        self,
+        job: ComponentJob,
+        component_id: str,
+        component: dict[str, Any],
+        partial: Path,
+        offset: int,
+        expected_size: int,
+        completed: int,
+        total: int,
+    ) -> int:
+        retried_after_range_error = False
+        while True:
+            headers = {"User-Agent": "NotesBuddy-Companion-Components/1"}
+            if offset:
+                headers["Range"] = f"bytes={offset}-"
+            request = urllib.request.Request(str(component["url"]), headers=headers)
+            try:
+                response = self.opener(request, timeout=60)
+            except urllib.error.HTTPError as error:
+                if error.code == 416 and offset and not retried_after_range_error:
+                    error.close()
+                    partial.unlink(missing_ok=True)
+                    offset = 0
+                    retried_after_range_error = True
+                    continue
+                raise
+
+            with response:
+                if offset and getattr(response, "status", 200) != 206:
+                    offset = 0
+                    partial.unlink(missing_ok=True)
+                mode = "ab" if offset else "wb"
+                with partial.open(mode) as output:
+                    while True:
+                        if job.cancel_event.is_set():
+                            raise InterruptedError("Component download paused.")
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        offset += len(chunk)
+                        with job.lock:
+                            job.status = "downloading"
+                            job.stage = f"downloading {component.get('name', component_id)}"
+                            job.progress = min(
+                                0.98,
+                                (completed + min(offset, expected_size)) / total,
+                            )
+            return offset

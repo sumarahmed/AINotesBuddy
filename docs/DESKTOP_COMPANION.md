@@ -43,6 +43,11 @@ NVIDIA pack only on a compatible machine. Components live under
 `%LOCALAPPDATA%\NotesBuddy\components`, are SHA-256 verified, resume after an
 interrupted download, and remain installed across application upgrades.
 
+Version `2026.08.8` repairs interrupted component downloads that previously
+could fail with HTTP 416. A complete partial archive is verified and installed
+without another network request, stale oversized files are reset, and a server
+that rejects a resume request is retried once from the beginning.
+
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
@@ -128,7 +133,7 @@ In GitHub:
    read-only, gated-model token.
 3. Run **Windows desktop companion** from the Actions tab with
    to test the core installer and all component packs.
-4. When ready, create and push a tag such as `companion-v2026.08.7`.
+4. When ready, create and push a tag such as `companion-v2026.08.8`.
 
 The tag workflow runs service tests, prepares pinned component archives, builds a
 PyInstaller one-directory application, executes the packaged `--self-test`,
@@ -145,8 +150,8 @@ py -3.11 -m venv .venv
 python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -r services\transcription\requirements-packaging.txt
 $env:HF_TOKEN = "publisher-build-token"
-python desktop\prepare_components.py --version 2026.08.7 --accept-pyannote-terms
-.\desktop\build.ps1 -Python python -Version 2026.08.7
+python desktop\prepare_components.py --version 2026.08.8 --accept-pyannote-terms
+.\desktop\build.ps1 -Python python -Version 2026.08.8
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -155,7 +160,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.7 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.8 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 

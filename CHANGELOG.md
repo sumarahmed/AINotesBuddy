@@ -8,6 +8,15 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.14 - 2026-08-14
+
+### Fixed
+
+- Companion 2026.08.8 no longer fails with HTTP 416 when an Accurate or
+  Balanced model download has already reached its expected size.
+- Stale oversized component downloads are discarded safely, and a rejected
+  HTTP resume request is retried once from byte zero.
+
 ## 2026.08.13 - 2026-08-13
 
 ### Changed
