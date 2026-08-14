@@ -92,6 +92,7 @@ class FakeWhisper:
 
 
 class BundledModelConfigurationTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows DLL search path behavior")
     def test_optional_gpu_runtime_is_added_to_the_process_dll_search_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory)
@@ -128,6 +129,7 @@ class BundledModelConfigurationTests(unittest.TestCase):
         self.assertEqual(accelerator["device"], "cpu")
         self.assertFalse(accelerator["available"])
 
+    @unittest.skipUnless(os.name == "nt", "Windows optional GPU pack behavior")
     def test_missing_optional_nvidia_pack_does_not_select_unusable_cuda(self) -> None:
         fake_ctranslate = SimpleNamespace(get_cuda_device_count=lambda: 1)
         with tempfile.TemporaryDirectory() as directory, patch.dict(
