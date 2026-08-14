@@ -1,5 +1,48 @@
 {
   "schemaVersion": 1,
-  "releaseVersion": "development",
-  "components": {}
+  "releaseVersion": "2026.08.7-components",
+  "components": {
+    "whisper-base": {
+      "name": "Balanced speech model",
+      "version": "2026.08.7",
+      "category": "speech",
+      "destination": "models/faster-whisper-selected",
+      "bytes": 133339116,
+      "sha256": "588bb3848c4200d9d7b21204d921f358e7b4c033494e385bf0387e5a1e49621d",
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.7/NotesBuddy-whisper-base-2026.08.7.zip",
+      "revision": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
+    },
+    "whisper-small": {
+      "name": "Accurate speech model",
+      "version": "2026.08.7",
+      "category": "speech",
+      "destination": "models/faster-whisper-selected",
+      "bytes": 446457626,
+      "sha256": "4908322c07389009e53849ee4fec6d0b0798b419138a1827971c874b2201cecf",
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.7/NotesBuddy-whisper-small-2026.08.7.zip",
+      "revision": "536b0662742c02347bc0e980a01041f333bce120"
+    },
+    "speaker-diarization": {
+      "name": "Speaker recognition runtime and model",
+      "version": "2026.08.7",
+      "category": "speaker",
+      "destination": "speaker",
+      "bytes": 319157409,
+      "sha256": "a755e115f556f80ff5549bbff976e90a055d7186dabb96e3b2fa9010672929a5",
+      "compatibleSha256": [
+        "a95fd5c0e2ffb4ed63817c7c054665b792efad432d992a8424a7e16037303d0f"
+      ],
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.7/NotesBuddy-speaker-diarization-2026.08.7.zip",
+      "revision": "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee"
+    },
+    "nvidia-cuda12": {
+      "name": "NVIDIA acceleration pack",
+      "version": "2026.08.7",
+      "category": "accelerator",
+      "destination": "gpu",
+      "bytes": 898501642,
+      "sha256": "8656e18a16ab914f17b73a456300a2df6c28a22ae5792317245ed5deb2676b87",
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.7/NotesBuddy-nvidia-cuda12-2026.08.7.zip"
+    }
+  }
 }

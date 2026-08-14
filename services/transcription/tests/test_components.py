@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -86,6 +87,22 @@ class ComponentManagerTests(unittest.TestCase):
             self.assertTrue((manager.root / "models/faster-whisper-selected/model.bin").is_file())
             self.assertTrue(manager.status()["components"]["whisper-small"]["installed"])
 
+    def test_compatible_component_checksum_survives_core_app_upgrades(self) -> None:
+        payload = archive_bytes({"model.bin": b"model"})
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory, payload)
+            manifest = json.loads(manager.manifest_path.read_text(encoding="utf-8"))
+            component = manifest["components"]["whisper-small"]
+            component["compatibleSha256"] = ["a" * 64]
+            manager.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            target = manager.root / component["destination"]
+            target.mkdir(parents=True)
+            marker = manager._marker("whisper-small")
+            marker.parent.mkdir(parents=True)
+            marker.write_text(json.dumps({"sha256": "a" * 64}), encoding="utf-8")
+
+            self.assertTrue(manager.is_installed("whisper-small"))
+
     def test_lzma_component_pack_is_supported(self) -> None:
         payload = lzma_archive_bytes({"cudnn64_9.dll": b"gpu-runtime" * 100})
         with tempfile.TemporaryDirectory() as directory:
@@ -93,6 +110,30 @@ class ComponentManagerTests(unittest.TestCase):
             job = self.wait(manager, manager.start_install(["whisper-small"])["jobId"])
             self.assertEqual(job["status"], "completed")
             self.assertTrue((manager.root / "models/faster-whisper-selected/cudnn64_9.dll").is_file())
+
+    def test_deep_component_metadata_installs_with_a_short_windows_staging_path(self) -> None:
+        deep_name = (
+            "_internal/torch-2.13.0+cpu.dist-info/licenses/third_party/kineto/"
+            "libkineto/third_party/dynolog/third_party/prometheus-cpp/3rdparty/"
+            "civetweb/src/third_party/duktape-1.5.2/LICENSE.txt"
+        )
+        payload = archive_bytes({deep_name: b"license", "model.bin": b"model"})
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory, payload)
+
+            job = self.wait(manager, manager.start_install(["whisper-small"])["jobId"])
+
+            self.assertEqual(job["status"], "completed")
+            self.assertTrue(
+                manager._filesystem_path(
+                    manager.root / "models/faster-whisper-selected" / deep_name
+                ).is_file()
+            )
+            shutil.rmtree(
+                manager._filesystem_path(
+                    manager.root / "models/faster-whisper-selected"
+                )
+            )
 
     def test_invalid_checksum_is_rejected_without_replacing_existing_component(self) -> None:
         payload = archive_bytes({"model.bin": b"new"})

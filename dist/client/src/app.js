@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.14");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.15");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -1427,7 +1427,7 @@ function companionOnboarding() {
       <h1 id="companion-setup-title">Install the Windows companion</h1>
       <p>The small desktop app runs speech-to-text and speaker detection on this computer. You install it once—no Python, Hugging Face account, or token is required.</p>
       <ol class="companion-setup__steps">
-        <li><span>1</span><div><strong>Download</strong><small>Open Releases and download the newest Windows Setup file.</small></div></li>
+        <li><span>1</span><div><strong>Download</strong><small>Download the current Windows installer directly.</small></div></li>
         <li><span>2</span><div><strong>Install and start</strong><small>Run the installer, then leave NotesBuddy Companion running in the notification area.</small></div></li>
         <li><span>3</span><div><strong>Confirm</strong><small>Return here, check the connection, and choose Allow if your browser asks for Local network access.</small></div></li>
       </ol>

@@ -1,7 +1,7 @@
 {
   "name": "notesbuddy",
   "private": true,
-  "version": "2026.8.14",
+  "version": "2026.8.15",
   "description": "A local-first meeting capture app with speaker transcription and evidence-grounded meeting analysis.",
   "type": "module",
   "engines": {
