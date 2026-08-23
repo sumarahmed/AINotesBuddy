@@ -6,7 +6,7 @@ the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
 The published version uses `Year.Month.MinorRelease`. The current release is
-`2026.08.15`; `package.json` represents it as `2026.8.15` for semantic-version
+`2026.08.16`; `package.json` represents it as `2026.8.16` for semantic-version
 compatibility.
 
 ## Browser settings
@@ -45,15 +45,15 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
-| Product version | `2026.08.15` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
-| Latest companion version | `2026.08.9` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
+| Product version | `2026.08.16` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
+| Latest companion version | `2026.08.10` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
 | Runtime transcription mode | `hybrid` | Public non-secret setting in `src/runtime-config.js` |
 | Local companion endpoint | `http://127.0.0.1:8765` | Fixed loopback discovery/API address |
-| Hosted fallback endpoint | Deployment URL | Used when the companion is unavailable |
+| Hosted fallback endpoint | Empty by default | Set only after a public service passes production verification; an empty value prevents a broken fallback from being offered |
 | Local processing priority | All recording lengths | A connected companion prevents hybrid jobs from being routed online |
-| Analysis model | `Qwen/Qwen3-4B-Instruct-2507` at a pinned revision | Hosted instruction model configured only in `services/transcription/modal_app.py`; never downloaded by the browser |
+| Analysis model | `notesbuddy-local-extractive-v1` | Private deterministic companion analyzer; an optional instruction model can replace it through `NOTESBUDDY_ANALYSIS_MODEL` |
 | Analysis schema/prompt version | Schema `1`, prompt `2` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
 | Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |
 | Companion download URL | Versioned GitHub Release `.exe` asset | Direct public Windows installer download |

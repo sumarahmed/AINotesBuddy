@@ -67,8 +67,9 @@ Direct-launch entry point. It loads `src/runtime-config.js`, then
 ### `src/runtime-config.js`
 
 Contains public, non-secret deployment configuration: local/hosted/hybrid mode,
-the loopback endpoint, hosted fallback, and companion download URL. Credentials
-must never be placed in this file.
+the loopback endpoint, optional verified hosted fallback, and companion
+download URL. An empty hosted endpoint deliberately disables cloud fallback.
+Credentials must never be placed in this file.
 
 ### `src/meeting-audio.js`
 

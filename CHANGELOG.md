@@ -8,6 +8,26 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.16 - 2026-08-23
+
+### Fixed
+
+- Grounded meeting analysis now runs privately in Companion 2026.08.10 when
+  the optional hosted service is unavailable; summary, highlight, decision,
+  and action fields all retain transcript segment citations.
+- Proposals are not reported as decisions unless a later transcript segment
+  confirms agreement. Owners, dates, dependencies, and priorities are emitted
+  only when the cited words support them.
+
+### Changed
+
+- A connected companion is preferred for professional analysis, removing the
+  public website's runtime dependency on Modal for installed users.
+- The disabled Modal URL is no longer advertised as an online fallback; users
+  are guided to the working companion path until a hosted service is verified.
+- The local analyzer is deterministic and model-free, so it adds no download,
+  GPU-memory, or startup cost to the optimized companion installer.
+
 ## 2026.08.15 - 2026-08-14
 
 ### Fixed

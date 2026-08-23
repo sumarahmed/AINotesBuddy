@@ -211,9 +211,11 @@ engine never generate placeholder transcript text.
 `segments` array. It returns a versioned short summary, highlights, confirmed
 decisions, and structured action items. The production analyzer requires every
 item to cite a real request segment ID and applies server-side grounding checks
-before returning it. Local companion builds report `analysisAvailable: false`
-unless `NOTESBUDDY_ANALYSIS_MODEL` is configured; the public hosted deployment
-configures the managed analyzer.
+before returning it. Local companion builds use a private deterministic
+extractive analyzer by default, so analysis remains available without a cloud
+service or another model download. Setting `NOTESBUDDY_ANALYSIS_MODEL` replaces
+that default with the configured instruction model while retaining the same
+grounding validation.
 
 System-audio routes are local-companion-only and pairing protected. Only one
 capture can run at a time. The stop route returns a stereo 48 kHz WAV and
