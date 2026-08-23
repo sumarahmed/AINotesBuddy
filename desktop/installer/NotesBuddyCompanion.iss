@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "2026.08.9"
+  #define MyAppVersion "2026.08.10"
 #endif
 
 #define MyAppName "NotesBuddy Desktop Companion"

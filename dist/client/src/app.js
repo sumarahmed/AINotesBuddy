@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.15");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.16");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -1365,7 +1365,7 @@ function companionOnboarding() {
         <p>Version ${escapeHtml(state.companion.metadata?.version || "unknown")} is installed. NotesBuddy Companion ${escapeHtml(latestCompanionVersion)} is available with the latest recording and security fixes.</p>
         <a class="button button--primary companion-setup__primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 16)}Download update ${escapeHtml(latestCompanionVersion)}</a>
         <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-update">I've updated it — check again</button>
-        <button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>
+        <button type="button" class="companion-setup__defer" data-action="complete-companion-setup">Continue with installed version</button>
         <small class="companion-setup__note">${icon("shield", 13)}Quit the old companion before running the update if Windows asks.</small>
       </section>
     </div>`;
@@ -1398,7 +1398,7 @@ function companionOnboarding() {
         ${running ? `<div class="component-progress" aria-live="polite"><div><span>${escapeHtml(job.stage || "Preparing components")}</span><b>${progress}%</b></div><i><span style="width:${progress}%"></span></i><small>You can leave this page open. An interrupted download resumes from the saved partial file.</small><button type="button" class="button button--quiet" data-action="pause-components">Pause download</button></div>` : ""}
         ${job?.status === "paused" ? `<div class="companion-setup__status">Download paused. Choose Balanced or Accurate again to resume it.</div>` : ""}
         ${job?.status === "failed" ? `<div class="companion-setup__status">${escapeHtml(job.error || "Component installation failed. Please retry.")}</div>` : ""}
-        <button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>
+        ${runtimeHostedTranscriptionEndpoint ? `<button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>` : `<button type="button" class="companion-setup__defer" data-action="complete-companion-setup">Set up local models later</button>`}
         <small class="companion-setup__note">${icon("shield", 13)}Every downloaded pack is verified with SHA-256 before installation.</small>
       </section>
     </div>`;
@@ -1434,7 +1434,7 @@ function companionOnboarding() {
       <a class="button button--primary companion-setup__primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 16)}Download Windows installer</a>
       <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-setup" ${checking ? "disabled" : ""}>${checking ? "Checking connection…" : "I've installed it — check connection"}</button>
       <div class="companion-setup__status companion-setup__status--${checking ? "checking" : "waiting"}" aria-live="polite"><i></i>${escapeHtml(statusMessage)}</div>
-      <button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>
+      ${runtimeHostedTranscriptionEndpoint ? `<button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>` : ""}
       <small class="companion-setup__note">${icon("lock", 13)}Windows 10/11 · Per-user installation · No administrator access required</small>
     </section>
   </div>`;
@@ -2908,6 +2908,13 @@ function activateHostedFallback(error = null) {
       ? "Start NotesBuddy Companion and allow Local network access for this site in your browser's address-bar site controls, then check again."
       : rawMessage || null,
   };
+  if (!runtimeHostedTranscriptionEndpoint) {
+    state.settings.transcriptionMode = "local";
+    state.settings.transcriptionEndpoint = runtimeLocalCompanionEndpoint;
+    state.settings.transcriptionToken = "";
+    state.transcriptionServiceStatus = "unavailable";
+    return;
+  }
   state.settings.transcriptionMode = "hosted";
   state.settings.transcriptionEndpoint = runtimeHostedTranscriptionEndpoint;
   state.settings.transcriptionToken = "";
@@ -3016,6 +3023,17 @@ function createTranscriptionClient({ mode, endpoint } = {}) {
 }
 
 function createMeetingAnalysisClient() {
+  if (
+    state.companion.status === "connected" &&
+    state.companion.pairingToken &&
+    state.companion.metadata?.analysisAvailable === true
+  ) {
+    return new MeetingAudio.TranscriptionClient({
+      endpoint: runtimeLocalCompanionEndpoint,
+      mode: "local",
+      token: state.companion.pairingToken,
+    });
+  }
   if (runtimeHostedTranscriptionEndpoint) {
     return new MeetingAudio.TranscriptionClient({
       endpoint: runtimeHostedTranscriptionEndpoint,

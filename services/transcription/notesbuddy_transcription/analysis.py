@@ -76,7 +76,7 @@ SPECIFIC_TIME_TERM = re.compile(
     re.IGNORECASE,
 )
 CONFIRMED_DECISION = re.compile(
-    r"\b(?:decided|agreed|approved|confirmed|selected|chose|chosen|settled|"
+    r"\b(?:decided|agree|agreed|agreement|approved|confirmed|selected|chose|chosen|settled|"
     r"consensus|going with|will use|will proceed|moving forward with|"
     r"move forward with|let's use|we'll use)\b",
     re.IGNORECASE,
@@ -93,6 +93,51 @@ CONFIRMED_ACTION = re.compile(
     r"is going to)\b|\b(?:i'll|we'll|you'll|they'll|action item|next step|"
     r"follow[- ]?up|please\s+(?:send|review|prepare|complete|submit|update|"
     r"create|schedule|confirm|share))\b",
+    re.IGNORECASE,
+)
+
+SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+GREETING_OR_FILLER = re.compile(
+    r"^(?:hello|hi|hey|good (?:morning|afternoon|evening)|welcome|thanks?|"
+    r"thank you|okay|ok|all right|alright)\b",
+    re.IGNORECASE,
+)
+AGREEMENT = re.compile(
+    r"\b(?:i|we|the team)\s+agree\b|\b(?:sounds good|that works|approved|"
+    r"confirmed|let['’]s do that|go with that)\b",
+    re.IGNORECASE,
+)
+PROPOSAL = re.compile(
+    r"\b(?:recommend|propose|suggest|proposal|should|could|might|consider)\b",
+    re.IGNORECASE,
+)
+ACTION_LEAD = re.compile(
+    r"^(?P<owner>I|We|You|They|He|She|The team|Team|"
+    r"(?!I\b|We\b|You\b|They\b|He\b|She\b|The\b|Team\b)"
+    r"[A-Z][A-Za-z'’\-]*(?:\s+[A-Z][A-Za-z'’\-]*){0,2})\s+"
+    r"(?P<commitment>will|must|needs? to|has to|have to|am going to|"
+    r"is going to|are going to)\s+(?P<task>.+)$",
+    re.IGNORECASE,
+)
+ACTION_CONTRACTION = re.compile(
+    r"^(?P<owner>I|We|You|They|He|She)['’]ll\s+(?P<task>.+)$",
+    re.IGNORECASE,
+)
+DUE_DATE = re.compile(
+    r"\b(?P<prefix>by|before|on)\s+(?P<date>(?:next\s+)?(?:monday|tuesday|"
+    r"wednesday|thursday|friday|saturday|sunday|today|tomorrow|tonight|"
+    r"weekend|eod|end of day|\d{1,4}(?:[./-]\d{1,2}){1,2}))\b",
+    re.IGNORECASE,
+)
+DEPENDENCY = re.compile(
+    r"\b(?P<clause>(?:after|once|when|because|depending on|depends on|"
+    r"blocked by)\s+.+)$",
+    re.IGNORECASE,
+)
+DECISION_LEAD = re.compile(
+    r"^(?:(?:we|i|they|the team)\s+)?(?:have\s+)?"
+    r"(?:decided|agreed|approved|confirmed|selected|chose|settled)\s+"
+    r"(?:to|that|on)?\s*(?P<decision>.+)$",
     re.IGNORECASE,
 )
 
@@ -734,6 +779,360 @@ def _transcript_chunks(
     return chunks
 
 
+def _sentence_records(
+    prepared: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for segment_index, segment in enumerate(prepared):
+        for raw_sentence in SENTENCE_BOUNDARY.split(segment["text"]):
+            sentence = _clean_text(raw_sentence, maximum=1_200)
+            if not sentence:
+                continue
+            records.append(
+                {
+                    "id": segment["id"],
+                    "speaker": segment["speaker"],
+                    "text": sentence,
+                    "segmentIndex": segment_index,
+                }
+            )
+    return records
+
+
+def _without_terminal_punctuation(value: str) -> str:
+    return value.strip().rstrip(".?! ")
+
+
+def _sentence_case(value: str) -> str:
+    cleaned = _without_terminal_punctuation(_clean_text(value, maximum=1_000))
+    if not cleaned:
+        return ""
+    return cleaned[0].upper() + cleaned[1:] + "."
+
+
+def _owner_from_commitment(owner: str, speaker: str) -> str:
+    normalized = _normalise(owner)
+    if normalized == "i":
+        return speaker if _normalise(speaker) not in {"", "unknown speaker"} else NOT_SPECIFIED
+    if normalized in {"we", "you", "they", "he", "she"}:
+        return NOT_SPECIFIED
+    if normalized in {"the team", "team"}:
+        return "The team"
+    return _clean_text(owner, maximum=100) or NOT_SPECIFIED
+
+
+def _action_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    text = record["text"]
+    match = ACTION_LEAD.match(text) or ACTION_CONTRACTION.match(text)
+    if match:
+        task_text = match.group("task")
+        owner = _owner_from_commitment(match.group("owner"), record["speaker"])
+    else:
+        please = re.match(
+            r"^(?:action item|next step|follow[- ]?up)\s*[:\-]?\s*(?P<task>.+)$|"
+            r"^please\s+(?P<task2>.+)$",
+            text,
+            re.IGNORECASE,
+        )
+        if not please:
+            return None
+        task_text = please.group("task") or please.group("task2")
+        owner = NOT_SPECIFIED
+
+    dependency_match = DEPENDENCY.search(task_text)
+    notes = (
+        _sentence_case(dependency_match.group("clause"))
+        if dependency_match
+        else NOT_SPECIFIED
+    )
+    task_without_dependency = (
+        task_text[: dependency_match.start()].strip(" ,;-")
+        if dependency_match
+        else task_text
+    )
+    due_match = DUE_DATE.search(task_without_dependency)
+    due_date = NOT_SPECIFIED
+    if due_match:
+        prefix = due_match.group("prefix").lower()
+        raw_date = _clean_text(due_match.group("date"), maximum=80)
+        due_date = (
+            f"Before {raw_date}"
+            if prefix == "before"
+            else raw_date[0].upper() + raw_date[1:]
+        )
+        task_without_dependency = (
+            task_without_dependency[: due_match.start()].strip(" ,;-")
+            + task_without_dependency[due_match.end() :]
+        ).strip(" ,;-")
+
+    task = _sentence_case(task_without_dependency)
+    if not task:
+        return None
+    priority = (
+        "High"
+        if HIGH_URGENCY.search(text)
+        else "Low"
+        if LOW_URGENCY.search(text)
+        else "Medium"
+    )
+    return {
+        "task": task,
+        "owner": owner,
+        "dueDate": due_date,
+        "priority": priority,
+        "notes": notes,
+        "evidenceSegmentIds": [record["id"]],
+    }
+
+
+def _decision_text(value: str) -> str:
+    explicit = DECISION_LEAD.match(value)
+    if explicit:
+        candidate = explicit.group("decision")
+    else:
+        candidate = re.sub(
+            r"^(?:i|we|the team)\s+(?:recommend|propose|suggest)\s+(?:that\s+)?",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        )
+    candidate = re.sub(r"^we\s+(?:will|should)\s+", "", candidate, flags=re.IGNORECASE)
+    return _sentence_case(candidate)
+
+
+def _decision_items(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    decisions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, record in enumerate(records):
+        text = record["text"]
+        evidence = [record["id"]]
+        candidate = ""
+
+        explicit = DECISION_LEAD.match(text)
+        if explicit:
+            remainder = _normalise(explicit.group("decision"))
+            if remainder and not re.match(r"^(?:this|that|these|those|it)\b", remainder):
+                candidate = _decision_text(text)
+        elif AGREEMENT.search(text):
+            for previous in reversed(records[max(0, index - 3) : index]):
+                if PROPOSAL.search(previous["text"]):
+                    candidate = _decision_text(previous["text"])
+                    evidence = [previous["id"], record["id"]]
+                    break
+
+        key = _normalise(candidate)
+        if not candidate or not key or key in seen:
+            continue
+        seen.add(key)
+        decisions.append(
+            {
+                "decision": candidate,
+                "context": NOT_SPECIFIED,
+                "owner": NOT_SPECIFIED,
+                "evidenceSegmentIds": evidence,
+            }
+        )
+        if len(decisions) >= 12:
+            break
+    return decisions
+
+
+def _near_duplicate(value: str, existing: list[str]) -> bool:
+    tokens = _content_tokens(value)
+    if not tokens:
+        return True
+    for current in existing:
+        other = _content_tokens(current)
+        if other and len(tokens & other) / max(1, min(len(tokens), len(other))) >= 0.72:
+            return True
+    return False
+
+
+class ExtractiveMeetingAnalyzer:
+    """Fast, private analysis that can only use transcript evidence.
+
+    The local analyzer deliberately favors precision over invention. It runs in
+    the companion without a network service or another multi-gigabyte model,
+    while retaining source-segment citations for every generated field.
+    """
+
+    name = "notesbuddy-local-extractive-v1"
+
+    @staticmethod
+    def configuration_status() -> dict[str, object]:
+        return {
+            "ready": True,
+            "model": ExtractiveMeetingAnalyzer.name,
+            "status": "private grounded analysis ready",
+        }
+
+    def analyze(
+        self,
+        *,
+        segments: object,
+        meeting_title: object = "",
+    ) -> dict[str, Any]:
+        prepared = prepare_transcript_segments(segments)
+        if not prepared:
+            raise MeetingAnalysisUnavailable(
+                "A completed transcript is required for meeting analysis."
+            )
+        records = _sentence_records(prepared)
+        substantive = [
+            record
+            for record in records
+            if not GREETING_OR_FILLER.search(record["text"])
+            or len(_content_tokens(record["text"])) >= 5
+        ]
+        if not substantive:
+            substantive = records
+
+        actions: list[dict[str, Any]] = []
+        seen_actions: list[str] = []
+        for record in substantive:
+            action = _action_from_record(record)
+            if action is None or _near_duplicate(action["task"], seen_actions):
+                continue
+            seen_actions.append(action["task"])
+            actions.append(action)
+            if len(actions) >= 30:
+                break
+
+        decisions = _decision_items(substantive)
+
+        ranked: list[tuple[int, int, dict[str, Any]]] = []
+        for index, record in enumerate(substantive):
+            text = record["text"]
+            score = min(len(_content_tokens(text)), 8)
+            if CONFIRMED_ACTION.search(text):
+                score += 9
+            if CONFIRMED_DECISION.search(text) or AGREEMENT.search(text):
+                score += 8
+            if PROPOSAL.search(text):
+                score += 4
+            if re.search(
+                r"\b(?:risk|issue|problem|blocked|concern|update|finding|"
+                r"opportunity|deadline|budget|scope|recommend)\b",
+                text,
+                re.IGNORECASE,
+            ):
+                score += 5
+            ranked.append((score, -index, record))
+        ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
+
+        highlights: list[dict[str, Any]] = []
+        highlight_texts: list[str] = []
+        for _score, _negative_index, record in ranked:
+            if AGREEMENT.search(record["text"]) and len(
+                _content_tokens(record["text"])
+            ) <= 2:
+                continue
+            text = _sentence_case(record["text"])
+            if _near_duplicate(text, highlight_texts):
+                continue
+            highlight_texts.append(text)
+            highlights.append(
+                {"text": text, "evidenceSegmentIds": [record["id"]]}
+            )
+            if len(highlights) >= min(8, max(3, len(substantive))):
+                break
+        highlights.sort(
+            key=lambda item: next(
+                index
+                for index, record in enumerate(records)
+                if record["id"] == item["evidenceSegmentIds"][0]
+            )
+        )
+
+        summary_parts: list[str] = []
+        summary_evidence: list[str] = []
+        clean_title = _clean_text(meeting_title, maximum=200)
+        title_evidence = [
+            segment["id"]
+            for segment in prepared
+            if clean_title
+            and _content_tokens(clean_title)
+            and _content_tokens(clean_title) <= _content_tokens(segment["text"])
+        ]
+        if title_evidence:
+            summary_parts.append(f"The meeting purpose was: {clean_title}.")
+            summary_evidence.append(title_evidence[0])
+
+        topic_items: list[tuple[str, list[str]]] = []
+        for item in decisions[:2]:
+            topic_items.append((item["decision"], item["evidenceSegmentIds"]))
+        for item in actions:
+            if len(topic_items) >= 3:
+                break
+            if not _near_duplicate(item["task"], [value for value, _ids in topic_items]):
+                topic_items.append((item["task"], item["evidenceSegmentIds"]))
+        for item in highlights:
+            if len(topic_items) >= 3:
+                break
+            if not _near_duplicate(item["text"], [value for value, _ids in topic_items]):
+                topic_items.append((item["text"], item["evidenceSegmentIds"]))
+        if topic_items:
+            topics = "; ".join(
+                _without_terminal_punctuation(text) for text, _ids in topic_items
+            )
+            summary_parts.append(f"The main topics were: {topics}.")
+            summary_evidence.extend(
+                evidence_id
+                for _text, evidence_ids in topic_items
+                for evidence_id in evidence_ids
+            )
+        if decisions:
+            outcomes = "; ".join(
+                _without_terminal_punctuation(item["decision"])
+                for item in decisions[:2]
+            )
+            summary_parts.append(f"The confirmed outcome was: {outcomes}.")
+            summary_evidence.extend(
+                evidence_id
+                for item in decisions[:2]
+                for evidence_id in item["evidenceSegmentIds"]
+            )
+        if actions:
+            rendered_steps: list[str] = []
+            for item in actions[:4]:
+                task = _without_terminal_punctuation(item["task"])
+                owner = item["owner"]
+                due_date = item["dueDate"]
+                step = (
+                    f"{owner} to {task[0].lower() + task[1:]}"
+                    if owner != NOT_SPECIFIED
+                    else task
+                )
+                if due_date != NOT_SPECIFIED:
+                    step += (
+                        f" by {due_date}"
+                        if not due_date.lower().startswith("before ")
+                        else f" {due_date[0].lower() + due_date[1:]}"
+                    )
+                rendered_steps.append(step)
+            next_steps = "; ".join(rendered_steps)
+            summary_parts.append(f"Next steps: {next_steps}.")
+            summary_evidence.extend(
+                item["evidenceSegmentIds"][0] for item in actions[:4]
+            )
+
+        summary_evidence = list(dict.fromkeys(summary_evidence))[:12]
+        if not summary_parts:
+            first = prepared[0]
+            summary_parts = [_sentence_case(first["text"])]
+            summary_evidence = [first["id"]]
+
+        raw = {
+            "shortSummary": _limit_words("\n\n".join(summary_parts), 299),
+            "summaryEvidenceSegmentIds": summary_evidence,
+            "highlights": highlights,
+            "decisions": decisions,
+            "actionItems": actions,
+        }
+        normalised = normalise_analysis(raw, prepared)
+        return _public_analysis(normalised, prepared, model_name=self.name)
+
+
 class MeetingAnalyzer:
     """Lazy local/hosted instruction-model adapter."""
 
@@ -937,10 +1336,10 @@ class MeetingAnalyzer:
         return _public_analysis(final, prepared, model_name=self.model_name)
 
 
-def analyzer_from_environment() -> MeetingAnalyzer | None:
+def analyzer_from_environment() -> MeetingAnalyzer | ExtractiveMeetingAnalyzer:
     model_name = os.getenv("NOTESBUDDY_ANALYSIS_MODEL", "").strip()
     if not model_name:
-        return None
+        return ExtractiveMeetingAnalyzer()
     return MeetingAnalyzer(
         model_name=model_name,
         revision=os.getenv("NOTESBUDDY_ANALYSIS_REVISION", "").strip() or None,

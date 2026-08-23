@@ -8,6 +8,7 @@ import time
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -226,6 +227,47 @@ class LocalApiTests(unittest.TestCase):
             response.json()["summarySourceSegmentIds"],
             ["segment-one"],
         )
+
+    def test_default_local_analyzer_is_ready_without_cloud_configuration(self) -> None:
+        from notesbuddy_transcription.server import create_app
+
+        with mock.patch.dict(
+            os.environ,
+            {"NOTESBUDDY_ANALYSIS_MODEL": ""},
+        ):
+            with TestClient(
+                create_app(
+                    engine=EmptyEngine(),
+                    pairing_token=PAIRING_TOKEN,
+                    allowed_origins=["http://127.0.0.1:4173"],
+                    system_audio_capture=FakeSystemAudioManager(),
+                )
+            ) as client:
+                health = client.get("/v1/health", headers=self.headers)
+                self.assertTrue(health.json()["analysisAvailable"])
+                self.assertEqual(
+                    health.json()["analysisModel"],
+                    "notesbuddy-local-extractive-v1",
+                )
+                result = client.post(
+                    "/v1/analyses",
+                    headers=self.headers,
+                    json={
+                        "meetingTitle": "Scope review",
+                        "segments": [
+                            {
+                                "id": "confirmed-scope",
+                                "speaker": "Jordan",
+                                "text": "We agreed to use the revised scope.",
+                            }
+                        ],
+                    },
+                )
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["model"], "notesbuddy-local-extractive-v1")
+        self.assertEqual(len(result.json()["decisions"]), 1)
+        self.assertEqual(result.json()["actionItems"], [])
 
     def test_job_accepts_assets_and_never_fabricates_text(self) -> None:
         response = self.client.post(

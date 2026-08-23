@@ -54,6 +54,11 @@ path, and retries failed CUDA inference on CPU. Stable component checksums are
 independent of the core application version, so core-only upgrades reuse
 existing model and GPU packs.
 
+Version `2026.08.10` adds private, model-free meeting analysis to the local
+companion. Every summary, highlight, decision, and action is validated against
+cited transcript segments. The website prefers this local analyzer when the
+companion is connected, so a hosted analysis outage does not block refreshes.
+
 ## User flow
 
 1. Create the local browser profile on the NotesBuddy website.
@@ -76,14 +81,12 @@ If that permission was denied, open the site controls beside the browser
 address bar, set **Local network access** to **Allow**, and choose **I've
 installed it — check connection** again.
 
-If the companion is stopped, the site uses the configured hosted service. The
-Settings drawer clearly shows **online fallback**. Start the companion and
-choose **Look for companion** to return to on-device processing.
-
-Choosing **Use online transcription for now** dismisses setup only for the
-current browser session. NotesBuddy asks again in a future session until a
-working local connection is confirmed. Confirmed setup is stored with the
-local browser settings and can be reopened from **Settings → Setup guide**.
+If the companion is stopped and no verified hosted endpoint is configured,
+the site keeps recording and playback local but does not advertise an online
+transcription option that cannot complete. Start the companion and choose
+**Look for companion** to restore transcription and analysis. Confirmed setup
+is stored with the local browser settings and can be reopened from
+**Settings → Setup guide**.
 
 Closing the control-panel window hides it in the notification area. Use the
 tray menu's **Quit** command to stop the service. The **Start when I sign in**
@@ -133,7 +136,7 @@ step deliberately requires `--accept-pyannote-terms`.
 ## Create a release
 
 Run **Windows desktop companion** from the Actions tab to test a core installer.
-When ready, create and push a tag such as `companion-v2026.08.9`.
+When ready, create and push a tag such as `companion-v2026.08.10`.
 
 The tag workflow runs service tests, builds a PyInstaller one-directory
 application, executes the packaged `--self-test`, creates a per-user Inno Setup
@@ -153,7 +156,7 @@ Use Python 3.11 on Windows:
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r services\transcription\requirements-packaging.txt
-.\desktop\build.ps1 -Python python -Version 2026.08.9
+.\desktop\build.ps1 -Python python -Version 2026.08.10
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -162,7 +165,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.9 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.10 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 

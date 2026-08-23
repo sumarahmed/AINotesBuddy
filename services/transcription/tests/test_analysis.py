@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notesbuddy_transcription.analysis import (  # noqa: E402
+    ExtractiveMeetingAnalyzer,
     MeetingAnalysisUnavailable,
     _repair_summary_from_grounded_items,
     _transcript_chunks,
@@ -238,6 +239,109 @@ class MeetingAnalysisValidationTests(unittest.TestCase):
         self.assertEqual(action["owner"], "Not specified")
         self.assertEqual(action["dueDate"], "Not specified")
         self.assertEqual(action["priority"], "Medium")
+
+
+class ExtractiveMeetingAnalyzerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.analyzer = ExtractiveMeetingAnalyzer()
+        self.segments = [
+            {
+                "id": "remote-intro",
+                "speaker": "Speaker 1",
+                "timestamp": "00:00",
+                "text": "Welcome to the project review.",
+            },
+            {
+                "id": "local-action",
+                "speaker": "Syed Ahmed",
+                "timestamp": "00:01",
+                "text": (
+                    "I will document the confirmed decision and send the "
+                    "testing checklist to the team by Friday."
+                ),
+            },
+            {
+                "id": "remote-need",
+                "speaker": "Speaker 1",
+                "timestamp": "00:03",
+                "text": "We need to finish the ingestion channel before Thursday.",
+            },
+            {
+                "id": "remote-proposal",
+                "speaker": "Speaker 1",
+                "timestamp": "00:07",
+                "text": "I recommend assigning the configuration work to Alex.",
+            },
+            {
+                "id": "remote-agreement",
+                "speaker": "Speaker 2",
+                "timestamp": "00:11",
+                "text": "I agree.",
+            },
+            {
+                "id": "alex-action",
+                "speaker": "Speaker 2",
+                "timestamp": "00:12",
+                "text": "Alex will complete the ingestion configuration by Thursday.",
+            },
+            {
+                "id": "jordan-action",
+                "speaker": "Speaker 2",
+                "timestamp": "00:17",
+                "text": "Jordan will validate the email workflow on Friday.",
+            },
+        ]
+
+    def test_builds_grounded_sections_without_a_network_model(self) -> None:
+        result = self.analyzer.analyze(
+            segments=self.segments,
+            meeting_title="Project review",
+        )
+
+        self.assertEqual(result["model"], "notesbuddy-local-extractive-v1")
+        self.assertLess(len(result["shortSummary"].split()), 300)
+        self.assertTrue(result["summarySourceSegmentIds"])
+        self.assertGreaterEqual(len(result["highlights"]), 3)
+        self.assertEqual(len(result["decisions"]), 1)
+        self.assertIn("configuration work to Alex", result["decisions"][0]["decision"])
+        self.assertEqual(
+            result["decisions"][0]["sourceSegmentIds"],
+            ["remote-proposal", "remote-agreement"],
+        )
+
+        actions = {item["owner"]: item for item in result["actionItems"]}
+        self.assertEqual(actions["Syed Ahmed"]["dueDate"], "Friday")
+        self.assertEqual(actions["Alex"]["dueDate"], "Thursday")
+        self.assertEqual(actions["Jordan"]["dueDate"], "Friday")
+        self.assertEqual(actions["Not specified"]["dueDate"], "Before Thursday")
+        self.assertTrue(
+            all(item["sourceSegmentIds"] for item in result["actionItems"])
+        )
+
+    def test_does_not_turn_an_unconfirmed_proposal_into_a_decision(self) -> None:
+        result = self.analyzer.analyze(
+            segments=[
+                {
+                    "id": "proposal-only",
+                    "speaker": "Sam",
+                    "text": "I recommend moving the launch to September.",
+                },
+                {
+                    "id": "open-question",
+                    "speaker": "Jordan",
+                    "text": "We still need to decide after reviewing the budget.",
+                },
+            ]
+        )
+
+        self.assertEqual(result["decisions"], [])
+        self.assertEqual(result["actionItems"], [])
+
+    def test_configuration_is_ready_without_optional_model_environment(self) -> None:
+        status = self.analyzer.configuration_status()
+
+        self.assertTrue(status["ready"])
+        self.assertEqual(status["model"], "notesbuddy-local-extractive-v1")
 
 
 class MeetingAnalysisChunkingTests(unittest.TestCase):

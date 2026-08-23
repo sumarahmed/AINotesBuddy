@@ -1772,6 +1772,19 @@ async function runDirectFileLoad(browser) {
   await page
     .getByRole("heading", { name: /Private meeting memory for Direct/ })
     .waitFor();
+  const installer = page.getByRole("link", {
+    name: "Download Windows installer",
+  });
+  await installer.waitFor();
+  assert.match(
+    await installer.getAttribute("href"),
+    /companion-v2026\.08\.10\/NotesBuddyCompanion-Setup-2026\.08\.10\.exe$/,
+  );
+  assert.equal(
+    await page.locator("[data-action='defer-companion-setup']").count(),
+    0,
+    "production must not offer a disabled hosted fallback",
+  );
   assert.equal(
     await page.locator("link[href='./src/styles.css']").count(),
     1,
@@ -1838,20 +1851,33 @@ async function runTeamsNotificationHandoff(browser, baseUrl) {
         "--no-default-browser-check",
       ],
     });
-    await runMainWorkflow(browser, baseUrl);
-    await runMeetingDeniedFallback(browser, baseUrl);
-    await runMeetingOnlyCapture(browser, baseUrl);
-    await runMeetingTrackMissing(browser, baseUrl);
-    await runSilentMeetingTrack(browser, baseUrl);
-    await runUnexpectedMeetingStop(browser, baseUrl);
-    await runLiveGuestAttribution(browser, baseUrl);
-    await runLegacyInsightMigration(browser, baseUrl);
-    await runDirectFileLoad(browser);
-    await runTeamsNotificationHandoff(browser, baseUrl);
-    await runHostedClientWorkflow(browser, baseUrl);
-    await runHybridCompanionWorkflow(browser, baseUrl);
-    await runExistingUserUpdateNotification(browser, baseUrl);
-    await runHybridFallbackWorkflow(browser, baseUrl);
+    const scenarios = [
+      ["main", () => runMainWorkflow(browser, baseUrl)],
+      ["meeting-denied", () => runMeetingDeniedFallback(browser, baseUrl)],
+      ["meeting-only", () => runMeetingOnlyCapture(browser, baseUrl)],
+      ["meeting-track-missing", () => runMeetingTrackMissing(browser, baseUrl)],
+      ["silent-meeting", () => runSilentMeetingTrack(browser, baseUrl)],
+      ["unexpected-stop", () => runUnexpectedMeetingStop(browser, baseUrl)],
+      ["live-guest", () => runLiveGuestAttribution(browser, baseUrl)],
+      ["legacy-migration", () => runLegacyInsightMigration(browser, baseUrl)],
+      ["direct-file", () => runDirectFileLoad(browser)],
+      ["teams-notification", () => runTeamsNotificationHandoff(browser, baseUrl)],
+      ["hosted", () => runHostedClientWorkflow(browser, baseUrl)],
+      ["hybrid", () => runHybridCompanionWorkflow(browser, baseUrl)],
+      ["existing-update", () => runExistingUserUpdateNotification(browser, baseUrl)],
+      ["hybrid-fallback", () => runHybridFallbackWorkflow(browser, baseUrl)],
+    ];
+    const requestedScenario = process.env.NOTESBUDDY_BROWSER_SCENARIO || "";
+    const selectedScenarios = requestedScenario
+      ? scenarios.filter(([name]) => name === requestedScenario)
+      : scenarios;
+    if (!selectedScenarios.length) {
+      throw new Error(`Unknown browser smoke scenario: ${requestedScenario}`);
+    }
+    for (const [name, run] of selectedScenarios) {
+      await run();
+      if (requestedScenario) console.log(`Browser smoke scenario passed: ${name}`);
+    }
     console.log(
       "Browser smoke passed: direct-file load, version display, Teams notification handoff without auto-recording, first-entry installer onboarding and confirmation, existing-user companion update warnings, browser and companion Windows-output capture, live You/Guest draft attribution, signal detection, pause/resume, stable controls, source persistence/default playback, structured meeting analysis, obsolete-insight migration, local, hosted, and hybrid transcription clients, automatic desktop pairing, hosted fallback, anonymous sessions, rename/search/export, mic fallback, and interrupted-share continuity.",
     );
