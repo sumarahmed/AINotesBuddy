@@ -8,6 +8,17 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.18 - 2026-08-24
+
+### Fixed
+
+- Local speaker-transcription timeouts now scale with recording duration, so
+  long meetings are not incorrectly marked failed after the fixed 30-minute
+  browser waiting limit.
+- Existing saved transcript segments can be analyzed after speaker processing
+  fails or is cancelled. NotesBuddy clearly identifies summaries generated
+  from a provisional browser transcript instead of disabling refresh.
+
 ## 2026.08.17 - 2026-08-24
 
 ### Fixed

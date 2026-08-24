@@ -4,6 +4,8 @@
   const SPEAKER_COLORS = ["violet", "amber", "coral", "teal"];
   const RECORDING_SOURCES = ["mixed", "microphone", "meeting"];
   const LONG_RECORDING_SECONDS = 8 * 60;
+  const MINIMUM_TRANSCRIPTION_TIMEOUT_MS = 30 * 60 * 1000;
+  const MAXIMUM_TRANSCRIPTION_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 
   function createId(prefix) {
     const uniquePart =
@@ -65,6 +67,19 @@
       accelerateLongRecordings !== false &&
       Number(durationSeconds) >= Number(longRecordingSeconds);
     return canAccelerate ? "hosted" : currentMode;
+  }
+
+  function transcriptionTimeoutMs({ durationSeconds = 0, mode = "local" } = {}) {
+    const durationMs = Math.max(0, Number(durationSeconds) || 0) * 1000;
+    const minimumMs = mode === "hosted"
+      ? 60 * 60 * 1000
+      : MINIMUM_TRANSCRIPTION_TIMEOUT_MS;
+    const estimatedMs = durationMs * (mode === "hosted" ? 2 : 3) +
+      15 * 60 * 1000;
+    return Math.min(
+      MAXIMUM_TRANSCRIPTION_TIMEOUT_MS,
+      Math.max(minimumMs, estimatedMs),
+    );
   }
 
   function selectTranscriptionBlobs({
@@ -1334,5 +1349,6 @@
     selectTranscriptionRoute,
     speakerLabel,
     textSimilarity,
+    transcriptionTimeoutMs,
   });
 })(globalThis);

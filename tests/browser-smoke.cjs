@@ -1391,6 +1391,30 @@ async function runMainWorkflow(browser, baseUrl) {
   assert.match(exported, /Jordan Lee/);
   assert.match(exported, /You/);
 
+  await page.evaluate(() => {
+    const meetings = JSON.parse(localStorage.getItem("notesbuddy-meetings") || "[]");
+    meetings[0].transcription = {
+      ...(meetings[0].transcription || {}),
+      status: "failed",
+      error: "Transcription timed out",
+    };
+    meetings[0].analysis = { status: "not-requested", error: null };
+    localStorage.setItem("notesbuddy-meetings", JSON.stringify(meetings));
+  });
+  await page.reload();
+  await page.locator("[data-action='meeting']").first().click();
+  await page.locator("[data-action='tab'][data-id='summary']").click();
+  const savedTranscriptRefresh = page.locator("[data-action='regenerate']");
+  assert.equal(
+    await savedTranscriptRefresh.isEnabled(),
+    true,
+    "a failed speaker retry must not disable analysis of saved transcript text",
+  );
+  await savedTranscriptRefresh.click();
+  await page
+    .getByText("Generated from the saved browser transcript", { exact: true })
+    .waitFor({ timeout: 10000 });
+
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join(" | ")}`);
   assert.deepEqual(
     consoleErrors.filter(

@@ -1,7 +1,7 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.17");
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.18");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -1019,9 +1019,11 @@ function summaryView(meeting) {
   const analysisRunning = analysisStatus === "processing";
   const analysisUsedOnlineService =
     analysisStatus === "completed" && Boolean(runtimeHostedTranscriptionEndpoint);
+  const transcriptionRunning = ["queued", "processing"].includes(
+    meeting.transcription?.status,
+  );
   const canAnalyze =
-    meeting.transcription?.status === "completed" &&
-    Boolean(meeting.transcript?.length);
+    Boolean(meeting.transcript?.length) && !transcriptionRunning;
   const summaryParagraphs = MeetingAudio.cleanTranscriptText(meeting.overview)
     .split(/\n{2,}/)
     .filter(Boolean)
@@ -1031,6 +1033,8 @@ function summaryView(meeting) {
     ? `<div class="analysis-notice analysis-notice--working">${icon("refresh", 15)}<span><strong>Analyzing the complete transcript</strong><small>Building evidence-grounded summary, decisions, and actions…</small></span></div>`
     : analysisStatus === "failed"
       ? `<div class="analysis-notice analysis-notice--error">${icon("x", 15)}<span><strong>Professional analysis could not be completed</strong><small>${escapeHtml(meeting.analysis?.error || "Try refreshing from the transcript again.")}</small></span></div>`
+      : analysisStatus === "completed" && meeting.analysis?.usedSavedDraft
+        ? `<div class="analysis-notice">${icon("file", 15)}<span><strong>Generated from the saved browser transcript</strong><small>Speaker processing did not complete, so this analysis may contain provisional speaker labels.</small></span></div>`
       : analysisStatus === "outdated"
         ? `<div class="analysis-notice">${icon("refresh", 15)}<span><strong>This meeting uses the previous summary format</strong><small>Refresh it to create the new evidence-grounded analysis.</small></span></div>`
         : "";
@@ -3052,14 +3056,9 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
     );
     return false;
   }
-  if (meeting.transcription?.status !== "completed") {
-    showToast(
-      "Speaker transcription required",
-      "The professional analysis uses the complete processed transcript, not the live browser draft.",
-    );
-    return false;
-  }
   if (meeting.analysis?.status === "processing") return false;
+
+  const usedSavedDraft = meeting.transcription?.status !== "completed";
 
   meeting.analysis = {
     ...(meeting.analysis || {}),
@@ -3090,11 +3089,14 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
         "The service returned analysis that was not grounded in this transcript.",
       );
     }
+    meeting.analysis.usedSavedDraft = usedSavedDraft;
     save();
     render();
     showToast(
       "Professional analysis ready",
-      "Summary, highlights, decisions, and action items were rebuilt from the complete transcript.",
+      usedSavedDraft
+        ? "Summary, highlights, decisions, and action items were rebuilt from the saved browser transcript. Speaker labels may remain provisional."
+        : "Summary, highlights, decisions, and action items were rebuilt from the complete transcript.",
     );
     return true;
   } catch (error) {
@@ -3278,6 +3280,10 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
 
     const completed = await client.waitForJob(created.jobId, {
       signal: controller.signal,
+      timeoutMs: MeetingAudio.transcriptionTimeoutMs({
+        durationSeconds: meeting.durationSeconds,
+        mode: jobMode,
+      }),
       onProgress(job) {
         meeting.transcription.status = job.status || "processing";
         meeting.transcription.progress = Number(job.progress) || 0;

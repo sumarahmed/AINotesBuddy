@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.08.17` (`Year.Month.MinorRelease`)
+**Current version:** `2026.08.18` (`Year.Month.MinorRelease`)
 
 ## What works
 

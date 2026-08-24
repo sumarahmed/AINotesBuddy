@@ -70,6 +70,24 @@ test("routes long hybrid recordings to hosted acceleration without changing shor
   );
 });
 
+test("allows long local recordings enough time to finish speaker processing", () => {
+  const timeout = MeetingAudio.transcriptionTimeoutMs({
+    durationSeconds: 47 * 60 + 15,
+    mode: "local",
+  });
+
+  assert.ok(timeout > 30 * 60 * 1000);
+  assert.equal(timeout, (47 * 60 + 15) * 3 * 1000 + 15 * 60 * 1000);
+  assert.ok(
+    MeetingAudio.transcriptionTimeoutMs({ durationSeconds: 0, mode: "local" }) >=
+      30 * 60 * 1000,
+  );
+  assert.ok(
+    MeetingAudio.transcriptionTimeoutMs({ durationSeconds: 0, mode: "hosted" }) >=
+      60 * 60 * 1000,
+  );
+});
+
 test("omits the redundant mixed upload when isolated audio exists", () => {
   const microphone = new Blob(["microphone"]);
   const meeting = new Blob(["meeting"]);
