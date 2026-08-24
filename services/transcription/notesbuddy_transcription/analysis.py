@@ -229,14 +229,22 @@ def prepare_transcript_segments(raw_segments: object) -> list[dict[str, Any]]:
         if source_id in seen_source_ids:
             source_id = f"{source_id}-{index + 1}"
         seen_source_ids.add(source_id)
+        speaker = _clean_text(
+            raw.get("speaker") or raw.get("speakerLabel"), maximum=100
+        )
+        if not speaker:
+            speaker_id = _normalise(raw.get("speakerId"))
+            if speaker_id == "local user":
+                speaker = "You"
+            else:
+                remote_match = re.fullmatch(r"remote (\d+)", speaker_id)
+                if remote_match:
+                    speaker = f"Speaker {remote_match.group(1)}"
         prepared.append(
             {
                 "id": f"S{len(prepared) + 1:04d}",
                 "sourceId": source_id,
-                "speaker": _clean_text(
-                    raw.get("speaker") or raw.get("speakerLabel"), maximum=100
-                )
-                or "Unknown speaker",
+                "speaker": speaker or "Unknown speaker",
                 "timestamp": _clean_text(raw.get("timestamp"), maximum=20),
                 "text": text,
             }
@@ -897,6 +905,7 @@ def _decision_text(value: str) -> str:
             flags=re.IGNORECASE,
         )
     candidate = re.sub(r"^we\s+(?:will|should)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^assigning\b", "Assign", candidate, flags=re.IGNORECASE)
     return _sentence_case(candidate)
 
 

@@ -318,6 +318,34 @@ class ExtractiveMeetingAnalyzerTests(unittest.TestCase):
             all(item["sourceSegmentIds"] for item in result["actionItems"])
         )
 
+    def test_maps_companion_speaker_ids_when_labels_are_not_supplied(self) -> None:
+        result = self.analyzer.analyze(
+            segments=[
+                {
+                    "id": "local-action",
+                    "speakerId": "local-user",
+                    "text": "I will send the checklist by Friday.",
+                },
+                {
+                    "id": "remote-proposal",
+                    "speakerId": "remote-1",
+                    "text": "I recommend assigning the configuration work to Alex.",
+                },
+                {
+                    "id": "remote-agreement",
+                    "speakerId": "remote-2",
+                    "text": "I agree.",
+                },
+            ],
+            meeting_title="Project review",
+        )
+
+        self.assertEqual(result["actionItems"][0]["owner"], "You")
+        self.assertEqual(
+            result["decisions"][0]["decision"],
+            "Assign the configuration work to Alex.",
+        )
+
     def test_does_not_turn_an_unconfirmed_proposal_into_a_decision(self) -> None:
         result = self.analyzer.analyze(
             segments=[

@@ -54,7 +54,7 @@ path, and retries failed CUDA inference on CPU. Stable component checksums are
 independent of the core application version, so core-only upgrades reuse
 existing model and GPU packs.
 
-Version `2026.08.10` adds private, model-free meeting analysis to the local
+Version `2026.08.11` includes private, model-free meeting analysis in the local
 companion. Every summary, highlight, decision, and action is validated against
 cited transcript segments. The website prefers this local analyzer when the
 companion is connected, so a hosted analysis outage does not block refreshes.
@@ -136,7 +136,7 @@ step deliberately requires `--accept-pyannote-terms`.
 ## Create a release
 
 Run **Windows desktop companion** from the Actions tab to test a core installer.
-When ready, create and push a tag such as `companion-v2026.08.10`.
+When ready, create and push a tag such as `companion-v2026.08.11`.
 
 The tag workflow runs service tests, builds a PyInstaller one-directory
 application, executes the packaged `--self-test`, creates a per-user Inno Setup
@@ -156,7 +156,7 @@ Use Python 3.11 on Windows:
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r services\transcription\requirements-packaging.txt
-.\desktop\build.ps1 -Python python -Version 2026.08.10
+.\desktop\build.ps1 -Python python -Version 2026.08.11
 ```
 
 Build output is ignored under `desktop/out/` and `desktop/release/`. The model
@@ -165,7 +165,7 @@ directory is also ignored and must never be committed.
 For a dependency-light package smoke test, omit model preparation and run:
 
 ```powershell
-.\desktop\build.ps1 -Python python -Version 2026.08.10 -SkipInstaller
+.\desktop\build.ps1 -Python python -Version 2026.08.11 -SkipInstaller
 .\desktop\out\dist\NotesBuddyCompanion\NotesBuddyCompanion.exe --self-test
 ```
 

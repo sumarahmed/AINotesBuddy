@@ -8,6 +8,16 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.08.17 - 2026-08-24
+
+### Fixed
+
+- Companion 2026.08.11 maps raw `local-user` transcript segments to **You**
+  during analysis, so first-person commitments retain their established owner.
+- Confirmed recommendations such as “assigning work to Alex” are rendered as
+  clear decision statements while preserving their proposal and agreement
+  source citations.
+
 ## 2026.08.16 - 2026-08-23
 
 ### Fixed

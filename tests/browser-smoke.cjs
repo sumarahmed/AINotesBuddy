@@ -1778,7 +1778,7 @@ async function runDirectFileLoad(browser) {
   await installer.waitFor();
   assert.match(
     await installer.getAttribute("href"),
-    /companion-v2026\.08\.10\/NotesBuddyCompanion-Setup-2026\.08\.10\.exe$/,
+    /companion-v2026\.08\.11\/NotesBuddyCompanion-Setup-2026\.08\.11\.exe$/,
   );
   assert.equal(
     await page.locator("[data-action='defer-companion-setup']").count(),
