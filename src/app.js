@@ -306,6 +306,7 @@ const defaultSettings = {
   transcriptionEndpoint: runtimeTranscriptionEndpoint,
   transcriptionToken: "",
   companionSetupCompleted: false,
+  analysisModelTier: "analysis-standard",
 };
 const initialSettings = {
   ...defaultSettings,
@@ -1376,7 +1377,8 @@ function companionOnboarding() {
   }
   if (
     connected &&
-    state.companion.metadata?.components?.ready !== true &&
+    (state.companion.metadata?.components?.ready !== true ||
+      state.companion.metadata?.analysisAvailable !== true) &&
     state.companion.metadata?.componentSetupAvailable
   ) {
     const job = state.componentJob || state.companion.metadata?.components?.activeJob;
@@ -1386,15 +1388,40 @@ function companionOnboarding() {
       ? " An NVIDIA acceleration pack will also be installed for this computer."
       : " This computer will use the CPU runtime.";
     const available = state.companion.metadata?.components?.components || {};
+    const analysisTiers = [
+      { id: "analysis-tiny", label: "Fast" },
+      { id: "analysis-standard", label: "Balanced" },
+      { id: "analysis-pro", label: "High quality" },
+    ].filter((tier) => available[tier.id]);
+    const selectedAnalysisTier =
+      analysisTiers.find((tier) => tier.id === state.settings.analysisModelTier)?.id ||
+      analysisTiers[1]?.id ||
+      analysisTiers[0]?.id ||
+      "analysis-tiny";
     const sharedBytes = Number(available["speaker-diarization"]?.downloadBytes || 0) +
+      Number(available[selectedAnalysisTier]?.downloadBytes || 0) +
       (state.companion.metadata?.gpuAvailable ? Number(available["nvidia-cuda12"]?.downloadBytes || 0) : 0);
     const baseSize = formatBytes(sharedBytes + Number(available["whisper-base"]?.downloadBytes || 0));
     const smallSize = formatBytes(sharedBytes + Number(available["whisper-small"]?.downloadBytes || 0));
     return `<div class="companion-setup-backdrop">
       <section class="companion-setup-card" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
         <span class="eyebrow">One-time local setup</span>
-        <h1 id="companion-setup-title">Choose transcription quality</h1>
-        <p>The app is installed. Download reusable local AI components once; future companion updates keep them in place.${escapeHtml(gpuExtra)}</p>
+        <h1 id="companion-setup-title">Choose local AI quality</h1>
+        <p>The app is installed. Download reusable speech, speaker, and smart-summary components once; future companion updates keep them in place.${escapeHtml(gpuExtra)}</p>
+        ${analysisTiers.length > 1 ? `<div class="component-subsection">
+          <span class="component-subsection__label">Smart meeting summary model</span>
+          <div class="component-options component-options--compact">
+            ${analysisTiers
+              .map((tier) => {
+                const meta = available[tier.id] || {};
+                const size = formatBytes(Number(meta.downloadBytes || 0));
+                const description = meta.tierDescription || "";
+                const isSelected = tier.id === selectedAnalysisTier;
+                return `<button type="button" class="component-options__tier${isSelected ? " component-options__tier--selected" : ""}" data-action="select-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${running ? "disabled" : ""} aria-pressed="${isSelected}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong><span>${escapeHtml(description)}</span></button>`;
+              })
+              .join("")}
+          </div>
+        </div>` : ""}
         <div class="component-options">
           <button type="button" data-action="install-components" data-preset="base" ${running ? "disabled" : ""}><strong>Balanced · ${escapeHtml(baseSize)}</strong><span>Smaller download · faster setup · good everyday accuracy</span></button>
           <button type="button" data-action="install-components" data-preset="small" ${running ? "disabled" : ""}><strong>Accurate · ${escapeHtml(smallSize)}</strong><span>Larger download · recommended for meetings and names</span><em>Recommended</em></button>
@@ -1449,6 +1476,7 @@ async function installCompanionComponents(preset) {
   const requested = [
     preset === "base" ? "whisper-base" : "whisper-small",
     "speaker-diarization",
+    state.settings.analysisModelTier || "analysis-standard",
     ...(state.companion.metadata?.gpuAvailable ? ["nvidia-cuda12"] : []),
   ];
   try {
@@ -1466,7 +1494,7 @@ async function installCompanionComponents(preset) {
     state.companion.metadata = { ...state.companion.metadata, ...health };
     state.componentJob = null;
     render();
-    showToast("Local AI components ready", `${health.accelerator || "Local processing"} is ready for transcription.`);
+    showToast("Local AI components ready", `${health.accelerator || "Local processing"} is ready for transcription and smart meeting analysis.`);
   } catch (error) {
     state.componentJob = { ...(state.componentJob || {}), status: "failed", error: error?.message || "Component installation failed." };
     render();
@@ -2972,7 +3000,8 @@ async function connectLocalCompanion({
       state.transcriptionServiceStatus = "connected";
       if (
         state.companion.metadata?.componentSetupAvailable &&
-        state.companion.metadata?.components?.ready !== true
+        (state.companion.metadata?.components?.ready !== true ||
+          state.companion.metadata?.analysisAvailable !== true)
       ) {
         state.companionSetupOpen = true;
       }
@@ -3563,6 +3592,11 @@ app.addEventListener("click", async (event) => {
     state.settingsOpen = false;
   } else if (action === "check-companion-setup") {
     await connectLocalCompanion({ silent: true, force: true });
+    return;
+  } else if (action === "select-analysis-tier") {
+    state.settings.analysisModelTier = button.dataset.tier || "analysis-standard";
+    save();
+    render();
     return;
   } else if (action === "install-components") {
     await installCompanionComponents(button.dataset.preset || "small");

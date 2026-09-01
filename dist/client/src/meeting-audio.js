@@ -1316,6 +1316,11 @@
         }
         await new Promise((resolve) => globalObject.setTimeout(resolve, intervalMs));
       }
+      try {
+        await this.cancelJob(jobId);
+      } catch {
+        // Preserve the useful timeout error even if the service disappeared.
+      }
       throw new Error("Transcription timed out");
     }
   }

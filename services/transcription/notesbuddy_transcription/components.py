@@ -35,6 +35,12 @@ def configure_component_environment(root: Path | None = None) -> Path:
     os.environ["NOTESBUDDY_GPU_LIB_DIR"] = str(target / "gpu")
     os.environ["NOTESBUDDY_DIARIZATION_MODEL"] = str(target / "speaker" / "model")
     os.environ["NOTESBUDDY_SPEAKER_WORKER"] = str(target / "speaker" / "NotesBuddySpeakerWorker.exe")
+    os.environ["NOTESBUDDY_ANALYSIS_RUNTIME"] = str(target / "analysis" / "llama-cli.exe")
+    # Three quality tiers (analysis-tiny/standard/pro) share this one
+    # directory -- installing a tier replaces whichever was there before.
+    # LocalAnalysisRouter resolves the actual *.gguf filename at request
+    # time, since each tier's model file has a different name.
+    os.environ["NOTESBUDDY_ANALYSIS_MODEL_PATH"] = str(target / "analysis")
     return target
 
 

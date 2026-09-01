@@ -139,6 +139,25 @@ $env:NOTESBUDDY_MODEL_DEVICE = "cuda"
 $env:NOTESBUDDY_WHISPER_COMPUTE_TYPE = "float16"
 ```
 
+`requirements-models.txt` pins `torch>=2.6` with no index URL, so a plain
+`pip install -r requirements.txt` resolves the CPU-only wheel from PyPI on
+Windows even when CTranslate2 (used by faster-whisper) already sees the GPU.
+CUDA-detection for pyannote (`self._torch_cuda_available()` in `engine.py`)
+checks `torch.cuda.is_available()` directly, so it silently stays on CPU in
+that case, and a long meeting's diarization pass can then take far longer
+than transcription itself. This is expected for the distributable
+companion (see above), but for local development on a CUDA-capable machine,
+reinstall torch afterward from the matching PyTorch CUDA index, for example:
+
+```powershell
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+Pick the `cuXXX` index that matches the installed NVIDIA driver/CUDA toolkit
+from <https://pytorch.org/get-started/locally/>; the version constraint in
+`requirements-models.txt` is satisfied either way, so this does not need a
+`requirements.txt` change, only a one-time local reinstall.
+
 Do not raise `NOTESBUDDY_MAX_WORKERS` casually. Speech models consume substantial
 RAM/VRAM; the default serial worker prevents concurrent meetings exhausting the
 computer.

@@ -121,7 +121,14 @@ Settings discloses which path is currently active.
 Public releases provide independent reusable assets for:
 
 - `Systran/faster-whisper-small`;
-- `pyannote/speaker-diarization-community-1`.
+- `pyannote/speaker-diarization-community-1`;
+- three smart-summary quality tiers, each a Q4_K_M GGUF paired with a pinned
+  `llama.cpp` Windows runtime: `analysis-tiny` (`Qwen/Qwen2.5-0.5B-Instruct-GGUF`),
+  `analysis-standard` (`unsloth/Qwen3-1.7B-GGUF`, recommended default), and
+  `analysis-pro` (`unsloth/Qwen3-4B-Instruct-2507-GGUF`). All three share one
+  destination folder, so installing a different tier replaces whichever was
+  installed before. See [`desktop/MODEL_NOTICES.md`](../desktop/MODEL_NOTICES.md)
+  for why Balanced is recommended over Fast.
 
 The publisher—not each customer—accepts the gated model conditions and uses a
 read-only `HF_TOKEN` only when intentionally preparing a new component release.
@@ -147,6 +154,24 @@ Only when model, speaker-worker, or GPU contents intentionally change, configure
 the publisher's gated-model `HF_TOKEN`, run `desktop/prepare_components.py`,
 publish those component ZIPs, and update `desktop/component-manifest.json` with
 their immutable URLs, sizes, and checksums.
+
+The Smart summary components are public and do not need `HF_TOKEN`. Each tier
+can be built independently while retaining existing manifest entries; repeat
+`--component` to build more than one in the same run:
+
+```powershell
+python desktop/prepare_components.py `
+  --version 2026.08.18 `
+  --component analysis-tiny `
+  --component analysis-standard `
+  --component analysis-pro
+```
+
+The builder verifies the pinned model and runtime hashes, packages only
+`llama-cli.exe` and its required DLLs, includes both upstream license texts,
+and records provenance inside the component ZIP. Publish the generated ZIP to
+the matching `companion-v<version>` release before committing the generated
+manifest entry; the release workflow rejects missing or altered public assets.
 
 ## Local developer build
 

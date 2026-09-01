@@ -88,6 +88,31 @@ test("allows long local recordings enough time to finish speaker processing", ()
   );
 });
 
+test("cancels the server job when transcription polling times out", async () => {
+  const requests = [];
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, method: options.method || "GET" });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jobId: "stuck-job",
+          status: options.method === "DELETE" ? "cancelled" : "processing",
+        }),
+      };
+    },
+  });
+
+  await assert.rejects(
+    client.waitForJob("stuck-job", { intervalMs: 1, timeoutMs: 5 }),
+    /Transcription timed out/,
+  );
+  assert.equal(requests.at(-1).method, "DELETE");
+  assert.match(requests.at(-1).url, /\/v1\/transcriptions\/stuck-job$/);
+});
+
 test("omits the redundant mixed upload when isolated audio exists", () => {
   const microphone = new Blob(["microphone"]);
   const meeting = new Blob(["meeting"]);

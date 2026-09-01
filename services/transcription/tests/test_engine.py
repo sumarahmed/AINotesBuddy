@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -249,15 +250,43 @@ class BundledModelConfigurationTests(unittest.TestCase):
             class Process:
                 returncode = 0
 
-                def poll(self):
-                    return 0
-
-                def communicate(self):
+                def communicate(self, timeout=None):
+                    del timeout
                     return ('{"status":"ok","turns":[{"start":1.25,"end":2.5,"speaker":"VOICE_1"}]}', "")
 
             with patch("notesbuddy_transcription.engine.subprocess.Popen", return_value=Process()):
                 turns = engine._diarize_with_worker(Path("meeting.wav"), cancel_event=threading.Event())
             self.assertEqual([(turn.start_ms, turn.end_ms, turn.label) for turn in turns], [(1250, 2500, "VOICE_1")])
+
+    def test_speaker_worker_drains_large_output_without_pipe_deadlock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
+            worker.touch()
+            engine = LocalDiarizationEngine(device="cpu")
+            engine.speaker_worker = worker
+            turn_count = 5_000
+            child_code = (
+                "import json,sys; "
+                f"n={turn_count}; "
+                "turns=[{'start':i,'end':i+0.5,'speaker':f'VOICE_{i%2}'} for i in range(n)]; "
+                "sys.stdout.write(json.dumps({'status':'ok','turns':turns}))"
+            )
+            real_popen = subprocess.Popen
+
+            def start_large_worker(_command, **options):
+                return real_popen([sys.executable, "-c", child_code], **options)
+
+            with patch(
+                "notesbuddy_transcription.engine.subprocess.Popen",
+                side_effect=start_large_worker,
+            ):
+                turns = engine._diarize_with_worker(
+                    Path("meeting.wav"),
+                    cancel_event=threading.Event(),
+                )
+
+            self.assertEqual(len(turns), turn_count)
+            self.assertEqual(turns[-1].label, "VOICE_1")
 
 
 class FakeTurn:

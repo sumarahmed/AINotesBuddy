@@ -6,7 +6,10 @@ import json
 import math
 import os
 import re
+import subprocess
+import tempfile
 import threading
+from pathlib import Path
 from typing import Any
 
 
@@ -179,6 +182,53 @@ OUTPUT_SHAPE = {
             "evidenceSegmentIds": ["S0001"],
         }
     ],
+}
+
+OUTPUT_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["shortSummary", "summaryEvidenceSegmentIds", "highlights", "decisions", "actionItems"],
+    "properties": {
+        "shortSummary": {"type": "string"},
+        "summaryEvidenceSegmentIds": {"type": "array", "items": {"type": "string"}},
+        "highlights": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["text", "evidenceSegmentIds"],
+                "properties": {
+                    "text": {"type": "string"},
+                    "evidenceSegmentIds": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["decision", "context", "owner", "evidenceSegmentIds"],
+                "properties": {
+                    "decision": {"type": "string"}, "context": {"type": "string"},
+                    "owner": {"type": "string"},
+                    "evidenceSegmentIds": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+        "actionItems": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["task", "owner", "dueDate", "priority", "notes", "evidenceSegmentIds"],
+                "properties": {
+                    "task": {"type": "string"}, "owner": {"type": "string"},
+                    "dueDate": {"type": "string"},
+                    "priority": {"type": "string", "enum": ["High", "Medium", "Low"]},
+                    "notes": {"type": "string"},
+                    "evidenceSegmentIds": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    },
 }
 
 
@@ -1142,6 +1192,307 @@ class ExtractiveMeetingAnalyzer:
         return _public_analysis(normalised, prepared, model_name=self.name)
 
 
+class LlamaCppMeetingAnalyzer:
+    """Grounded meeting analysis using a small local GGUF instruction model."""
+
+    def __init__(
+        self,
+        *,
+        runtime_path: str | Path,
+        model_path: str | Path,
+        context_tokens: int = 32_768,
+        output_tokens: int = 2_048,
+        maximum_chunk_characters: int = 12_000,
+    ) -> None:
+        self.runtime_path = Path(runtime_path)
+        self.model_path = Path(model_path)
+        # Derived from the installed file rather than a fixed constant: the
+        # companion can have any of several quality tiers installed
+        # (analysis-tiny/standard/pro), each a differently named GGUF, and
+        # the reported model name should reflect whichever is actually
+        # loaded rather than always claiming the original 0.5B default.
+        self.name = (
+            f"notesbuddy-smart-summary-{self.model_path.stem.lower()}"
+            if self.model_path.name
+            else "notesbuddy-smart-summary"
+        )
+        self.context_tokens = max(8_192, context_tokens)
+        self.output_tokens = min(max(900, output_tokens), 4_096)
+        # A 0.5B model was observed to lose coherence and fall into
+        # degenerate repetition (see _generate's repeat-penalty comment) once
+        # asked to track and cite more than roughly a hundred transcript
+        # segment IDs in one completion, well before it runs out of raw
+        # context window. The limit here is about the model's effective
+        # reasoning span, not --ctx-size, so it is deliberately much smaller
+        # than the model's real context length. The existing chunk/merge
+        # pipeline already handles multi-chunk transcripts; this just makes
+        # it actually trigger for real meeting-length transcripts instead of
+        # only for unusually long ones.
+        self.maximum_chunk_characters = max(6_000, maximum_chunk_characters)
+        self._generation_lock = threading.Lock()
+
+    def configuration_status(self) -> dict[str, object]:
+        ready = self.runtime_path.is_file() and self.model_path.is_file()
+        return {
+            "ready": ready,
+            "model": self.name if ready else "",
+            "status": (
+                "smart local meeting analysis ready"
+                if ready
+                else "install the Smart summary component"
+            ),
+        }
+
+    @staticmethod
+    def _transcript_text(segments: list[dict[str, Any]]) -> str:
+        return "\n".join(_transcript_line(item) for item in segments)
+
+    def _chunks(self, prepared: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        chunks: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        current_size = 0
+        for segment in prepared:
+            size = len(_transcript_line(segment)) + 1
+            if current and current_size + size > self.maximum_chunk_characters:
+                chunks.append(current)
+                current = []
+                current_size = 0
+            current.append(segment)
+            current_size += size
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def _generate(self, prompt: str) -> dict[str, Any]:
+        if not self.runtime_path.is_file() or not self.model_path.is_file():
+            raise MeetingAnalysisUnavailable(
+                "Install the Smart summary component before generating professional analysis."
+            )
+        startupinfo = None
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        with tempfile.TemporaryDirectory(prefix="notesbuddy-analysis-") as directory:
+            root = Path(directory)
+            prompt_path = root / "prompt.txt"
+            schema_path = root / "schema.json"
+            prompt_path.write_text(prompt, encoding="utf-8")
+            schema_path.write_text(
+                json.dumps(OUTPUT_JSON_SCHEMA, ensure_ascii=False), encoding="utf-8"
+            )
+            command = [
+                str(self.runtime_path), "--model", str(self.model_path),
+                "-sys", SYSTEM_PROMPT,
+                "--file", str(prompt_path), "--json-schema-file", str(schema_path),
+                "--ctx-size", str(self.context_tokens), "--predict", str(self.output_tokens),
+                "--threads", str(max(1, (os.cpu_count() or 4) - 1)),
+                "--temp", "0", "--single-turn",
+                # Pure greedy decoding (temp 0) with a large real transcript
+                # was observed to fall into a token-repetition loop while
+                # listing evidence segment IDs (e.g. repeating "S0108 | time
+                # unavailable | Speaker 3" dozens of times), burning the
+                # entire --predict budget before the JSON object could close.
+                # A repeat penalty breaks that loop without changing the
+                # otherwise-deterministic sampling.
+                "--repeat-penalty", "1.15", "--repeat-last-n", "256",
+                # The bundled build's Jinja chat-template engine primes the
+                # assistant turn with a literal special token
+                # (<|im_start|>assistant). Once a --json-schema-file grammar
+                # is active, the sampler treats that special token as part of
+                # the constrained output and aborts with "Unexpected empty
+                # grammar stack" before generating anything -- every call
+                # failed instantly this way, then sat inert until Python's
+                # subprocess timeout killed it, which looked identical to a
+                # slow CPU rather than an immediate hard failure. --no-jinja
+                # falls back to the legacy, non-Jinja template path, which
+                # does not hit this and was verified end-to-end against the
+                # real production system prompt and schema.
+                "--no-jinja",
+                "--no-display-prompt", "--simple-io", "--color", "off",
+            ]
+            # CPU decode time is dominated by the number of tokens generated,
+            # not the prompt length (prefill is far cheaper per token than
+            # decode). A timeout keyed only on prompt length under-budgets
+            # short-prompt, full-length completions and was observed to
+            # expire mid-generation on real meeting transcripts.
+            timeout_seconds = max(
+                300,
+                min(1_800, 200 + len(prompt) // 120 + self.output_tokens // 3),
+            )
+            try:
+                with self._generation_lock:
+                    completed = subprocess.run(
+                        command, capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=timeout_seconds,
+                        startupinfo=startupinfo, check=False,
+                    )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise MeetingAnalysisUnavailable(
+                    "The local smart-summary model could not complete the analysis."
+                ) from error
+        if completed.returncode != 0:
+            print(
+                "[notesbuddy-analysis] llama_cpp_failed "
+                f"return_code={completed.returncode} stderr={completed.stderr[-800:]!r}",
+                flush=True,
+            )
+            raise MeetingAnalysisUnavailable(
+                "The local smart-summary model could not process this transcript."
+            )
+        try:
+            return _extract_json(completed.stdout)
+        except MeetingAnalysisUnavailable:
+            print(
+                "[notesbuddy-analysis] llama_cpp_invalid_output "
+                f"stdout={ascii(completed.stdout[-1200:])} "
+                f"stderr={ascii(completed.stderr[-1200:])}",
+                flush=True,
+            )
+            raise
+
+    def _generate_and_normalise(
+        self, prompt: str, prepared: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        raw = self._generate(prompt)
+        try:
+            return normalise_analysis(raw, prepared)
+        except MeetingAnalysisUnavailable as error:
+            if "summary" not in str(error).lower():
+                raise
+            return normalise_analysis(_repair_summary_from_grounded_items(raw, prepared), prepared)
+
+    def analyze(self, *, segments: object, meeting_title: object = "") -> dict[str, Any]:
+        prepared = prepare_transcript_segments(segments)
+        if not prepared:
+            raise MeetingAnalysisUnavailable(
+                "A completed transcript is required for meeting analysis."
+            )
+        partials: list[dict[str, Any]] = []
+        chunks = self._chunks(prepared)
+        for index, chunk in enumerate(chunks):
+            prompt = (
+                f"Meeting title: {_clean_text(meeting_title, maximum=200) or NOT_SPECIFIED}\n"
+                f"Transcript part {index + 1} of {len(chunks)} follows. Analyze the meaning; "
+                "do not copy long transcript passages. Use only these segment IDs as evidence.\n\n"
+                f"{self._transcript_text(chunk)}\n\nReturn the required JSON object."
+            )
+            partials.append(self._generate_and_normalise(prompt, prepared))
+        merged = self._merge_partials(partials, prepared)
+        return _public_analysis(merged, prepared, model_name=self.name)
+
+    @staticmethod
+    def _merge_partials(
+        partials: list[dict[str, Any]],
+        prepared: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Combine already-normalised per-chunk analyses without another model call.
+
+        Asking this model to merge multiple chunks by re-reading their JSON
+        was observed to be *harder* for it than the original per-chunk
+        summarisation: on a real 298-segment meeting, every individual chunk
+        analysed cleanly, but the follow-up merge call degenerated into
+        empty/repetitive output. Each partial already passed the same
+        grounding and validation as a solo result, so concatenating them in
+        code and re-running normalise_analysis (which already dedupes by
+        normalised text) is simpler and does not depend on model capacity.
+        """
+        if len(partials) == 1:
+            return partials[0]
+
+        def _dedup_ids(ids: list[str]) -> list[str]:
+            seen: list[str] = []
+            for segment_id in ids:
+                if segment_id not in seen:
+                    seen.append(segment_id)
+            return seen
+
+        summaries = [
+            text
+            for part in partials
+            for text in [str(part.get("shortSummary") or "").strip()]
+            if text
+        ]
+        combined = {
+            "shortSummary": " ".join(summaries),
+            "summaryEvidenceSegmentIds": _dedup_ids(
+                [
+                    segment_id
+                    for part in partials
+                    for segment_id in part.get("summaryEvidenceSegmentIds") or []
+                ]
+            ),
+            "highlights": [item for part in partials for item in part.get("highlights") or []],
+            "decisions": [item for part in partials for item in part.get("decisions") or []],
+            "actionItems": [item for part in partials for item in part.get("actionItems") or []],
+        }
+        try:
+            return normalise_analysis(combined, prepared)
+        except MeetingAnalysisUnavailable as error:
+            if "summary" not in str(error).lower():
+                raise
+            return normalise_analysis(
+                _repair_summary_from_grounded_items(combined, prepared), prepared
+            )
+
+
+class LocalAnalysisRouter:
+    """Resolve the optional analysis component without restarting the companion."""
+
+    @staticmethod
+    def _resolve_model_path(configured: str) -> Path:
+        """Find the installed model file inside the shared analysis directory.
+
+        Three quality tiers (analysis-tiny/standard/pro) share one
+        destination folder so installing a different tier replaces the
+        previous one on disk, matching the existing whisper-base/
+        whisper-small pattern. Each tier's GGUF filename differs, so the
+        active one is discovered here rather than pinned to one literal
+        filename -- this is re-resolved on every call, so a component
+        installed after the companion started is picked up immediately.
+        """
+        path = Path(configured) if configured else Path()
+        if path.is_dir():
+            found = sorted(path.glob("*.gguf"))
+            if found:
+                return found[0]
+        return path
+
+    @staticmethod
+    def _output_tokens_for(model_path: Path) -> int:
+        """Give larger installed models more room to finish their JSON.
+
+        A real test against the "pro" (4B) tier showed noticeably richer,
+        more specific output (real names, dates, business context) than the
+        smaller tiers -- but 2 of 3 chunks hit the 2048-token --predict
+        ceiling before the JSON object could close, failing as "malformed
+        JSON" even though the content itself was good. Sized off the
+        installed file rather than a filename/tier lookup so it keeps
+        working if the exact pinned model file ever changes.
+        """
+        try:
+            size_bytes = model_path.stat().st_size
+        except OSError:
+            return 2_048
+        return 4_096 if size_bytes >= 1_500_000_000 else 2_048
+
+    @staticmethod
+    def _analyzer() -> LlamaCppMeetingAnalyzer:
+        model_path = LocalAnalysisRouter._resolve_model_path(
+            os.getenv("NOTESBUDDY_ANALYSIS_MODEL_PATH", "")
+        )
+        return LlamaCppMeetingAnalyzer(
+            runtime_path=os.getenv("NOTESBUDDY_ANALYSIS_RUNTIME", ""),
+            model_path=model_path,
+            output_tokens=LocalAnalysisRouter._output_tokens_for(model_path),
+        )
+
+    def configuration_status(self) -> dict[str, object]:
+        return self._analyzer().configuration_status()
+
+    def analyze(self, *, segments: object, meeting_title: object = "") -> dict[str, Any]:
+        return self._analyzer().analyze(segments=segments, meeting_title=meeting_title)
+
+
 class MeetingAnalyzer:
     """Lazy local/hosted instruction-model adapter."""
 
@@ -1345,10 +1696,10 @@ class MeetingAnalyzer:
         return _public_analysis(final, prepared, model_name=self.model_name)
 
 
-def analyzer_from_environment() -> MeetingAnalyzer | ExtractiveMeetingAnalyzer:
+def analyzer_from_environment() -> MeetingAnalyzer | LocalAnalysisRouter:
     model_name = os.getenv("NOTESBUDDY_ANALYSIS_MODEL", "").strip()
     if not model_name:
-        return ExtractiveMeetingAnalyzer()
+        return LocalAnalysisRouter()
     return MeetingAnalyzer(
         model_name=model_name,
         revision=os.getenv("NOTESBUDDY_ANALYSIS_REVISION", "").strip() or None,

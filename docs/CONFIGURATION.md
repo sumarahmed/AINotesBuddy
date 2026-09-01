@@ -53,7 +53,7 @@ streams. It applies to the next capture.
 | Local companion endpoint | `http://127.0.0.1:8765` | Fixed loopback discovery/API address |
 | Hosted fallback endpoint | Empty by default | Set only after a public service passes production verification; an empty value prevents a broken fallback from being offered |
 | Local processing priority | All recording lengths | A connected companion prevents hybrid jobs from being routed online |
-| Analysis model | `notesbuddy-local-extractive-v1` | Private deterministic companion analyzer; an optional instruction model can replace it through `NOTESBUDDY_ANALYSIS_MODEL` |
+| Analysis model | One of three installable local GGUF tiers (`analysis-tiny`/`analysis-standard`/`analysis-pro`), selected in the companion setup screen | Runs through `llama-cli.exe`; a hosted instruction model can replace it through `NOTESBUDDY_ANALYSIS_MODEL` |
 | Analysis schema/prompt version | Schema `1`, prompt `2` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
 | Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |
 | Companion download URL | Versioned GitHub Release `.exe` asset | Direct public Windows installer download |

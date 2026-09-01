@@ -51,7 +51,15 @@ class PartialResponse(FakeResponse):
 
 class ComponentManagerTests(unittest.TestCase):
     def setUp(self) -> None:
-        names = ("NOTESBUDDY_COMPONENT_DIR", "NOTESBUDDY_MODEL_DIR", "NOTESBUDDY_GPU_LIB_DIR", "NOTESBUDDY_DIARIZATION_MODEL", "NOTESBUDDY_SPEAKER_WORKER")
+        names = (
+            "NOTESBUDDY_COMPONENT_DIR",
+            "NOTESBUDDY_MODEL_DIR",
+            "NOTESBUDDY_GPU_LIB_DIR",
+            "NOTESBUDDY_DIARIZATION_MODEL",
+            "NOTESBUDDY_SPEAKER_WORKER",
+            "NOTESBUDDY_ANALYSIS_RUNTIME",
+            "NOTESBUDDY_ANALYSIS_MODEL_PATH",
+        )
         self.environment = {name: os.environ.get(name) for name in names}
 
     def tearDown(self) -> None:
@@ -67,11 +75,17 @@ class ComponentManagerTests(unittest.TestCase):
         manifest.write_text(json.dumps({"schemaVersion": 1, "components": {
             "whisper-small": {"name": "Accurate", "version": "1", "category": "speech", "destination": "models/faster-whisper-selected", "bytes": len(payload), "sha256": checksum or hashlib.sha256(payload).hexdigest(), "url": "https://example.invalid/model.zip"},
             "speaker-diarization": {"name": "Speakers", "version": "1", "category": "speaker", "destination": "models/speaker-diarization-community-1", "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(), "url": "https://example.invalid/speaker.zip"},
+            "analysis-tiny": {"name": "Smart summary", "version": "1", "category": "analysis", "destination": "analysis", "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(), "url": "https://example.invalid/analysis.zip"},
         }}), encoding="utf-8")
         return ComponentManager(root=root, manifest_path=manifest, opener=lambda *_args, **_kwargs: FakeResponse(payload))
 
     def wait(self, manager: ComponentManager, job_id: str) -> dict:
-        for _ in range(100):
+        # The install runs on a background thread doing real filesystem
+        # extraction (including, in some tests, deeply nested paths under a
+        # live-synced OneDrive folder). A 1-second budget was observed to
+        # time out under normal system load even though the job itself was
+        # still progressing, not stuck; poll longer before giving up.
+        for _ in range(1_000):
             job = manager.job(job_id)
             if job and job["status"] not in {"queued", "downloading", "installing"}:
                 return job
@@ -86,6 +100,34 @@ class ComponentManagerTests(unittest.TestCase):
             self.assertEqual(job["status"], "completed")
             self.assertTrue((manager.root / "models/faster-whisper-selected/model.bin").is_file())
             self.assertTrue(manager.status()["components"]["whisper-small"]["installed"])
+
+    def test_smart_summary_component_installs_at_configured_analysis_path(self) -> None:
+        payload = archive_bytes({
+            "llama-cli.exe": b"runtime",
+            "qwen2.5-0.5b-instruct-q4_k_m.gguf": b"model",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory, payload)
+
+            job = self.wait(manager, manager.start_install(["analysis-tiny"])["jobId"])
+
+            self.assertEqual(job["status"], "completed")
+            self.assertEqual(
+                Path(os.environ["NOTESBUDDY_ANALYSIS_RUNTIME"]),
+                manager.root / "analysis/llama-cli.exe",
+            )
+            # NOTESBUDDY_ANALYSIS_MODEL_PATH names the shared analysis
+            # directory, not one fixed filename -- three quality tiers can
+            # each land a differently-named *.gguf there, and the active
+            # one is discovered by LocalAnalysisRouter at request time.
+            self.assertEqual(
+                Path(os.environ["NOTESBUDDY_ANALYSIS_MODEL_PATH"]),
+                manager.root / "analysis",
+            )
+            self.assertTrue(Path(os.environ["NOTESBUDDY_ANALYSIS_RUNTIME"]).is_file())
+            self.assertTrue(
+                (manager.root / "analysis" / "qwen2.5-0.5b-instruct-q4_k_m.gguf").is_file()
+            )
 
     def test_compatible_component_checksum_survives_core_app_upgrades(self) -> None:
         payload = archive_bytes({"model.bin": b"model"})
@@ -238,6 +280,14 @@ class ComponentManagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = configure_component_environment(Path(directory) / "persistent")
             self.assertEqual(Path(__import__("os").environ["NOTESBUDDY_MODEL_DIR"]), root / "models")
+            self.assertEqual(
+                Path(os.environ["NOTESBUDDY_ANALYSIS_RUNTIME"]),
+                root / "analysis/llama-cli.exe",
+            )
+            self.assertEqual(
+                Path(os.environ["NOTESBUDDY_ANALYSIS_MODEL_PATH"]),
+                root / "analysis",
+            )
             self.assertNotIn("Program Files", str(root))
 
 

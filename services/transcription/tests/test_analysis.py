@@ -1,19 +1,100 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notesbuddy_transcription.analysis import (  # noqa: E402
     ExtractiveMeetingAnalyzer,
+    LlamaCppMeetingAnalyzer,
+    LocalAnalysisRouter,
     MeetingAnalysisUnavailable,
     _repair_summary_from_grounded_items,
     _transcript_chunks,
     normalise_analysis,
     prepare_transcript_segments,
 )
+
+
+class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
+    def test_generates_synthesised_grounded_analysis_from_text_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(
+                runtime_path=runtime,
+                model_path=model,
+            )
+            generated = {
+                "shortSummary": "The team reviewed invoice monitoring and agreed to validate failed documents.",
+                "summaryEvidenceSegmentIds": ["S0001", "S0002"],
+                "highlights": [
+                    {
+                        "text": "The monitoring view shows failed invoices and SLA status.",
+                        "evidenceSegmentIds": ["S0001"],
+                    }
+                ],
+                "decisions": [
+                    {
+                        "decision": "Validate the failed invoice examples.",
+                        "context": "The examples are required by operations.",
+                        "owner": "Not specified",
+                        "evidenceSegmentIds": ["S0002"],
+                    }
+                ],
+                "actionItems": [
+                    {
+                        "task": "Send the failed invoice results.",
+                        "owner": "Presenter",
+                        "dueDate": "Friday",
+                        "priority": "Medium",
+                        "notes": "Not specified",
+                        "evidenceSegmentIds": ["S0002"],
+                    }
+                ],
+            }
+            completed = type(
+                "Completed", (), {"returncode": 0, "stdout": json.dumps(generated), "stderr": ""}
+            )()
+            segments = [
+                {
+                    "id": "monitoring",
+                    "speaker": "Presenter",
+                    "text": "The monitoring view shows failed invoices and SLA status.",
+                },
+                {
+                    "id": "agreement",
+                    "speaker": "Presenter",
+                    "text": "We agreed to validate the failed invoice examples because operations requires them, and I will send the failed invoice results by Friday.",
+                },
+            ]
+
+            with patch("notesbuddy_transcription.analysis.subprocess.run", return_value=completed) as run:
+                result = analyzer.analyze(segments=segments, meeting_title="Invoice review")
+
+            command = run.call_args.args[0]
+            self.assertIn("--json-schema-file", command)
+            self.assertNotIn("audio", " ".join(command).lower())
+            self.assertIn("reviewed invoice monitoring", result["shortSummary"])
+            self.assertEqual(result["decisions"][0]["sourceSegmentIds"], ["agreement"])
+            self.assertEqual(result["actionItems"][0]["dueDate"], "Friday")
+
+    def test_router_reports_missing_optional_component_instead_of_extractive_summary(self) -> None:
+        with patch.dict("os.environ", {
+            "NOTESBUDDY_ANALYSIS_RUNTIME": "missing-runtime.exe",
+            "NOTESBUDDY_ANALYSIS_MODEL_PATH": "missing-model.gguf",
+        }):
+            status = LocalAnalysisRouter().configuration_status()
+
+        self.assertFalse(status["ready"])
+        self.assertIn("Smart summary", status["status"])
 
 
 class WordTokenizer:

@@ -459,6 +459,41 @@ class LocalDiarizationEngine:
             return regular
         return output
 
+    def _diarize_with_heartbeat(
+        self,
+        path: Path,
+        *,
+        cancel_event: threading.Event,
+        progress: ProgressCallback,
+    ) -> list[SpeakerTurn]:
+        """Emit synthetic progress while diarization runs.
+
+        Diarization on CPU (the distributable's default, see the companion
+        README) can take much longer than transcription for a long meeting,
+        with no natural progress points inside the blocking pyannote/worker
+        call. Without this, a real run observed the UI stuck at 68% for over
+        twenty minutes, indistinguishable from a hang. This nudges the
+        reported progress upward on a timer so it keeps moving; the real
+        stage value is restored by the 0.9 "aligning speaker timestamps"
+        call once diarization actually finishes.
+        """
+
+        stop = threading.Event()
+
+        def heartbeat() -> None:
+            current = 0.68
+            while not stop.wait(15):
+                current = min(0.89, current + 0.01)
+                progress(round(current, 2), "identifying meeting speakers")
+
+        thread = threading.Thread(target=heartbeat, daemon=True)
+        thread.start()
+        try:
+            return self._diarize(path, cancel_event=cancel_event)
+        finally:
+            stop.set()
+            thread.join(timeout=1)
+
     def _diarize(
         self,
         path: Path,
@@ -548,15 +583,23 @@ class LocalDiarizationEngine:
             text=True,
             creationflags=creation_flags,
         )
-        while process.poll() is None:
-            if cancel_event.wait(0.1):
+        while True:
+            if cancel_event.is_set():
                 process.terminate()
                 try:
-                    process.wait(timeout=3)
+                    process.communicate(timeout=3)
                 except subprocess.TimeoutExpired:
                     process.kill()
+                    process.communicate()
                 raise EngineCancelled("Transcription cancelled")
-        stdout, stderr = process.communicate()
+            try:
+                # Drain both pipes while the worker runs. Waiting for process
+                # exit before communicate() deadlocks once a long meeting's
+                # speaker-turn JSON fills the Windows pipe buffer.
+                stdout, stderr = process.communicate(timeout=0.2)
+                break
+            except subprocess.TimeoutExpired:
+                continue
         try:
             payload = json.loads(stdout or "{}")
         except ValueError as error:
@@ -619,9 +662,10 @@ class LocalDiarizationEngine:
             if language:
                 languages.append(language)
             progress(0.68, "identifying meeting speakers")
-            meeting_turns = self._diarize(
+            meeting_turns = self._diarize_with_heartbeat(
                 remote_path,
                 cancel_event=cancel_event,
+                progress=progress,
             )
 
         if cancel_event.is_set():

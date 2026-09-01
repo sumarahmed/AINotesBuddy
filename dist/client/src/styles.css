@@ -3460,6 +3460,32 @@ kbd {
   border-radius: 999px;
 }
 
+.component-subsection {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+}
+
+.component-subsection__label {
+  font-size: 10px;
+  font-weight: 650;
+  color: var(--ink-faint);
+}
+
+.component-options--compact {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  margin: 0;
+}
+
+.component-options__tier {
+  cursor: pointer;
+}
+
+.component-options__tier--selected {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 1px var(--teal) inset;
+}
+
 .component-progress {
   display: grid;
   gap: 8px;
