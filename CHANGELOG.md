@@ -8,6 +8,32 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.09.01 - 2026-09-02
+
+### Fixed
+
+- Local smart-summary analysis no longer fails on every real meeting. The
+  bundled `llama.cpp` runtime's Jinja chat template primed the assistant turn
+  with a special token that a JSON-schema grammar could not accept, so every
+  analysis call failed instantly and then idled until the timeout, which
+  looked identical to a slow CPU. Every real generation call is now verified
+  end to end.
+- The evidence-grounded cross-chunk merge no longer asks the local model to
+  re-synthesize already-valid partial analyses; it combines them
+  deterministically instead, which was silently degrading merged output on
+  real meetings even though each chunk had analyzed correctly on its own.
+- Long local-only diarization no longer appears to hang at a fixed progress
+  percentage; progress now visibly advances while it runs.
+
+### Added
+
+- Three selectable smart-summary quality tiers (Fast, Balanced, High
+  quality), each an independently downloadable local model. The one-time
+  companion setup screen lets a user pick one by name and download size
+  before installing. Balanced is the new recommended default; Fast is kept
+  for the smallest download only, since it was found to fail evidence
+  grounding almost entirely on real meeting speech.
+
 ## 2026.08.18 - 2026-08-24
 
 ### Fixed
