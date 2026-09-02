@@ -27,7 +27,7 @@ from desktop_app import (
 
 class DesktopUtilityTests(unittest.TestCase):
     def test_companion_uses_year_month_minor_release_version(self) -> None:
-        self.assertEqual(COMPANION_VERSION, "2026.09.03")
+        self.assertEqual(COMPANION_VERSION, "2026.09.04")
 
     def test_companion_compares_release_versions_numerically(self) -> None:
         self.assertEqual(version_parts("companion-v2026.08.3"), (2026, 8, 3))
