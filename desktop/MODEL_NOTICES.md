@@ -49,10 +49,15 @@ per-tier upstream source and license only.
 
 ### High quality (`analysis-pro`)
 
-- Model: `unsloth/Qwen3-4B-Instruct-2507-GGUF`, Q4_K_M quantization
+- Model: `unsloth/Qwen3-4B-Instruct-2507-GGUF`, Q3_K_M quantization
 - Project: <https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF>
 - Declared license: Apache-2.0 (license text sourced the same way as
   Balanced, above)
+- Q4_K_M (2.50 GB) was verified first and is the higher-fidelity option, but
+  a single GitHub release asset cannot exceed 2 GiB, so it does not fit.
+  Q3_K_M (1.93 GB) was re-verified against the same real meeting chunk
+  afterward and produced comparable grounded content; revert to Q4_K_M in
+  `desktop/prepare_components.py` if a future release host allows it.
 - Verified against the same real recording: the richest, most specific
   output of the three (named owners, explicit dates, business context), at
   the cost of noticeably slower CPU generation. Needs a larger `--predict`

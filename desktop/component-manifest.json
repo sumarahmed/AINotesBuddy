@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "releaseVersion": "2026.08.7-components",
+  "releaseVersion": "2026.09.01",
   "components": {
     "whisper-base": {
       "name": "Balanced speech model",
@@ -43,6 +43,42 @@
       "bytes": 898501642,
       "sha256": "8656e18a16ab914f17b73a456300a2df6c28a22ae5792317245ed5deb2676b87",
       "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.08.7/NotesBuddy-nvidia-cuda12-2026.08.7.zip"
+    },
+    "analysis-tiny": {
+      "name": "Smart meeting summary (Fast)",
+      "version": "2026.09.01",
+      "category": "analysis",
+      "destination": "analysis",
+      "bytes": 496098745,
+      "sha256": "b53fb30420841e1705f99397f10bf2ca9855f373bc69c781bf05d4d33956bceb",
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.09.01/NotesBuddy-analysis-tiny-2026.09.01.zip",
+      "tierDescription": "Smallest download, quickest to install",
+      "modelRevision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "runtimeRelease": "b10516"
+    },
+    "analysis-standard": {
+      "name": "Smart meeting summary (Balanced)",
+      "version": "2026.09.01",
+      "category": "analysis",
+      "destination": "analysis",
+      "bytes": 1103668306,
+      "sha256": "ede8601ca227f214fe7c934feb9486b47b9a19f8493d3dde8cd1053048639360",
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.09.01/NotesBuddy-analysis-standard-2026.09.01.zip",
+      "tierDescription": "Recommended: noticeably better summaries and highlights",
+      "modelRevision": "d7f544eead698dbd1f15126ef60b45a1e1933222",
+      "runtimeRelease": "b10516"
+    },
+    "analysis-pro": {
+      "name": "Smart meeting summary (High quality)",
+      "version": "2026.09.01",
+      "category": "analysis",
+      "destination": "analysis",
+      "bytes": 2068770433,
+      "sha256": "eb8cdcac43848a105f696d4820263bdb169f7bfdbcb7920ee48337911dbcd2c0",
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.09.01/NotesBuddy-analysis-pro-2026.09.01.zip",
+      "tierDescription": "Largest download, most capable local summarisation",
+      "modelRevision": "a06e946bb6b655725eafa393f4a9745d460374c9",
+      "runtimeRelease": "b10516"
     }
   }
 }

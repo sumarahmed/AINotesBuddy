@@ -59,9 +59,16 @@ ANALYSIS_TIERS = (
         "description": "Largest download, most capable local summarisation",
         "model_repository": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
         "model_revision": "a06e946bb6b655725eafa393f4a9745d460374c9",
-        "model_filename": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-        "model_bytes": 2_497_281_120,
-        "model_sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+        # Q4_K_M (2.50 GB) was verified first and is the highest-fidelity
+        # option, but a single GitHub release asset cannot exceed 2 GiB
+        # (2,147,483,648 bytes), so it does not fit. Q3_K_M (1.93 GB) was
+        # re-verified against the same real meeting chunk afterward and
+        # produced comparable grounded content (6 highlights, 2 action
+        # items with real dates) -- swap back to Q4_K_M if GitHub's limit
+        # ever changes or another host is used.
+        "model_filename": "Qwen3-4B-Instruct-2507-Q3_K_M.gguf",
+        "model_bytes": 2_075_618_400,
+        "model_sha256": "9c6e0763577125a994a9bea0bbd7a737ac4498b8a6a4e0f788727553af1806c9",
         "model_license_asset": "LICENSE-Qwen3.txt",
         "model_license": "Apache-2.0",
         # unsloth's GGUF quantisation repo carries no LICENSE file; it is
