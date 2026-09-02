@@ -24,6 +24,9 @@ for speech-to-text and speaker diarization.
 - Optional browser live-speech draft showing **You** and provisional **Guest**
   labels from synchronized meeting-output activity, with no inserted sample text
 - Local faster-whisper transcription and pyannote speaker diarization companion
+- Three selectable local smart-summary quality tiers (Fast, Balanced,
+  High quality), each an independently downloadable GGUF model; the
+  companion setup screen shows real download sizes before installing
 - Windows tray/control-panel app with automatic short-lived browser pairing
 - Existing-user website warnings and daily desktop checks for companion updates
 - Local-first website selection with a disclosed online fallback
@@ -134,6 +137,11 @@ In NotesBuddy, open **Settings**, keep the companion URL at
 connection**. After a meeting, open **Transcript** and choose **Transcribe and
 identify speakers**.
 
+The first time a paired companion needs its speech, speaker, or smart-summary
+components, NotesBuddy shows a one-time setup screen to choose a speech-quality
+preset and a smart-summary quality tier (Fast, Balanced, or High quality),
+each showing its real download size before installing.
+
 The pyannote community model requires accepting its model terms before the
 first download. See the complete [companion setup and troubleshooting
 guide](services/transcription/README.md).
@@ -238,8 +246,16 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
   Windows. The browser-only fallback still requires an explicit share prompt
   and some surface/browser combinations do not expose audio.
 - The small Windows installer downloads the selected speech model, speaker
-  model, and compatible NVIDIA pack once. Verified components remain installed
-  across companion application upgrades.
+  model, compatible NVIDIA pack, and one smart-summary quality tier once.
+  Verified components remain installed across companion application upgrades.
+- The desktop companion is Windows-only. There is no macOS or Linux build,
+  packaging, or system-audio-capture equivalent; a Mac user can still record
+  their own microphone in the browser, but meeting-audio capture and local
+  transcription/analysis are unavailable there today.
+- Local smart-summary generation runs on CPU by default. The High quality
+  tier in particular can take many minutes per meeting on CPU; there is no
+  GPU acceleration pack for it yet (the existing NVIDIA pack only
+  accelerates speech-to-text, not the smart-summary model).
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,

@@ -50,8 +50,11 @@ flowchart LR
     Whisper --> Alignment["Timestamp alignment + echo de-duplication"]
     Pyannote --> Alignment
     Alignment --> Client
-    Client -->|"completed transcript only"| Analyzer["Hosted meeting analyst"]
-    Analyzer --> Grounding["Evidence and field validation"]
+    Client -->|"completed transcript only"| AnalysisRouter["Prefer local companion, else hosted"]
+    AnalysisRouter --> LocalAnalyzer["Companion: llama.cpp + one installed GGUF tier"]
+    AnalysisRouter --> Analyzer["Hosted meeting analyst"]
+    LocalAnalyzer --> Grounding["Evidence and field validation"]
+    Analyzer --> Grounding
     Grounding --> Client
     Client --> LocalStorage
 ```
@@ -257,6 +260,38 @@ do not need a model token. The trusted release job uses the publisher's secret
 once, records immutable model revisions, and never includes that secret in the
 artifact. `EmptyEngine` exists only for API/security smoke tests and returns an
 empty segment array. It never returns demonstration text.
+
+### Local analysis (smart summary)
+
+`LocalAnalysisRouter` resolves the analysis component installed on the paired
+companion and is the default analyzer whenever `NOTESBUDDY_ANALYSIS_MODEL` is
+unset (i.e. for every packaged companion). It shells out to a pinned
+`llama.cpp` (`llama-cli`) build against one of three independently
+downloadable GGUF models, sharing one destination directory so installing a
+different quality tier replaces the previous one:
+
+| Tier | Model | Notes |
+| --- | --- | --- |
+| `analysis-tiny` (Fast) | Qwen2.5-0.5B-Instruct | Smallest download; raw output was found to fail evidence-grounding validation almost entirely on real meeting speech |
+| `analysis-standard` (Balanced, recommended) | Qwen3-1.7B | Reliably produces grounded, validated highlights and decisions |
+| `analysis-pro` (High quality) | Qwen3-4B-Instruct-2507, Q3_K_M | Richest, most specific output; markedly slower on CPU, and needs a larger `--predict` output budget to reliably finish its JSON |
+
+A long transcript is split into chunks sized well below the model's raw
+context window -- this is about the model's effective reasoning span, not
+`--ctx-size`; a 0.5B model was observed to lose coherence and degenerate into
+repetition once asked to track and cite more than roughly a hundred segment
+IDs in one completion, well before running out of context. Per-chunk results
+are combined deterministically (concatenate, then re-run the same
+evidence-grounding validation used for a single chunk) rather than asking the
+model to re-synthesize its own already-valid JSON output, which was observed
+to degrade a real multi-chunk result even though every individual chunk had
+analyzed cleanly on its own.
+
+`createMeetingAnalysisClient()` in `src/app.js` prefers the paired companion
+whenever it reports `analysisAvailable: true`, falling back to the hosted
+analyzer only when no local analysis component is installed. See
+[Privacy and data handling](PRIVACY.md#professional-meeting-analysis) for the
+resulting data-boundary behavior.
 
 ## Speaker model
 

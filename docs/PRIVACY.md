@@ -31,7 +31,7 @@ application's control.
 | Companion pairing token | Local OS user configuration directory | Until token file is deleted |
 | Companion update response | Companion process memory | Until the next check or application exit |
 | Teams audio/microphone activity flags | Companion process memory | Current detection poll only; no audio content is read or stored |
-| Speech/diarization models | Local or hosted model cache | Until the owner removes the cache |
+| Speech, diarization, and smart-summary models | Local or hosted model cache | Until the owner removes the cache |
 | Hugging Face model token | Source-development environment, host secret manager, or trusted release job | Owner controlled; never included in installer |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
 
@@ -202,17 +202,21 @@ browser sends the meeting title plus timestamped speaker text and stable segment
 IDs to `POST /v1/analyses`; it does not include microphone, meeting, or mixed
 recording Blobs in this request.
 
-In the public hybrid deployment, this request uses the configured hosted
-service even when the desktop companion performed audio transcription locally.
-The Summary view and Settings disclose this boundary. A fully local development
-deployment can instead configure an analyzer on the loopback service.
+**The browser prefers the paired local companion for this request whenever it
+reports a smart-summary component installed**, regardless of whether that same
+companion performed audio transcription. In that case the transcript never
+leaves the computer: it is sent only to `127.0.0.1`, processed by a local
+`llama.cpp` model, and the result returned over the same loopback connection.
+The hosted analyzer is used only when no companion is connected, or a
+connected companion has no smart-summary component installed yet. The Summary
+view and Settings disclose which path served the most recent result.
 
-The hosted analyzer processes the transcript in memory and returns a structured
-result with supporting segment IDs. NotesBuddy does not intentionally write the
-analysis request or result to the persistent model-cache volume. Normal
-application logs do not include transcript request bodies. The compute and
-hosting providers can still process network/request metadata under their own
-policies.
+When the hosted path is used, the hosted analyzer processes the transcript in
+memory and returns a structured result with supporting segment IDs. NotesBuddy
+does not intentionally write the analysis request or result to the persistent
+model-cache volume. Normal application logs do not include transcript request
+bodies. The compute and hosting providers can still process network/request
+metadata under their own policies.
 
 The browser validates all returned evidence IDs before saving the result. The
 server additionally removes unsupported items and normalizes unsupported
@@ -229,9 +233,13 @@ Customers do not provide a token. The build token is never written to the
 executable or installer. Source developers and hosted operators may instead
 provide their own process/secret-manager token.
 
-Speech, diarization, and hosted analysis models are cached locally or in a host-mounted model-cache
-volume. Model cache files contain model weights, not meeting audio. Their size
-and deletion method are controlled by the model libraries/provider.
+Speech, diarization, smart-summary, and hosted analysis models are cached
+locally or in a host-mounted model-cache volume. The smart-summary model is
+one of three independently downloadable quality tiers a user selects in the
+companion setup screen; installing a different tier replaces the previous one
+rather than keeping multiple installed at once. Model cache files contain
+model weights, not meeting audio. Their size and deletion method are
+controlled by the model libraries/provider.
 
 ## Speaker labels
 

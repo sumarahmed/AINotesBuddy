@@ -74,7 +74,11 @@ The Python suite covers:
 - invalid metadata rejection;
 - cancellation signaling and temporary-audio deletion.
 - production adapter parsing of fake faster-whisper/pyannote outputs;
-- mixed-only diarization and mic-only duplicate-mixed suppression.
+- mixed-only diarization and mic-only duplicate-mixed suppression;
+- local smart-summary generation, chunking, and deterministic cross-chunk
+  merge, mocking the `llama-cli` subprocess;
+- component installer packaging, including each smart-summary quality tier
+  and the shared-destination replace-on-install behavior.
 - anonymous session opacity, expiry/error handling, issuance limits, active-job
   limits, and compute quotas;
 - hosted job ownership isolation and hosted CORS/session headers.
@@ -273,6 +277,14 @@ The trusted release workflow must:
 7. start from the Start menu and Windows sign-in entry;
 8. pair from the deployed HTTPS site and complete a real two-speaker
    transcription;
-9. uninstall and confirm the program/autostart entry is removed.
+9. install at least one smart-summary tier and confirm a real professional
+   analysis completes locally (not routed to the hosted fallback);
+10. confirm `GET /v1/companion`'s `version` field actually matches the tag
+    just built -- a real release once shipped with the installer correctly
+    labelled but the frozen `desktop_app.py` still reporting the previous
+    version indefinitely, because `COMPANION_VERSION` and the installer's own
+    `AppVersion` were two disconnected values; `build.ps1` now synchronises
+    them automatically, but this step is the check that would have caught it;
+11. uninstall and confirm the program/autostart entry is removed.
 
 Do not publish a model-free packaging smoke artifact as a working product.
