@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.09.01` (`Year.Month.MinorRelease`)
+**Current version:** `2026.09.02` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -26,7 +26,10 @@ for speech-to-text and speaker diarization.
 - Local faster-whisper transcription and pyannote speaker diarization companion
 - Three selectable local smart-summary quality tiers (Fast, Balanced,
   High quality), each an independently downloadable GGUF model; the
-  companion setup screen shows real download sizes before installing
+  companion setup screen shows real download sizes before installing, and
+  Settings can switch or download a different tier at any time afterward
+- Live progress and an elapsed timer while professional analysis runs,
+  instead of a static "Analyzing…" message
 - Windows tray/control-panel app with automatic short-lived browser pairing
 - Existing-user website warnings and daily desktop checks for companion updates
 - Local-first website selection with a disclosed online fallback

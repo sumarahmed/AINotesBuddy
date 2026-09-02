@@ -8,45 +8,40 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
-### Fixed
-
-- Confirmed with a real user report and the field-count diagnostic logging
-  below: a chunk's reinforcement retry (see the 2026.09.02 summary fix)
-  returned a summary describing a scheduled follow-up session and a
-  to-be-sent document, yet that same response's highlights, decisions, and
-  actionItems arrays came back completely empty -- the retry prompt's
-  narrow focus on fixing the summary field caused the model to drop
-  structured findings it clearly still had, and the first attempt's own
-  findings were discarded even though they were never actually
-  invalidated (a bad summary makes validation raise before anything else
-  is checked). The retry now combines both attempts' highlights,
-  decisions, and action items instead of using only whichever the retry
-  happened to include.
-
 ### Added
 
 - Diagnostic logging now records highlights/decisions/actionItems counts
   (both raw model output and post-validation) at every per-chunk and merge
   stage, not only the summary text -- to diagnose a report of highlights,
-  decisions, and action items all coming back empty after the merge fix
-  below, without guessing at a fix again.
+  decisions, and action items all coming back empty, without guessing at a
+  fix again.
 
 ### Fixed
 
+- Confirmed with a real retry and the diagnostic logging above: a chunk's
+  reinforcement retry (see the 2026.09.02 summary fix) returned a summary
+  describing a scheduled follow-up session and a to-be-sent document, yet
+  that same response's highlights, decisions, and actionItems arrays came
+  back completely empty -- the retry prompt's narrow focus on fixing the
+  summary field caused the model to drop structured findings it clearly
+  still had, and the first attempt's own findings were discarded even
+  though they were never actually invalidated (a bad summary makes
+  validation raise before anything else is checked). The retry now
+  combines both attempts' highlights, decisions, and action items instead
+  of using only whichever attempt happened to include them.
 - Found the real cause of the recurring "Technical Constraints and
   Timeframe. Discovery Phase Documentation Requirements." bad-summary
-  report, using the diagnostic logging shipped just before this fix: on a
-  real multi-chunk meeting, every chunk's own summary passed
-  evidence-grounding individually (confirmed live in the new log), but the
-  merge step that combines chunks re-checked the *concatenated* summary
-  against the combined evidence as if it were a single fresh model output,
-  and that stricter re-check failed even though nothing in it was
-  ungrounded. Merge then fell back to concatenating highlight/decision/
-  action titles, producing the exact same bug the 2026.09.02
-  reinforcement-retry fix was believed to have already fixed -- that fix
-  only ever covered the per-chunk path, not this separate merge-time one.
-  Merge now trusts the partials' own already-validated summaries instead
-  of re-deriving one from field titles.
+  report, using diagnostic logging: on a real multi-chunk meeting, every
+  chunk's own summary passed evidence-grounding individually (confirmed
+  live in the log), but the merge step that combines chunks re-checked the
+  *concatenated* summary against the combined evidence as if it were a
+  single fresh model output, and that stricter re-check failed even though
+  nothing in it was ungrounded. Merge then fell back to concatenating
+  highlight/decision/action titles, producing the exact same bug the
+  2026.09.02 reinforcement-retry fix was believed to have already fixed --
+  that fix only ever covered the per-chunk path, not this separate
+  merge-time one. Merge now trusts the partials' own already-validated
+  summaries instead of re-deriving one from field titles.
 - Local smart-summary diagnostic logging (`llama_cpp_failed`,
   `llama_cpp_invalid_output`, `summary_repair_fallback`) relied on `print()`,
   which is silently discarded in the packaged Windows companion: PyInstaller

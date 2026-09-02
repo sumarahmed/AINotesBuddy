@@ -268,7 +268,9 @@ companion and is the default analyzer whenever `NOTESBUDDY_ANALYSIS_MODEL` is
 unset (i.e. for every packaged companion). It shells out to a pinned
 `llama.cpp` (`llama-cli`) build against one of three independently
 downloadable GGUF models, sharing one destination directory so installing a
-different quality tier replaces the previous one:
+different quality tier replaces the previous one. Settings can trigger that
+same install/replace flow at any time after initial setup, not only during
+first-time onboarding.
 
 | Tier | Model | Notes |
 | --- | --- | --- |
@@ -292,6 +294,32 @@ whenever it reports `analysisAvailable: true`, falling back to the hosted
 analyzer only when no local analysis component is installed. See
 [Privacy and data handling](PRIVACY.md#professional-meeting-analysis) for the
 resulting data-boundary behavior.
+
+When a chunk's own shortSummary fails evidence-grounding, one reinforced retry
+re-sends the full prompt with an explicit correction before falling back to
+concatenating structured field text (which reads as disconnected labels, not
+prose). That retry regenerates the entire response, including highlights,
+decisions, and actionItems -- a real chunk's retry once returned a corrected
+summary but completely empty structured fields, because the retry prompt's
+narrow focus on the summary pulled the model's attention off everything else,
+and the first attempt's own fields were never actually invalidated (a bad
+summary makes validation raise before anything else is checked). The retry
+now combines both attempts' raw highlights/decisions/actionItems before
+validation rather than using only whichever attempt happened to include them.
+The cross-chunk merge has an analogous fix: it trusts each already-validated
+partial's own summary instead of re-running the same strict grounding check
+against their concatenation, which was observed to fail even when every
+partial was individually sound (concatenation dilutes the token-overlap ratio
+and a number or time phrase valid against one chunk's own evidence can trip a
+whole-text subset check).
+
+Analysis reports live progress through a token-based polling side channel
+(`POST /v1/analyses` accepts an optional `progressToken`; `GET
+/v1/analyses/progress/{token}` returns its current stage and 0-1 fraction)
+rather than a streaming response, since the main request must stay a single
+blocking call for compatibility with the hosted/Modal deployment. The browser
+client polls that endpoint on its own short interval while the main request
+is still in flight and stops once it resolves.
 
 ## Speaker model
 

@@ -31,6 +31,7 @@ application's control.
 | Companion pairing token | Local OS user configuration directory | Until token file is deleted |
 | Companion update response | Companion process memory | Until the next check or application exit |
 | Teams audio/microphone activity flags | Companion process memory | Current detection poll only; no audio content is read or stored |
+| Local smart-summary diagnostic log (may include short generated-summary excerpts) | `%LOCALAPPDATA%\NotesBuddy\logs\companion.log` | Until the user deletes the file |
 | Speech, diarization, and smart-summary models | Local or hosted model cache | Until the owner removes the cache |
 | Hugging Face model token | Source-development environment, host secret manager, or trusted release job | Owner controlled; never included in installer |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
@@ -214,9 +215,20 @@ view and Settings disclose which path served the most recent result.
 When the hosted path is used, the hosted analyzer processes the transcript in
 memory and returns a structured result with supporting segment IDs. NotesBuddy
 does not intentionally write the analysis request or result to the persistent
-model-cache volume. Normal application logs do not include transcript request
-bodies. The compute and hosting providers can still process network/request
-metadata under their own policies.
+model-cache volume. The compute and hosting providers can still process
+network/request metadata under their own policies.
+
+The local companion writes a diagnostic log to
+`%LOCALAPPDATA%\NotesBuddy\logs\companion.log` when local smart-summary
+generation needs a retry, falls back to a less-grounded result, or otherwise
+behaves unexpectedly. That log can include short excerpts (a few hundred
+characters) of the generated summary text and per-response
+highlight/decision/action-item counts -- derived from the meeting transcript,
+though never the transcript's raw text or full analysis result -- to make a
+real failure diagnosable without reproducing it. It stays on this computer,
+is never transmitted anywhere, and can be deleted at any time; it is not
+covered by the meeting-deletion flow described below, since the companion
+does not associate log lines with a specific meeting record.
 
 The browser validates all returned evidence IDs before saving the result. The
 server additionally removes unsupported items and normalizes unsupported

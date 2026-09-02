@@ -34,7 +34,9 @@ The JavaScript tests cover:
   rejection;
 - hosted anonymous-session creation and session-token multipart requests;
 - transcript-only professional-analysis request construction;
-- automatic replacement of hosted sessions lost during scale-to-zero.
+- automatic replacement of hosted sessions lost during scale-to-zero;
+- analysis progress-token polling while a request is in flight, stopping
+  after completion.
 
 The test file runs directly rather than with Node's process-isolated test mode,
 which also works in restricted Windows environments that deny child-process
@@ -77,8 +79,16 @@ The Python suite covers:
 - mixed-only diarization and mic-only duplicate-mixed suppression;
 - local smart-summary generation, chunking, and deterministic cross-chunk
   merge, mocking the `llama-cli` subprocess;
+- widened-budget retry after a truncated JSON response, and a reinforced
+  summary retry -- combining that retry's own highlights/decisions/action
+  items with the first attempt's rather than discarding either -- before
+  falling back to less readable concatenated field text;
+- cross-chunk merge trusting already-validated partial summaries over
+  re-deriving one from concatenated highlight/decision/action titles;
 - component installer packaging, including each smart-summary quality tier
-  and the shared-destination replace-on-install behavior.
+  and the shared-destination replace-on-install behavior;
+- server-side analysis progress store: pollable while a request is in
+  flight, cleared after completion.
 - anonymous session opacity, expiry/error handling, issuance limits, active-job
   limits, and compute quotas;
 - hosted job ownership isolation and hosted CORS/session headers.
