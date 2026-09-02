@@ -24,6 +24,12 @@ remain compatible with semantic-version tooling.
   real meetings even though each chunk had analyzed correctly on its own.
 - Long local-only diarization no longer appears to hang at a fixed progress
   percentage; progress now visibly advances while it runs.
+- Companion 2026.08.11 shipped with its own `COMPANION_VERSION` constant
+  disconnected from the installer's own version, so it kept self-reporting
+  2026.08.11 forever, no matter how many times it was reinstalled -- the
+  update banner could never be satisfied. Companion 2026.09.02 fixes this
+  and `desktop/build.ps1` now synchronises that constant from the build
+  version automatically, so it cannot drift again at the next release.
 
 ### Added
 

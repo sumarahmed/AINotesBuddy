@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "2026.08.11",
+    [string]$Version = "2026.09.02",
     [switch]$RequireModels,
     [switch]$SkipInstaller
 )
@@ -40,14 +40,36 @@ if (Test-Path -LiteralPath $resolvedOutputRoot) {
 New-Item -ItemType Directory -Path $resolvedOutputRoot | Out-Null
 New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 
-& $Python -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --distpath (Join-Path $outputRoot "dist") `
-    --workpath (Join-Path $outputRoot "work") `
-    $specPath
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller failed with exit code $LASTEXITCODE."
+# desktop_app.py's own COMPANION_VERSION constant is what the running
+# companion reports to itself and to the website (GET /v1/companion,
+# the tray window title, etc.) -- entirely separate from the installer's
+# own AppVersion/-Version below. A real release shipped with these out of
+# sync: the installer correctly said 2026.09.01, but the frozen Python
+# code still reported the previous 2026.08.11 forever, since nothing
+# updated this constant to match. Patch it into the frozen build here so
+# a build's self-reported version always matches what it was built as;
+# revert the working copy afterward so this stays a build-time-only
+# transformation, not a change to tracked source.
+$desktopAppPath = Join-Path $projectRoot "services\transcription\desktop_app.py"
+$originalDesktopApp = Get-Content -LiteralPath $desktopAppPath -Raw
+$versionPattern = 'COMPANION_VERSION = "[^"]*"'
+if ($originalDesktopApp -notmatch $versionPattern) {
+    throw "Could not find COMPANION_VERSION in desktop_app.py to synchronise with -Version."
+}
+$patchedDesktopApp = $originalDesktopApp -replace $versionPattern, "COMPANION_VERSION = `"$Version`""
+Set-Content -LiteralPath $desktopAppPath -Value $patchedDesktopApp -NoNewline
+try {
+    & $Python -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --distpath (Join-Path $outputRoot "dist") `
+        --workpath (Join-Path $outputRoot "work") `
+        $specPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller failed with exit code $LASTEXITCODE."
+    }
+} finally {
+    Set-Content -LiteralPath $desktopAppPath -Value $originalDesktopApp -NoNewline
 }
 
 $executable = Join-Path $outputRoot "dist\NotesBuddyCompanion\NotesBuddyCompanion.exe"

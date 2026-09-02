@@ -27,7 +27,7 @@ from desktop_app import (
 
 class DesktopUtilityTests(unittest.TestCase):
     def test_companion_uses_year_month_minor_release_version(self) -> None:
-        self.assertEqual(COMPANION_VERSION, "2026.08.11")
+        self.assertEqual(COMPANION_VERSION, "2026.09.02")
 
     def test_companion_compares_release_versions_numerically(self) -> None:
         self.assertEqual(version_parts("companion-v2026.08.3"), (2026, 8, 3))
@@ -35,15 +35,21 @@ class DesktopUtilityTests(unittest.TestCase):
         self.assertFalse(is_version_outdated("2026.08.3", "2026.08.3"))
 
     def test_latest_release_selects_trusted_windows_installer(self) -> None:
+        # Far enough ahead of any real COMPANION_VERSION that this test does
+        # not silently start asserting the opposite of what it means each
+        # time that constant is bumped for a real release -- exactly what
+        # broke here once already (fixture pinned to 2026.08.12, which
+        # stopped being "newer" the moment COMPANION_VERSION passed it).
+        future_tag = "2099.01.1"
         payload = {
-            "tag_name": "companion-v2026.08.12",
-            "html_url": f"{RELEASES_URL}/tag/companion-v2026.08.12",
+            "tag_name": f"companion-v{future_tag}",
+            "html_url": f"{RELEASES_URL}/tag/companion-v{future_tag}",
             "assets": [
                 {
-                    "name": "NotesBuddyCompanion-Setup-2026.08.12.exe",
+                    "name": f"NotesBuddyCompanion-Setup-{future_tag}.exe",
                     "browser_download_url": (
-                        f"{RELEASES_URL}/download/companion-v2026.08.12/"
-                        "NotesBuddyCompanion-Setup-2026.08.12.exe"
+                        f"{RELEASES_URL}/download/companion-v{future_tag}/"
+                        f"NotesBuddyCompanion-Setup-{future_tag}.exe"
                     ),
                 }
             ],
@@ -68,11 +74,11 @@ class DesktopUtilityTests(unittest.TestCase):
         result = fetch_latest_companion_release(opener=opener, timeout=2)
 
         self.assertTrue(result["available"])
-        self.assertEqual(result["latestVersion"], "2026.08.12")
+        self.assertEqual(result["latestVersion"], future_tag)
         self.assertTrue(str(result["downloadUrl"]).endswith(".exe"))
         self.assertEqual(captured["timeout"], 2)
         self.assertIn(
-            "NotesBuddy-Companion/2026.08.11",
+            f"NotesBuddy-Companion/{COMPANION_VERSION}",
             captured["request"].get_header("User-agent"),
         )
 
