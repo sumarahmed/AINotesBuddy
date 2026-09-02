@@ -16,6 +16,9 @@ from typing import Any
 
 
 def _diagnostic_log_path() -> Path:
+    configured = os.getenv("NOTESBUDDY_LOG_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser() / "companion.log"
     base = os.getenv("LOCALAPPDATA", "").strip()
     root = Path(base) / "NotesBuddy" if base else Path.home() / ".notesbuddy"
     return root / "logs" / "companion.log"

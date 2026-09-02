@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,17 @@ from notesbuddy_transcription.analysis import (  # noqa: E402
 
 
 class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # _generate_and_normalise() logs every generation outcome to
+        # %LOCALAPPDATA%\NotesBuddy\logs\companion.log for live diagnosis of
+        # the packaged companion; point it at a throwaway directory here so
+        # running this suite does not write to the real machine's log.
+        self._log_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._log_dir.cleanup)
+        env_patch = patch.dict(os.environ, {"NOTESBUDDY_LOG_DIR": self._log_dir.name})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
     def test_generates_synthesised_grounded_analysis_from_text_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory) / "llama-cli.exe"
