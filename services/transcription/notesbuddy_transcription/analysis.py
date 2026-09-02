@@ -1373,7 +1373,33 @@ class LlamaCppMeetingAnalyzer:
         except MeetingAnalysisUnavailable as error:
             if "summary" not in str(error).lower():
                 raise
-            return normalise_analysis(_repair_summary_from_grounded_items(raw, prepared), prepared)
+            # A real result had a well-formed shortSummary reduced to two
+            # concatenated highlight titles ("Technical Constraints and
+            # Timeframe. Discovery Phase Documentation Requirements.") --
+            # the model's own summary had failed grounding, and the old
+            # fallback below reused highlight/decision/action text
+            # verbatim, which reads as title fragments, not prose, once
+            # several are joined. A model capable enough to be worth
+            # installing usually writes a grounded summary when explicitly
+            # told why the first attempt failed, so try that before
+            # resorting to text concatenation.
+            try:
+                retry_raw = self._generate(
+                    prompt
+                    + "\n\nYour previous shortSummary used wording not found "
+                    "in the transcript segments you cited as evidence. Write "
+                    "shortSummary as 1-3 full sentences using only facts and "
+                    "wording supported by its cited segments. Do not reuse a "
+                    "highlight, decision, or action item verbatim as the "
+                    "summary."
+                )
+                return normalise_analysis(retry_raw, prepared)
+            except MeetingAnalysisUnavailable as retry_error:
+                if "summary" not in str(retry_error).lower():
+                    raise
+                return normalise_analysis(
+                    _repair_summary_from_grounded_items(raw, prepared), prepared
+                )
 
     def analyze(self, *, segments: object, meeting_title: object = "") -> dict[str, Any]:
         prepared = prepare_transcript_segments(segments)

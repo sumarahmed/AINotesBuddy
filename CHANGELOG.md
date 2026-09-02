@@ -38,6 +38,15 @@ remain compatible with semantic-version tooling.
   truncated response is retried once with double the budget before the
   analysis is reported as failed, since no fixed per-tier number can be
   exactly right for every real transcript's content in advance.
+- A real result showed a short summary reduced to two highlight titles
+  glued together ("Technical Constraints and Timeframe. Discovery Phase
+  Documentation Requirements.") instead of a sentence: the model's own
+  summary had failed evidence-grounding, and the fallback for that case
+  concatenated structured highlight/decision/action text verbatim, which
+  reads as labels once several are joined, not narrative prose. That
+  fallback is now a last resort -- the model gets one reinforced retry,
+  explicitly told its previous summary was not grounded in its cited
+  evidence, before falling back to concatenation.
 
 ### Added
 

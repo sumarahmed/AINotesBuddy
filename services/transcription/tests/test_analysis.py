@@ -142,6 +142,79 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
             self.assertEqual(second_predict, "4096")
             self.assertIn("reviewed invoice monitoring", result["shortSummary"])
 
+    def test_retries_with_reinforcement_before_falling_back_to_concatenation(self) -> None:
+        # A real result had a well-formed-looking shortSummary reduced to
+        # two highlight titles glued together with a period ("Technical
+        # Constraints and Timeframe. Discovery Phase Documentation
+        # Requirements.") because the model's own summary failed grounding
+        # and the old code fell straight back to concatenating structured
+        # field text, which reads as labels, not prose. This confirms a
+        # capable model gets a second, reinforced attempt first.
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            ungrounded = {
+                "shortSummary": "A launch was completed in Europe.",
+                "summaryEvidenceSegmentIds": ["S0001"],
+                "highlights": [
+                    {
+                        "text": "The revised scope fits the customer's budget.",
+                        "evidenceSegmentIds": ["S0001"],
+                    }
+                ],
+                "decisions": [],
+                "actionItems": [],
+            }
+            grounded = {
+                "shortSummary": "The team reviewed the revised scope and confirmed it fits the customer's budget.",
+                "summaryEvidenceSegmentIds": ["S0001"],
+                "highlights": [
+                    {
+                        "text": "The revised scope fits the customer's budget.",
+                        "evidenceSegmentIds": ["S0001"],
+                    }
+                ],
+                "decisions": [],
+                "actionItems": [],
+            }
+            first = type(
+                "Completed", (), {"returncode": 0, "stdout": json.dumps(ungrounded), "stderr": ""}
+            )()
+            second = type(
+                "Completed", (), {"returncode": 0, "stdout": json.dumps(grounded), "stderr": ""}
+            )()
+            segments = [
+                {
+                    "id": "S0001",
+                    "speaker": "Presenter",
+                    "text": "The revised scope fits the customer's budget.",
+                },
+            ]
+
+            responses = iter([first, second])
+            captured_prompts: list[str] = []
+
+            def fake_run(command, **_kwargs):
+                prompt_path = Path(command[command.index("--file") + 1])
+                captured_prompts.append(prompt_path.read_text(encoding="utf-8"))
+                return next(responses)
+
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                side_effect=fake_run,
+            ) as run:
+                result = analyzer.analyze(segments=segments, meeting_title="Scope review")
+
+            self.assertEqual(run.call_count, 2)
+            self.assertIn("used wording not found", captured_prompts[1].lower())
+            self.assertEqual(
+                result["shortSummary"],
+                "The team reviewed the revised scope and confirmed it fits the customer's budget.",
+            )
+
     def test_router_reports_missing_optional_component_instead_of_extractive_summary(self) -> None:
         with patch.dict("os.environ", {
             "NOTESBUDDY_ANALYSIS_RUNTIME": "missing-runtime.exe",
