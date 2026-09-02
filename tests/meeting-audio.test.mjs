@@ -856,6 +856,73 @@ test("analysis client sends transcript JSON without recording assets", async () 
   });
 });
 
+test("analysis client polls a progress token concurrently and stops after completion", async () => {
+  // POST /v1/analyses has no separate job to poll for a result, so this is
+  // the only way a caller learns anything during a real chunked local
+  // analysis that can take minutes. Real short timers, matching how
+  // waitForJob is already tested elsewhere in this file.
+  const calls = [];
+  let analyzeResolve;
+  const analyzePromise = new Promise((resolve) => {
+    analyzeResolve = resolve;
+  });
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/v1/analyses")) {
+      await analyzePromise;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { shortSummary: "Done.", highlights: [], decisions: [], actionItems: [] };
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { progress: 0.5, stage: "Analyzing part 1 of 2" };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    token: "pairing-secret",
+    fetchImpl,
+  });
+  const progressUpdates = [];
+
+  const resultPromise = client.analyzeTranscript({
+    meetingTitle: "Scope review",
+    segments: [{ id: "segment-one", text: "We confirmed the scope." }],
+    onProgress: (value, stage) => progressUpdates.push({ value, stage }),
+    progressIntervalMs: 1,
+  });
+
+  // Let at least one poll tick happen before the main request resolves.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const postBody = JSON.parse(calls[0].options.body);
+  assert.equal(typeof postBody.progressToken, "string");
+  assert.ok(postBody.progressToken.length > 0);
+  assert.ok(progressUpdates.length > 0);
+  assert.deepEqual(progressUpdates[0], { value: 0.5, stage: "Analyzing part 1 of 2" });
+  const pollCallsDuring = calls.filter((call) => call.url.includes("/v1/analyses/progress/"));
+  assert.ok(pollCallsDuring.length > 0);
+  assert.ok(pollCallsDuring[0].url.endsWith(encodeURIComponent(postBody.progressToken)));
+
+  analyzeResolve();
+  const result = await resultPromise;
+  assert.equal(result.shortSummary, "Done.");
+
+  const pollCallsAtCompletion = calls.filter((call) =>
+    call.url.includes("/v1/analyses/progress/"),
+  ).length;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const pollCallsAfter = calls.filter((call) => call.url.includes("/v1/analyses/progress/")).length;
+  assert.equal(pollCallsAfter, pollCallsAtCompletion, "polling must stop once the request settles");
+});
+
 test("local client controls Windows output capture and downloads WAV audio", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {

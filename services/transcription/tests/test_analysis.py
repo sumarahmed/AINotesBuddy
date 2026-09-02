@@ -335,6 +335,51 @@ class MeetingAnalysisValidationTests(unittest.TestCase):
         )
         self.assertEqual(result["summaryEvidenceSegmentIds"], ["S0001"])
 
+    def test_repair_widens_candidate_pool_with_retry_fallback(self) -> None:
+        raw = {
+            "shortSummary": "Unsupported claim about Mars colonization.",
+            "summaryEvidenceSegmentIds": ["S0001"],
+            "highlights": [
+                {
+                    "text": "A completely unrelated claim not in the transcript.",
+                    "evidenceSegmentIds": ["S0001"],
+                }
+            ],
+            "decisions": [],
+            "actionItems": [],
+        }
+        retry_raw = {
+            "shortSummary": "Also unsupported.",
+            "summaryEvidenceSegmentIds": ["S0002"],
+            "highlights": [],
+            "decisions": [],
+            "actionItems": [
+                {
+                    "task": (
+                        "Jordan will urgently send the revised proposal by "
+                        "Friday after finance confirms the total."
+                    ),
+                    "owner": "Jordan",
+                    "dueDate": "Friday",
+                    "priority": "High",
+                    "notes": "Not specified",
+                    "evidenceSegmentIds": ["S0002"],
+                }
+            ],
+        }
+
+        repaired = _repair_summary_from_grounded_items(
+            raw, self.prepared, retry_raw
+        )
+        result = normalise_analysis(repaired, self.prepared)
+
+        self.assertEqual(
+            result["shortSummary"],
+            "Jordan will urgently send the revised proposal by Friday after "
+            "finance confirms the total.",
+        )
+        self.assertEqual(result["summaryEvidenceSegmentIds"], ["S0002"])
+
     def test_validates_decisions_actions_owners_dates_and_priority(self) -> None:
         result = normalise_analysis(
             {

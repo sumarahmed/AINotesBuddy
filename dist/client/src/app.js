@@ -355,6 +355,7 @@ const state = {
   },
   companionUpdateDismissed: false,
   componentJob: null,
+  smartSummaryJob: null,
   playbackSourceByMeeting: {},
   toasts: [],
   capture: {
@@ -1030,8 +1031,16 @@ function summaryView(meeting) {
     .filter(Boolean)
     .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
     .join("");
+  const analysisProgressPercent = Math.round(
+    Math.min(1, Math.max(0, Number(meeting.analysis?.progress) || 0)) * 100,
+  );
+  const analysisElapsedLabel = meeting.analysis?.requestedAt
+    ? MeetingAudio.formatTimestamp(
+        Date.now() - new Date(meeting.analysis.requestedAt).getTime(),
+      )
+    : "";
   const analysisNotice = analysisRunning
-    ? `<div class="analysis-notice analysis-notice--working">${icon("refresh", 15)}<span><strong>Analyzing the complete transcript</strong><small>Building evidence-grounded summary, decisions, and actions…</small></span></div>`
+    ? `<div class="analysis-notice analysis-notice--working">${icon("refresh", 15)}<span><strong>${escapeHtml(meeting.analysis?.stage || "Analyzing the complete transcript")}</strong><small>Building evidence-grounded summary, decisions, and actions…</small><div class="component-progress" aria-live="polite"><div><span>${analysisElapsedLabel} elapsed</span><b>${analysisProgressPercent}%</b></div><i><span style="width:${analysisProgressPercent}%"></span></i></div></span></div>`
     : analysisStatus === "failed"
       ? `<div class="analysis-notice analysis-notice--error">${icon("x", 15)}<span><strong>Professional analysis could not be completed</strong><small>${escapeHtml(meeting.analysis?.error || "Try refreshing from the transcript again.")}</small></span></div>`
       : analysisStatus === "completed" && meeting.analysis?.usedSavedDraft
@@ -1318,6 +1327,36 @@ function settingsPanel() {
         <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
         <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
       </section>`;
+  const smartSummarySettings = hybridConnected
+    ? (() => {
+        const available = state.companion.metadata?.components?.components || {};
+        const tiers = [
+          { id: "analysis-tiny", label: "Fast" },
+          { id: "analysis-standard", label: "Balanced" },
+          { id: "analysis-pro", label: "High quality" },
+        ].filter((tier) => available[tier.id]);
+        if (!tiers.length) return "";
+        const job = state.smartSummaryJob;
+        const running = job && ["queued", "downloading", "installing"].includes(job.status);
+        const progress = Math.max(0, Math.min(100, Math.round((Number(job?.progress) || 0) * 100)));
+        return `<section class="settings-section">
+          <span class="eyebrow">Smart summary model</span>
+          <div class="component-options component-options--compact">
+            ${tiers
+              .map((tier) => {
+                const meta = available[tier.id] || {};
+                const size = formatBytes(Number(meta.downloadBytes || 0));
+                const isInstalled = Boolean(meta.installed);
+                return `<button type="button" class="component-options__tier${isInstalled ? " component-options__tier--selected" : ""}" data-action="switch-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${running || isInstalled ? "disabled" : ""} aria-pressed="${isInstalled}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong><span>${isInstalled ? "Installed" : "Not installed"}</span></button>`;
+              })
+              .join("")}
+          </div>
+          ${running ? `<div class="component-progress" aria-live="polite"><div><span>${escapeHtml(job.stage || "Downloading")}</span><b>${progress}%</b></div><i><span style="width:${progress}%"></span></i></div>` : ""}
+          ${job?.status === "failed" ? `<p class="settings-help">${escapeHtml(job.error || "Switching models failed. Try again.")}</p>` : ""}
+          <p class="settings-help">Choosing a different tier downloads it once, then replaces the tier currently installed.</p>
+        </section>`;
+      })()
+    : "";
   const autoTranscribeDescription = hosted
     ? "Send saved source tracks to the public transcription service after capture."
     : hybrid
@@ -1333,6 +1372,7 @@ function settingsPanel() {
         <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
       </section>
       ${transcriptionSettings}
+      ${smartSummarySettings}
       <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After speaker transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
@@ -1497,6 +1537,30 @@ async function installCompanionComponents(preset) {
     showToast("Local AI components ready", `${health.accelerator || "Local processing"} is ready for transcription and smart meeting analysis.`);
   } catch (error) {
     state.componentJob = { ...(state.componentJob || {}), status: "failed", error: error?.message || "Component installation failed." };
+    render();
+  }
+}
+
+async function switchAnalysisTier(tierId) {
+  const client = createTranscriptionClient({ mode: "local" });
+  try {
+    state.smartSummaryJob = await client.installComponents([tierId]);
+    render();
+    while (["queued", "downloading", "installing"].includes(state.smartSummaryJob.status)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 600));
+      state.smartSummaryJob = await client.componentJob(state.smartSummaryJob.jobId);
+      render();
+    }
+    if (state.smartSummaryJob.status !== "completed") {
+      throw new Error(state.smartSummaryJob.error || "Switching the smart summary model failed.");
+    }
+    const health = await client.health();
+    state.companion.metadata = { ...state.companion.metadata, ...health };
+    state.smartSummaryJob = null;
+    render();
+    showToast("Smart summary model updated", `${health.analysisModel || "The new model"} will be used for future analyses.`);
+  } catch (error) {
+    state.smartSummaryJob = { ...(state.smartSummaryJob || {}), status: "failed", error: error?.message || "Switching the smart summary model failed." };
     render();
   }
 }
@@ -3094,6 +3158,8 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
     status: "processing",
     error: null,
     requestedAt: new Date().toISOString(),
+    progress: 0,
+    stage: "Starting analysis",
   };
   save();
   render();
@@ -3112,6 +3178,13 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
         endMs: segment.endMs,
         text: segment.text,
       })),
+      onProgress(value, stage) {
+        if (meeting.analysis?.status !== "processing") return;
+        meeting.analysis.progress = Number(value) || 0;
+        meeting.analysis.stage = String(stage || "Analyzing");
+        save();
+        render();
+      },
     });
     if (!applyMeetingAnalysisToMeeting(meeting, result)) {
       throw new Error(
@@ -3600,6 +3673,9 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "install-components") {
     await installCompanionComponents(button.dataset.preset || "small");
+    return;
+  } else if (action === "switch-analysis-tier") {
+    if (button.dataset.tier) await switchAnalysisTier(button.dataset.tier);
     return;
   } else if (action === "pause-components") {
     await pauseCompanionComponents();

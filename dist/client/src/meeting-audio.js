@@ -1274,15 +1274,56 @@
       });
     }
 
-    analyzeTranscript({ meetingTitle = "", segments = [] } = {}) {
+    analyzeTranscript({
+      meetingTitle = "",
+      segments = [],
+      onProgress,
+      progressIntervalMs = 1500,
+    } = {}) {
       if (!Array.isArray(segments) || !segments.length) {
         throw new Error("A completed transcript is required for meeting analysis.");
       }
-      return this.request("/v1/analyses", {
+      // POST /v1/analyses is one request/response with no separate job to
+      // poll for a result -- a chunked local analysis can take minutes with
+      // otherwise no feedback at all. When a caller wants progress, this
+      // generates its own token up front and polls a lightweight side
+      // channel concurrently while that one request is still in flight,
+      // self-scheduling like waitForJob rather than a fixed setInterval so
+      // a slow poll never overlaps the next one.
+      const progressToken =
+        typeof onProgress === "function" ? createId("analysis-progress") : "";
+      let stopped = false;
+      const pollLoop = async () => {
+        while (!stopped) {
+          await new Promise((resolve) =>
+            globalObject.setTimeout(resolve, progressIntervalMs),
+          );
+          if (stopped) return;
+          try {
+            const reading = await this.request(
+              `/v1/analyses/progress/${encodeURIComponent(progressToken)}`,
+            );
+            if (!stopped && reading && reading.progress !== null) {
+              onProgress(Number(reading.progress) || 0, String(reading.stage || ""));
+            }
+          } catch {
+            // Best-effort side channel; a failed poll should not affect the
+            // actual analysis request still running.
+          }
+        }
+      };
+      if (progressToken) pollLoop();
+      const request = this.request("/v1/analyses", {
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meetingTitle, segments }),
+        body: JSON.stringify(
+          progressToken ? { meetingTitle, segments, progressToken } : { meetingTitle, segments },
+        ),
+      });
+      if (!progressToken) return request;
+      return request.finally(() => {
+        stopped = true;
       });
     }
 

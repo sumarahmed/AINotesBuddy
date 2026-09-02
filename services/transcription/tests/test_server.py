@@ -33,7 +33,9 @@ class FakeAnalyzer:
             "status": "ready",
         }
 
-    def analyze(self, *, segments, meeting_title="") -> dict:
+    def analyze(self, *, segments, meeting_title="", progress=None) -> dict:
+        if progress is not None:
+            progress(1.0, "Completed")
         source_id = str(segments[0]["id"])
         return {
             "schemaVersion": 1,
@@ -227,6 +229,78 @@ class LocalApiTests(unittest.TestCase):
             response.json()["summarySourceSegmentIds"],
             ["segment-one"],
         )
+
+    def test_analysis_progress_is_pollable_while_in_flight_and_cleared_after(self) -> None:
+        # POST /v1/analyses is a single request/response with no separate
+        # job, so this is the only way a caller knows anything at all during
+        # a real chunked local analysis that can take minutes. A slow fake
+        # analyzer creates a real window to poll during, on its own app
+        # instance so the shared FakeAnalyzer used by every other test in
+        # this class is never touched.
+        from notesbuddy_transcription.server import create_app
+
+        release = threading.Event()
+        reached_midpoint = threading.Event()
+
+        class SlowAnalyzer:
+            name = "slow-fake-analyzer"
+
+            @staticmethod
+            def configuration_status() -> dict[str, object]:
+                return {"ready": True, "model": "slow-fake-analyzer", "status": "ready"}
+
+            def analyze(self, *, segments, meeting_title="", progress=None) -> dict:
+                if progress is not None:
+                    progress(0.5, "Analyzing part 1 of 2")
+                reached_midpoint.set()
+                release.wait(timeout=5)
+                return {
+                    "schemaVersion": 1,
+                    "promptVersion": 1,
+                    "model": "slow-fake-analyzer",
+                    "shortSummary": "Done.",
+                    "summarySourceSegmentIds": [str(segments[0]["id"])],
+                    "highlights": [],
+                    "decisions": [],
+                    "actionItems": [],
+                }
+
+        client = TestClient(
+            create_app(
+                engine=EmptyEngine(),
+                analyzer=SlowAnalyzer(),
+                pairing_token=PAIRING_TOKEN,
+                allowed_origins=["http://127.0.0.1:4173"],
+                system_audio_capture=FakeSystemAudioManager(),
+                component_manager=FakeComponentManager(),
+            )
+        )
+        payload = {
+            "meetingTitle": "Scope review",
+            "progressToken": "test-token-123",
+            "segments": [{"id": "segment-one", "speaker": "Jordan", "text": "We agreed."}],
+        }
+        result: dict[str, object] = {}
+
+        def run_request() -> None:
+            result["response"] = client.post("/v1/analyses", headers=self.headers, json=payload)
+
+        thread = threading.Thread(target=run_request)
+        thread.start()
+        try:
+            self.assertTrue(reached_midpoint.wait(timeout=5))
+            during = client.get(
+                "/v1/analyses/progress/test-token-123", headers=self.headers
+            )
+            self.assertEqual(during.status_code, 200)
+            self.assertEqual(during.json(), {"progress": 0.5, "stage": "Analyzing part 1 of 2"})
+        finally:
+            release.set()
+            thread.join(timeout=5)
+
+        self.assertEqual(result["response"].status_code, 200)
+        after = client.get("/v1/analyses/progress/test-token-123", headers=self.headers)
+        self.assertEqual(after.json(), {"progress": None, "stage": None})
 
     def test_default_local_analyzer_waits_for_smart_summary_component(self) -> None:
         from notesbuddy_transcription.server import create_app

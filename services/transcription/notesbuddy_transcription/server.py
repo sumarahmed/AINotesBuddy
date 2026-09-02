@@ -169,6 +169,55 @@ class JobStore:
             return self._jobs.pop(job_id, None)
 
 
+class AnalysisProgressStore:
+    """Tracks in-flight analysis progress for polling, keyed by a client token.
+
+    POST /v1/analyses stays a single synchronous request/response -- there is
+    no separate job to create or a later request to fetch the final result
+    from. This exists only so a client that generates its own token before
+    starting the request can concurrently poll a lightweight progress
+    reading while that one request is still in flight, since a chunked local
+    analysis can take minutes with no other feedback available at all.
+    """
+
+    def __init__(self, *, maximum_entries: int = 32) -> None:
+        self._entries: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._maximum_entries = max(1, maximum_entries)
+
+    def start(self, token: str) -> None:
+        with self._lock:
+            if len(self._entries) >= self._maximum_entries:
+                oldest = min(
+                    self._entries,
+                    key=lambda key: self._entries[key]["startedMonotonic"],
+                )
+                self._entries.pop(oldest, None)
+            self._entries[token] = {
+                "progress": 0.0,
+                "stage": "queued",
+                "startedMonotonic": time.monotonic(),
+            }
+
+    def update(self, token: str, value: float, stage: str) -> None:
+        with self._lock:
+            entry = self._entries.get(token)
+            if entry is not None:
+                entry["progress"] = max(0.0, min(1.0, float(value)))
+                entry["stage"] = str(stage)[:120]
+
+    def finish(self, token: str) -> None:
+        with self._lock:
+            self._entries.pop(token, None)
+
+    def get(self, token: str) -> dict[str, Any] | None:
+        with self._lock:
+            entry = self._entries.get(token)
+            if entry is None:
+                return None
+            return {"progress": entry["progress"], "stage": entry["stage"]}
+
+
 def _safe_error(error: BaseException, work_dir: Path) -> str:
     message = str(error).replace(str(work_dir), "[temporary audio]").strip()
     return (message or error.__class__.__name__)[:1000]
@@ -438,6 +487,7 @@ def create_app(
         retention_seconds=retention_seconds,
         maximum_jobs=maximum_jobs,
     )
+    analysis_progress = AnalysisProgressStore()
     executor = ThreadPoolExecutor(
         max_workers=max(
             1,
@@ -900,6 +950,20 @@ def create_app(
                 detail="The transcript exceeds the configured analysis limit.",
             )
 
+        # Optional: a client that generates its own token before this call
+        # can poll GET /v1/analyses/progress/{token} concurrently while this
+        # one request is still in flight, since this endpoint otherwise
+        # returns nothing until the entire (possibly multi-minute) analysis
+        # is done. Absent or malformed tokens are silently ignored -- this
+        # is a progress side-channel, not part of the request contract.
+        progress_token = str(payload.get("progressToken") or "").strip()[:128]
+        if progress_token:
+            analysis_progress.start(progress_token)
+
+        def report_progress(value: float, stage: str) -> None:
+            if progress_token:
+                analysis_progress.update(progress_token, value, stage)
+
         reservation_owned = False
         if hosted:
             assert sessions is not None
@@ -913,6 +977,7 @@ def create_app(
             result = active_analyzer.analyze(
                 segments=segments,
                 meeting_title=payload.get("meetingTitle"),
+                progress=report_progress,
             )
         except MeetingAnalysisUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -924,8 +989,25 @@ def create_app(
         finally:
             if reservation_owned and sessions is not None:
                 sessions.release_job(owner_digest)
+            if progress_token:
+                analysis_progress.finish(progress_token)
         response.headers["Cache-Control"] = "no-store"
         return dict(result)
+
+    @app.get("/v1/analyses/progress/{token}")
+    def get_analysis_progress(
+        token: str,
+        response: Response,
+        _owner_digest: str | None = Depends(require_access),
+    ) -> dict[str, Any]:
+        entry = analysis_progress.get(token[:128])
+        response.headers["Cache-Control"] = "no-store"
+        if entry is None:
+            # Not an error: the token may not have started yet, may already
+            # have finished (the main request's own response is then the
+            # source of truth), or may simply be unrecognised.
+            return {"progress": None, "stage": None}
+        return entry
 
     @app.post("/v1/transcriptions")
     async def create_transcription(

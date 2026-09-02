@@ -2439,6 +2439,11 @@ kbd {
   animation: slow-rotate 1.1s linear infinite;
 }
 
+.analysis-notice .component-progress {
+  margin: 6px 0 0;
+  min-width: 220px;
+}
+
 .analysis-notice--error {
   color: #9b4135;
   background: #fff4f1;

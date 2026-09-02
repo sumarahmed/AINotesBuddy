@@ -9,6 +9,7 @@ import re
 import subprocess
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -634,59 +635,71 @@ def normalise_analysis(
 def _repair_summary_from_grounded_items(
     raw_analysis: dict[str, Any],
     prepared_segments: list[dict[str, Any]],
+    *fallback_analyses: dict[str, Any],
 ) -> dict[str, Any]:
-    """Replace an unverifiable summary with already-grounded model findings."""
+    """Replace an unverifiable summary with already-grounded model findings.
+
+    Scans ``raw_analysis`` first, then any ``fallback_analyses`` (e.g. a
+    reinforcement retry's own generation). The retry is a second, independent
+    generation with different prompt context, so its highlights/decisions/
+    actions can be differently worded even under temp=0 determinism -- using
+    only ``raw_analysis`` would make this fallback return byte-identical text
+    on every retry of the same meeting.
+    """
 
     by_id = {segment["id"]: segment for segment in prepared_segments}
     valid_ids = set(by_id)
     evidence: list[str] = []
     sentences: list[str] = []
-    candidate_fields = (
-        (raw_analysis.get("highlights") or [], "text"),
-        (raw_analysis.get("decisions") or [], "decision"),
-        (raw_analysis.get("actionItems") or [], "task"),
-    )
-    for items, field in candidate_fields:
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            text = _clean_text(item.get(field), maximum=600)
-            item_evidence = _evidence_ids(
-                item.get("evidenceSegmentIds"),
-                valid_ids,
-            )
-            if not text or not item_evidence or not _is_grounded_text(
-                text,
-                _evidence_text(item_evidence, by_id),
-            ):
-                continue
-            new_evidence = [
-                segment_id
-                for segment_id in item_evidence
-                if segment_id not in evidence
-            ]
-            if len(evidence) + len(new_evidence) > 12:
-                continue
-            candidate_tokens = _content_tokens(text)
-            repeated = any(
-                len(candidate_tokens & _content_tokens(existing))
-                >= max(
-                    2,
-                    math.ceil(
-                        min(
-                            len(candidate_tokens),
-                            len(_content_tokens(existing)),
-                        )
-                        * 0.55
-                    ),
+    for analysis in (raw_analysis, *fallback_analyses):
+        candidate_fields = (
+            (analysis.get("highlights") or [], "text"),
+            (analysis.get("decisions") or [], "decision"),
+            (analysis.get("actionItems") or [], "task"),
+        )
+        for items, field in candidate_fields:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                text = _clean_text(item.get(field), maximum=600)
+                item_evidence = _evidence_ids(
+                    item.get("evidenceSegmentIds"),
+                    valid_ids,
                 )
-                for existing in sentences
-                if candidate_tokens and _content_tokens(existing)
-            )
-            if repeated:
-                continue
-            sentences.append(text.rstrip(". ") + ".")
-            evidence.extend(new_evidence)
+                if not text or not item_evidence or not _is_grounded_text(
+                    text,
+                    _evidence_text(item_evidence, by_id),
+                ):
+                    continue
+                new_evidence = [
+                    segment_id
+                    for segment_id in item_evidence
+                    if segment_id not in evidence
+                ]
+                if len(evidence) + len(new_evidence) > 12:
+                    continue
+                candidate_tokens = _content_tokens(text)
+                repeated = any(
+                    len(candidate_tokens & _content_tokens(existing))
+                    >= max(
+                        2,
+                        math.ceil(
+                            min(
+                                len(candidate_tokens),
+                                len(_content_tokens(existing)),
+                            )
+                            * 0.55
+                        ),
+                    )
+                    for existing in sentences
+                    if candidate_tokens and _content_tokens(existing)
+                )
+                if repeated:
+                    continue
+                sentences.append(text.rstrip(". ") + ".")
+                evidence.extend(new_evidence)
+                if len(sentences) >= 8:
+                    break
             if len(sentences) >= 8:
                 break
         if len(sentences) >= 8:
@@ -1030,7 +1043,13 @@ class ExtractiveMeetingAnalyzer:
         *,
         segments: object,
         meeting_title: object = "",
+        progress: Callable[[float, str], None] | None = None,
     ) -> dict[str, Any]:
+        # Deterministic and effectively instant; nothing meaningful to
+        # report, but accepts the same signature as the other analyzers so
+        # a caller can treat active_analyzer.analyze(...) polymorphically.
+        if progress is not None:
+            progress(1.0, "Completed")
         prepared = prepare_transcript_segments(segments)
         if not prepared:
             raise MeetingAnalysisUnavailable(
@@ -1397,11 +1416,40 @@ class LlamaCppMeetingAnalyzer:
             except MeetingAnalysisUnavailable as retry_error:
                 if "summary" not in str(retry_error).lower():
                     raise
+                # The reinforcement retry also failed grounding. Its own
+                # generation is otherwise independent of the first attempt
+                # (different prompt context, same temp=0 determinism), so
+                # its highlights/decisions/actions are a second, differently
+                # worded candidate pool -- not just the first attempt's,
+                # which would otherwise make this fallback produce the exact
+                # same concatenated text on every retry of the same meeting.
+                retry_candidates = (
+                    (retry_raw,) if isinstance(retry_raw, dict) else ()
+                )
+                print(
+                    "[notesbuddy-analysis] summary_repair_fallback "
+                    f"first_attempt={ascii(_clean_text(raw.get('shortSummary')) if isinstance(raw, dict) else raw)[:300]} "
+                    f"retry_attempt={ascii(_clean_text(retry_raw.get('shortSummary')) if isinstance(retry_raw, dict) else retry_raw)[:300]}",
+                    flush=True,
+                )
                 return normalise_analysis(
-                    _repair_summary_from_grounded_items(raw, prepared), prepared
+                    _repair_summary_from_grounded_items(
+                        raw, prepared, *retry_candidates
+                    ),
+                    prepared,
                 )
 
-    def analyze(self, *, segments: object, meeting_title: object = "") -> dict[str, Any]:
+    def analyze(
+        self,
+        *,
+        segments: object,
+        meeting_title: object = "",
+        progress: Callable[[float, str], None] | None = None,
+    ) -> dict[str, Any]:
+        def report(value: float, stage: str) -> None:
+            if progress is not None:
+                progress(value, stage)
+
         prepared = prepare_transcript_segments(segments)
         if not prepared:
             raise MeetingAnalysisUnavailable(
@@ -1409,7 +1457,17 @@ class LlamaCppMeetingAnalyzer:
             )
         partials: list[dict[str, Any]] = []
         chunks = self._chunks(prepared)
+        # Each chunk is a real CPU generation call that can take minutes with
+        # no other feedback available, so this is real progress a caller can
+        # show, not decoration -- there is no cheaper way to estimate it,
+        # since a chunk's generation time depends on its own content.
         for index, chunk in enumerate(chunks):
+            report(
+                index / len(chunks) * 0.92,
+                f"Analyzing part {index + 1} of {len(chunks)}"
+                if len(chunks) > 1
+                else "Analyzing the complete transcript",
+            )
             prompt = (
                 f"Meeting title: {_clean_text(meeting_title, maximum=200) or NOT_SPECIFIED}\n"
                 f"Transcript part {index + 1} of {len(chunks)} follows. Analyze the meaning; "
@@ -1417,7 +1475,9 @@ class LlamaCppMeetingAnalyzer:
                 f"{self._transcript_text(chunk)}\n\nReturn the required JSON object."
             )
             partials.append(self._generate_and_normalise(prompt, prepared))
+        report(0.95, "Combining results")
         merged = self._merge_partials(partials, prepared)
+        report(1.0, "Completed")
         return _public_analysis(merged, prepared, model_name=self.name)
 
     @staticmethod
@@ -1535,8 +1595,16 @@ class LocalAnalysisRouter:
     def configuration_status(self) -> dict[str, object]:
         return self._analyzer().configuration_status()
 
-    def analyze(self, *, segments: object, meeting_title: object = "") -> dict[str, Any]:
-        return self._analyzer().analyze(segments=segments, meeting_title=meeting_title)
+    def analyze(
+        self,
+        *,
+        segments: object,
+        meeting_title: object = "",
+        progress: Callable[[float, str], None] | None = None,
+    ) -> dict[str, Any]:
+        return self._analyzer().analyze(
+            segments=segments, meeting_title=meeting_title, progress=progress
+        )
 
 
 class MeetingAnalyzer:
@@ -1711,6 +1779,7 @@ class MeetingAnalyzer:
         *,
         segments: object,
         meeting_title: object = "",
+        progress: Callable[[float, str], None] | None = None,
     ) -> dict[str, Any]:
         prepared = prepare_transcript_segments(segments)
         if not prepared:
@@ -1725,6 +1794,13 @@ class MeetingAnalyzer:
         )
         partials: list[dict[str, Any]] = []
         for index, chunk in enumerate(chunks):
+            if progress is not None:
+                progress(
+                    index / len(chunks) * 0.92,
+                    f"Analyzing part {index + 1} of {len(chunks)}"
+                    if len(chunks) > 1
+                    else "Analyzing the complete transcript",
+                )
             prompt = (
                 f"Meeting title: {_clean_text(meeting_title, maximum=200) or 'Not specified'}\n"
                 f"Transcript part {index + 1} of {len(chunks)} follows. Analyze only "
@@ -1738,7 +1814,11 @@ class MeetingAnalyzer:
         if len(partials) == 1:
             final = partials[0]
         else:
+            if progress is not None:
+                progress(0.95, "Combining results")
             final = self._merge_analyses(partials, prepared)
+        if progress is not None:
+            progress(1.0, "Completed")
         return _public_analysis(final, prepared, model_name=self.model_name)
 
 

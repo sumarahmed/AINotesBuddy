@@ -8,6 +8,33 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.09.02 - 2026-09-02
+
+### Added
+
+- Meeting analysis shows a live progress bar and elapsed timer instead of a
+  static "Analyzing…" message with no sense of how long it will take. The
+  local and hosted analyzers now report per-chunk progress through a
+  pollable token while the main analysis request is still in flight, so the
+  UI can show percentage and stage ("Analyzing part 2 of 3", "Combining
+  results") without changing the request/response shape callers depend on.
+- The Settings panel now lets you switch or download a different smart
+  summary model tier (Fast, Balanced, High quality) at any time, not only
+  during first-time setup. Installing a different tier downloads it once and
+  replaces whichever tier is currently installed.
+
+### Fixed
+
+- The summary-repair fallback (used when the model's own summary fails
+  evidence-grounding twice in a row) only ever drew candidate sentences from
+  the *first* generation attempt, so a meeting whose content the model
+  genuinely struggled to summarize kept producing the exact same
+  concatenated-fragment text on every retry, even after the 2026.09.01
+  reinforcement-retry fix shipped. The reinforcement retry's own generation
+  is now a second, independently worded candidate pool for that fallback, and
+  a diagnostic log line now records both attempts' summaries whenever this
+  path fires.
+
 ## 2026.09.01 - 2026-09-02
 
 ### Fixed
