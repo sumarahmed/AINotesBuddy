@@ -51,6 +51,23 @@ def _log_diagnostic(message: str) -> None:
         pass
 
 
+def _field_counts(source: object) -> str:
+    """Count highlights/decisions/actionItems for diagnostic logging.
+
+    Used both on a raw (pre-validation) model response and on a validated
+    result, so a live log can distinguish "the model produced nothing" from
+    "items existed but were filtered out during validation or merge".
+    """
+
+    if not isinstance(source, dict):
+        return "highlights=? decisions=? actionItems=?"
+    return (
+        f"highlights={len(source.get('highlights') or [])} "
+        f"decisions={len(source.get('decisions') or [])} "
+        f"actionItems={len(source.get('actionItems') or [])}"
+    )
+
+
 ANALYSIS_SCHEMA_VERSION = 1
 ANALYSIS_PROMPT_VERSION = 2
 NOT_SPECIFIED = "Not specified"
@@ -1450,6 +1467,8 @@ class LlamaCppMeetingAnalyzer:
             result = normalise_analysis(raw, prepared)
             _log_diagnostic(
                 "[notesbuddy-analysis] summary_accepted path=first_attempt "
+                f"raw_counts=({_field_counts(raw)}) "
+                f"validated_counts=({_field_counts(result)}) "
                 f"summary={ascii(result.get('shortSummary'))[:300]}"
             )
             return result
@@ -1479,6 +1498,8 @@ class LlamaCppMeetingAnalyzer:
                 result = normalise_analysis(retry_raw, prepared)
                 _log_diagnostic(
                     "[notesbuddy-analysis] summary_accepted path=reinforcement_retry "
+                    f"raw_counts=({_field_counts(retry_raw)}) "
+                    f"validated_counts=({_field_counts(result)}) "
                     f"summary={ascii(result.get('shortSummary'))[:300]}"
                 )
                 return result
@@ -1500,14 +1521,14 @@ class LlamaCppMeetingAnalyzer:
                     f"first_attempt={ascii(_clean_text(raw.get('shortSummary')) if isinstance(raw, dict) else raw)[:300]} "
                     f"retry_attempt={ascii(_clean_text(retry_raw.get('shortSummary')) if isinstance(retry_raw, dict) else retry_raw)[:300]}"
                 )
-                result = normalise_analysis(
-                    _repair_summary_from_grounded_items(
-                        raw, prepared, *retry_candidates
-                    ),
-                    prepared,
+                repaired = _repair_summary_from_grounded_items(
+                    raw, prepared, *retry_candidates
                 )
+                result = normalise_analysis(repaired, prepared)
                 _log_diagnostic(
                     "[notesbuddy-analysis] summary_accepted path=repair_fallback "
+                    f"raw_counts=({_field_counts(repaired)}) "
+                    f"validated_counts=({_field_counts(result)}) "
                     f"summary={ascii(result.get('shortSummary'))[:300]}"
                 )
                 return result
@@ -1598,10 +1619,16 @@ class LlamaCppMeetingAnalyzer:
             "decisions": [item for part in partials for item in part.get("decisions") or []],
             "actionItems": [item for part in partials for item in part.get("actionItems") or []],
         }
+        _log_diagnostic(
+            "[notesbuddy-analysis] merge_starting "
+            f"per_chunk_counts=[{'; '.join(_field_counts(part) for part in partials)}] "
+            f"combined_pre_merge_counts=({_field_counts(combined)})"
+        )
         try:
             result = normalise_analysis(combined, prepared)
             _log_diagnostic(
                 "[notesbuddy-analysis] merge_summary_accepted "
+                f"validated_counts=({_field_counts(result)}) "
                 f"summary={ascii(result.get('shortSummary'))[:400]}"
             )
             return result
@@ -1630,6 +1657,7 @@ class LlamaCppMeetingAnalyzer:
             )
             _log_diagnostic(
                 "[notesbuddy-analysis] merge_summary_accepted path=trusted_partials "
+                f"validated_counts=({_field_counts(result)}) "
                 f"summary={ascii(result.get('shortSummary'))[:400]}"
             )
             return result

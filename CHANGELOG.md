@@ -8,6 +8,14 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Added
+
+- Diagnostic logging now records highlights/decisions/actionItems counts
+  (both raw model output and post-validation) at every per-chunk and merge
+  stage, not only the summary text -- to diagnose a report of highlights,
+  decisions, and action items all coming back empty after the merge fix
+  below, without guessing at a fix again.
+
 ### Fixed
 
 - Found the real cause of the recurring "Technical Constraints and
