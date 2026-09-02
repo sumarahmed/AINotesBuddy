@@ -227,6 +227,99 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
                 "The team reviewed the revised scope and confirmed it fits the customer's budget.",
             )
 
+    def test_reinforcement_retry_keeps_first_attempts_highlights_and_actions(
+        self,
+    ) -> None:
+        # A real chunk's reinforcement retry returned a summary describing a
+        # scheduled follow-up and a to-be-sent document -- facts it clearly
+        # extracted -- yet that same response's highlights, decisions, and
+        # actionItems arrays came back completely empty. The retry prompt
+        # narrows the model's attention onto fixing the summary specifically,
+        # and the first attempt's structured findings were never actually
+        # invalid -- they simply never got validated, since a bad summary
+        # makes normalise_analysis raise before checking anything else. The
+        # retry should not silently discard them.
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            ungrounded = {
+                "shortSummary": "A launch was completed in Europe.",
+                "summaryEvidenceSegmentIds": ["S0001"],
+                "highlights": [
+                    {
+                        "text": "The revised scope fits the customer's budget.",
+                        "evidenceSegmentIds": ["S0001"],
+                    }
+                ],
+                "decisions": [],
+                "actionItems": [
+                    {
+                        "task": "Jordan will send the proposal by Friday.",
+                        "owner": "Jordan",
+                        "dueDate": "Friday",
+                        "priority": "Medium",
+                        "notes": "Not specified",
+                        "evidenceSegmentIds": ["S0002"],
+                    }
+                ],
+            }
+            grounded_but_empty = {
+                "shortSummary": "The team reviewed the revised scope and confirmed it fits the customer's budget.",
+                "summaryEvidenceSegmentIds": ["S0001"],
+                "highlights": [],
+                "decisions": [],
+                "actionItems": [],
+            }
+            first = type(
+                "Completed", (), {"returncode": 0, "stdout": json.dumps(ungrounded), "stderr": ""}
+            )()
+            second = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(grounded_but_empty), "stderr": ""},
+            )()
+            segments = [
+                {
+                    "id": "S0001",
+                    "speaker": "Presenter",
+                    "text": "The revised scope fits the customer's budget.",
+                },
+                {
+                    "id": "S0002",
+                    "speaker": "Jordan",
+                    "text": "Jordan will send the proposal by Friday.",
+                },
+            ]
+
+            responses = iter([first, second])
+
+            def fake_run(command, **_kwargs):
+                return next(responses)
+
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                side_effect=fake_run,
+            ):
+                result = analyzer.analyze(segments=segments, meeting_title="Scope review")
+
+            self.assertEqual(
+                result["shortSummary"],
+                "The team reviewed the revised scope and confirmed it fits the customer's budget.",
+            )
+            self.assertEqual(len(result["highlights"]), 1)
+            self.assertEqual(
+                result["highlights"][0]["text"],
+                "The revised scope fits the customer's budget.",
+            )
+            self.assertEqual(len(result["actionItems"]), 1)
+            self.assertEqual(
+                result["actionItems"][0]["task"],
+                "Jordan will send the proposal by Friday.",
+            )
+
     def test_merge_trusts_already_grounded_partial_summaries_over_repair(self) -> None:
         # A real multi-chunk meeting had every chunk analyse cleanly on its
         # own (each shortSummary individually passed grounding), but the

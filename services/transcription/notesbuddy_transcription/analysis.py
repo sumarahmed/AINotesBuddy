@@ -1493,12 +1493,37 @@ class LlamaCppMeetingAnalyzer:
                     "shortSummary as 1-3 full sentences using only facts and "
                     "wording supported by its cited segments. Do not reuse a "
                     "highlight, decision, or action item verbatim as the "
-                    "summary."
+                    "summary. Still return every highlight, confirmed "
+                    "decision, and action item you can find, exactly as "
+                    "thoroughly as before -- only the summary needs to "
+                    "change."
                 )
-                result = normalise_analysis(retry_raw, prepared)
+                # A real chunk's retry returned a summary describing a
+                # scheduled follow-up session and a to-be-sent document
+                # (facts it clearly extracted), yet its own highlights,
+                # decisions, and actionItems arrays came back completely
+                # empty in that same response. The retry prompt above
+                # narrows the model's attention onto fixing the summary
+                # field specifically, and the first attempt's structured
+                # findings were never actually invalidated -- they simply
+                # never got checked, because normalise_analysis raises on a
+                # bad summary before validating anything else. Combine both
+                # attempts' raw highlights/decisions/actionItems (letting
+                # normalise_analysis's own per-item grounding and dedup
+                # decide what survives) instead of discarding whichever the
+                # retry happened to omit.
+                combined_retry = dict(retry_raw) if isinstance(retry_raw, dict) else {}
+                if isinstance(raw, dict):
+                    for field in ("highlights", "decisions", "actionItems"):
+                        combined_retry[field] = [
+                            *(raw.get(field) or []),
+                            *(combined_retry.get(field) or []),
+                        ]
+                result = normalise_analysis(combined_retry, prepared)
                 _log_diagnostic(
                     "[notesbuddy-analysis] summary_accepted path=reinforcement_retry "
-                    f"raw_counts=({_field_counts(retry_raw)}) "
+                    f"first_attempt_counts=({_field_counts(raw)}) "
+                    f"retry_raw_counts=({_field_counts(retry_raw)}) "
                     f"validated_counts=({_field_counts(result)}) "
                     f"summary={ascii(result.get('shortSummary'))[:300]}"
                 )

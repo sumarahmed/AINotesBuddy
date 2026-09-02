@@ -8,6 +8,21 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Fixed
+
+- Confirmed with a real user report and the field-count diagnostic logging
+  below: a chunk's reinforcement retry (see the 2026.09.02 summary fix)
+  returned a summary describing a scheduled follow-up session and a
+  to-be-sent document, yet that same response's highlights, decisions, and
+  actionItems arrays came back completely empty -- the retry prompt's
+  narrow focus on fixing the summary field caused the model to drop
+  structured findings it clearly still had, and the first attempt's own
+  findings were discarded even though they were never actually
+  invalidated (a bad summary makes validation raise before anything else
+  is checked). The retry now combines both attempts' highlights,
+  decisions, and action items instead of using only whichever the retry
+  happened to include.
+
 ### Added
 
 - Diagnostic logging now records highlights/decisions/actionItems counts
