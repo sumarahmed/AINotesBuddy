@@ -25,7 +25,7 @@ from teams_detection import (
     teams_capture_url,
 )
 
-COMPANION_VERSION = "2026.09.02"
+COMPANION_VERSION = "2026.09.03"
 DEFAULT_PORT = 8765
 DEFAULT_WEB_URL = "https://sumarahmed.github.io/AINotesBuddy/"
 AUTOSTART_VALUE_NAME = "NotesBuddyCompanion"
