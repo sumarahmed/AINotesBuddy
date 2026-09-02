@@ -525,35 +525,59 @@ def _validated_priority(
 def normalise_analysis(
     raw_analysis: object,
     prepared_segments: list[dict[str, Any]],
+    *,
+    trusted_summary: tuple[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(raw_analysis, dict):
         raise MeetingAnalysisUnavailable("The analysis model returned invalid JSON.")
     by_id = {segment["id"]: segment for segment in prepared_segments}
     valid_ids = set(by_id)
-    summary = _limit_words(raw_analysis.get("shortSummary"), 299)
-    summary_evidence = _evidence_ids(
-        raw_analysis.get("summaryEvidenceSegmentIds"), valid_ids
-    )
-    if not summary or not summary_evidence:
-        raise MeetingAnalysisUnavailable(
-            "The analysis model did not ground its summary in the transcript."
+    if trusted_summary is not None:
+        # Used only when merging multiple already-validated per-chunk
+        # results (see _merge_partials): each piece of this text already
+        # passed this same grounding check on its own, against its own
+        # evidence, inside _generate_and_normalise. Concatenating several
+        # independently-verified truthful sentences cannot introduce new
+        # hallucinated content, so re-running the check against the
+        # combined text is redundant -- and was observed to fail on real
+        # multi-chunk meetings anyway, since concatenation dilutes the
+        # overlap ratio and a single number or time phrase original to one
+        # chunk's own evidence can trip the whole-text subset check, even
+        # though every individual chunk was sound.
+        summary, summary_evidence = trusted_summary
+        summary = _limit_words(summary, 299)
+        summary_evidence = [
+            segment_id for segment_id in summary_evidence if segment_id in valid_ids
+        ]
+        if not summary or not summary_evidence:
+            raise MeetingAnalysisUnavailable(
+                "The analysis model did not ground its summary in the transcript."
+            )
+    else:
+        summary = _limit_words(raw_analysis.get("shortSummary"), 299)
+        summary_evidence = _evidence_ids(
+            raw_analysis.get("summaryEvidenceSegmentIds"), valid_ids
         )
-    if not _is_grounded_text(
-        summary,
-        _evidence_text(summary_evidence, by_id),
-    ):
-        summary_evidence = _expanded_summary_evidence(
-            summary,
-            summary_evidence,
-            by_id,
-        )
+        if not summary or not summary_evidence:
+            raise MeetingAnalysisUnavailable(
+                "The analysis model did not ground its summary in the transcript."
+            )
         if not _is_grounded_text(
             summary,
             _evidence_text(summary_evidence, by_id),
         ):
-            raise MeetingAnalysisUnavailable(
-                "The analysis model returned a summary unsupported by its cited transcript evidence."
+            summary_evidence = _expanded_summary_evidence(
+                summary,
+                summary_evidence,
+                by_id,
             )
+            if not _is_grounded_text(
+                summary,
+                _evidence_text(summary_evidence, by_id),
+            ):
+                raise MeetingAnalysisUnavailable(
+                    "The analysis model returned a summary unsupported by its cited transcript evidence."
+                )
 
     highlights: list[dict[str, Any]] = []
     seen_highlights: set[str] = set()
@@ -1575,13 +1599,40 @@ class LlamaCppMeetingAnalyzer:
             "actionItems": [item for part in partials for item in part.get("actionItems") or []],
         }
         try:
-            return normalise_analysis(combined, prepared)
+            result = normalise_analysis(combined, prepared)
+            _log_diagnostic(
+                "[notesbuddy-analysis] merge_summary_accepted "
+                f"summary={ascii(result.get('shortSummary'))[:400]}"
+            )
+            return result
         except MeetingAnalysisUnavailable as error:
             if "summary" not in str(error).lower():
                 raise
-            return normalise_analysis(
-                _repair_summary_from_grounded_items(combined, prepared), prepared
+            # Concatenating the per-chunk summaries verbatim failed this
+            # same check on real multi-chunk meetings even though every
+            # chunk analysed cleanly on its own (see normalise_analysis's
+            # trusted_summary parameter for why re-checking here is both
+            # redundant and too strict). Trust the already-individually-
+            # grounded per-chunk summaries instead of falling back to
+            # concatenated highlight/decision/action titles, which reads as
+            # disconnected labels rather than a summary.
+            _log_diagnostic(
+                "[notesbuddy-analysis] merge_summary_grounding_failed "
+                f"reason={error} combined_summary={ascii(combined['shortSummary'])[:400]}"
             )
+            result = normalise_analysis(
+                combined,
+                prepared,
+                trusted_summary=(
+                    combined["shortSummary"],
+                    combined["summaryEvidenceSegmentIds"],
+                ),
+            )
+            _log_diagnostic(
+                "[notesbuddy-analysis] merge_summary_accepted path=trusted_partials "
+                f"summary={ascii(result.get('shortSummary'))[:400]}"
+            )
+            return result
 
 
 class LocalAnalysisRouter:

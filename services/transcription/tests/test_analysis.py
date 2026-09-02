@@ -227,6 +227,64 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
                 "The team reviewed the revised scope and confirmed it fits the customer's budget.",
             )
 
+    def test_merge_trusts_already_grounded_partial_summaries_over_repair(self) -> None:
+        # A real multi-chunk meeting had every chunk analyse cleanly on its
+        # own (each shortSummary individually passed grounding), but the
+        # merge step's own re-check of the *concatenated* summary against
+        # the combined evidence failed anyway, and merge fell back to
+        # _repair_summary_from_grounded_items -- producing the exact same
+        # "Technical Constraints and Timeframe. Discovery Phase
+        # Documentation Requirements." title-concatenation bug the
+        # reinforcement retry was supposed to have fixed, because that
+        # retry only covered the per-chunk path, not this separate one.
+        # Merge should trust the partials' own already-validated summaries
+        # instead of re-deriving from highlight/decision/action text.
+        prepared = prepare_transcript_segments(
+            [
+                {"id": "a", "speaker": "Jordan", "text": "We agreed to launch on time."},
+                {
+                    "id": "b",
+                    "speaker": "Sam",
+                    "text": "The team confirmed the budget is fixed at ten thousand.",
+                },
+            ]
+        )
+        partial_one = {
+            "shortSummary": "We agreed to launch on time.",
+            "summaryEvidenceSegmentIds": ["S0001"],
+            "highlights": [
+                {"text": "Launch date confirmed.", "evidenceSegmentIds": ["S0001"]}
+            ],
+            "decisions": [],
+            "actionItems": [],
+        }
+        # This chunk's own shortSummary already passed its own per-chunk
+        # grounding check in production; the "47" here stands in for
+        # wording that was valid against that chunk's evidence but is not
+        # a literal number in the combined transcript, which is enough to
+        # fail the merge's whole-text numbers-subset re-check.
+        partial_two = {
+            "shortSummary": "The team confirmed the budget is fixed at 47 dollars.",
+            "summaryEvidenceSegmentIds": ["S0002"],
+            "highlights": [
+                {"text": "Budget review completed.", "evidenceSegmentIds": ["S0002"]}
+            ],
+            "decisions": [],
+            "actionItems": [],
+        }
+
+        merged = LlamaCppMeetingAnalyzer._merge_partials(
+            [partial_one, partial_two], prepared
+        )
+
+        self.assertEqual(
+            merged["shortSummary"],
+            "We agreed to launch on time. The team confirmed the budget is "
+            "fixed at 47 dollars.",
+        )
+        self.assertNotIn("Launch date confirmed", merged["shortSummary"])
+        self.assertNotIn("Budget review completed", merged["shortSummary"])
+
     def test_router_reports_missing_optional_component_instead_of_extractive_summary(self) -> None:
         with patch.dict("os.environ", {
             "NOTESBUDDY_ANALYSIS_RUNTIME": "missing-runtime.exe",

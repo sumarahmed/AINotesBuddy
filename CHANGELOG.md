@@ -10,6 +10,20 @@ remain compatible with semantic-version tooling.
 
 ### Fixed
 
+- Found the real cause of the recurring "Technical Constraints and
+  Timeframe. Discovery Phase Documentation Requirements." bad-summary
+  report, using the diagnostic logging shipped just before this fix: on a
+  real multi-chunk meeting, every chunk's own summary passed
+  evidence-grounding individually (confirmed live in the new log), but the
+  merge step that combines chunks re-checked the *concatenated* summary
+  against the combined evidence as if it were a single fresh model output,
+  and that stricter re-check failed even though nothing in it was
+  ungrounded. Merge then fell back to concatenating highlight/decision/
+  action titles, producing the exact same bug the 2026.09.02
+  reinforcement-retry fix was believed to have already fixed -- that fix
+  only ever covered the per-chunk path, not this separate merge-time one.
+  Merge now trusts the partials' own already-validated summaries instead
+  of re-deriving one from field titles.
 - Local smart-summary diagnostic logging (`llama_cpp_failed`,
   `llama_cpp_invalid_output`, `summary_repair_fallback`) relied on `print()`,
   which is silently discarded in the packaged Windows companion: PyInstaller
