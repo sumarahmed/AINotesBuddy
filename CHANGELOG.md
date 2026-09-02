@@ -30,6 +30,14 @@ remain compatible with semantic-version tooling.
   update banner could never be satisfied. Companion 2026.09.02 fixes this
   and `desktop/build.ps1` now synchronises that constant from the build
   version automatically, so it cannot drift again at the next release.
+- A real 6-speaker meeting failed professional analysis with "The analysis
+  model returned malformed JSON": the Balanced tier's fixed 2048-token
+  output budget was tuned against simpler test transcripts and ran out
+  before the JSON object could close on one with more speakers and
+  discussion points. The output-budget threshold is now wider, and a
+  truncated response is retried once with double the budget before the
+  analysis is reported as failed, since no fixed per-tier number can be
+  exactly right for every real transcript's content in advance.
 
 ### Added
 

@@ -1263,11 +1263,12 @@ class LlamaCppMeetingAnalyzer:
             chunks.append(current)
         return chunks
 
-    def _generate(self, prompt: str) -> dict[str, Any]:
+    def _generate(self, prompt: str, *, output_tokens: int | None = None) -> dict[str, Any]:
         if not self.runtime_path.is_file() or not self.model_path.is_file():
             raise MeetingAnalysisUnavailable(
                 "Install the Smart summary component before generating professional analysis."
             )
+        output_tokens = output_tokens if output_tokens is not None else self.output_tokens
         startupinfo = None
         if os.name == "nt":
             startupinfo = subprocess.STARTUPINFO()
@@ -1284,7 +1285,7 @@ class LlamaCppMeetingAnalyzer:
                 str(self.runtime_path), "--model", str(self.model_path),
                 "-sys", SYSTEM_PROMPT,
                 "--file", str(prompt_path), "--json-schema-file", str(schema_path),
-                "--ctx-size", str(self.context_tokens), "--predict", str(self.output_tokens),
+                "--ctx-size", str(self.context_tokens), "--predict", str(output_tokens),
                 "--threads", str(max(1, (os.cpu_count() or 4) - 1)),
                 "--temp", "0", "--single-turn",
                 # Pure greedy decoding (temp 0) with a large real transcript
@@ -1317,7 +1318,7 @@ class LlamaCppMeetingAnalyzer:
             # expire mid-generation on real meeting transcripts.
             timeout_seconds = max(
                 300,
-                min(1_800, 200 + len(prompt) // 120 + self.output_tokens // 3),
+                min(1_800, 200 + len(prompt) // 120 + output_tokens // 3),
             )
             try:
                 with self._generation_lock:
@@ -1353,7 +1354,20 @@ class LlamaCppMeetingAnalyzer:
     def _generate_and_normalise(
         self, prompt: str, prepared: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        raw = self._generate(prompt)
+        try:
+            raw = self._generate(prompt)
+        except MeetingAnalysisUnavailable as error:
+            if "malformed json" not in str(error).lower():
+                raise
+            # The output was cut off by --predict before the JSON object
+            # closed. A real meeting with more distinct speakers than any
+            # transcript this was tuned against needed more room than the
+            # tier's default budget -- no fixed per-tier ceiling can be
+            # sized correctly for every real transcript's content in
+            # advance, so retry once with more room rather than failing
+            # a professional analysis outright over a budget guess.
+            retry_tokens = min(8_192, self.output_tokens * 2)
+            raw = self._generate(prompt, output_tokens=retry_tokens)
         try:
             return normalise_analysis(raw, prepared)
         except MeetingAnalysisUnavailable as error:
@@ -1459,21 +1473,27 @@ class LocalAnalysisRouter:
 
     @staticmethod
     def _output_tokens_for(model_path: Path) -> int:
-        """Give larger installed models more room to finish their JSON.
+        """Give every tier but the smallest more room to finish their JSON.
 
         A real test against the "pro" (4B) tier showed noticeably richer,
         more specific output (real names, dates, business context) than the
         smaller tiers -- but 2 of 3 chunks hit the 2048-token --predict
         ceiling before the JSON object could close, failing as "malformed
-        JSON" even though the content itself was good. Sized off the
-        installed file rather than a filename/tier lookup so it keeps
+        JSON" even though the content itself was good. A real 6-speaker
+        meeting later hit the same failure on "standard" (1.7B) too, which
+        the original 1.5 GB threshold had left at 2048 -- how much output a
+        chunk needs depends on its content (speaker count, decisions,
+        actions), not the model's file size, so no fixed per-tier number can
+        be exactly right for every real transcript; _generate_and_normalise
+        retries once with more room if this still is not enough. Sized off
+        the installed file rather than a filename/tier lookup so it keeps
         working if the exact pinned model file ever changes.
         """
         try:
             size_bytes = model_path.stat().st_size
         except OSError:
             return 2_048
-        return 4_096 if size_bytes >= 1_500_000_000 else 2_048
+        return 4_096 if size_bytes >= 700_000_000 else 2_048
 
     @staticmethod
     def _analyzer() -> LlamaCppMeetingAnalyzer:

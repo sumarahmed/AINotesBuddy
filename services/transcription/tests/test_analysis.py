@@ -86,6 +86,62 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
             self.assertEqual(result["decisions"][0]["sourceSegmentIds"], ["agreement"])
             self.assertEqual(result["actionItems"][0]["dueDate"], "Friday")
 
+    def test_retries_with_a_larger_budget_after_a_truncated_response(self) -> None:
+        # A real meeting with more distinct speakers than any transcript this
+        # was tuned against truncated mid-JSON on its first attempt (the
+        # fixed --predict budget ran out before the object closed) and was
+        # reported as "malformed JSON" even though the model was still
+        # producing good content. This confirms the one-time retry with a
+        # doubled budget actually fires and succeeds instead of failing the
+        # analysis outright.
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(
+                runtime_path=runtime,
+                model_path=model,
+                output_tokens=2048,
+            )
+            generated = {
+                "shortSummary": "The team reviewed invoice monitoring and agreed to validate failed documents.",
+                "summaryEvidenceSegmentIds": ["S0001"],
+                "highlights": [],
+                "decisions": [],
+                "actionItems": [],
+            }
+            truncated = type(
+                "Completed", (), {"returncode": 0, "stdout": '{"shortSummary": "cut off mid', "stderr": ""}
+            )()
+            valid = type(
+                "Completed", (), {"returncode": 0, "stdout": json.dumps(generated), "stderr": ""}
+            )()
+            segments = [
+                {
+                    "id": "S0001",
+                    "speaker": "Presenter",
+                    "text": "The monitoring view shows failed invoices and SLA status.",
+                },
+            ]
+
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                side_effect=[truncated, valid],
+            ) as run:
+                result = analyzer.analyze(segments=segments, meeting_title="Invoice review")
+
+            self.assertEqual(run.call_count, 2)
+            first_predict = run.call_args_list[0].args[0][
+                run.call_args_list[0].args[0].index("--predict") + 1
+            ]
+            second_predict = run.call_args_list[1].args[0][
+                run.call_args_list[1].args[0].index("--predict") + 1
+            ]
+            self.assertEqual(first_predict, "2048")
+            self.assertEqual(second_predict, "4096")
+            self.assertIn("reviewed invoice monitoring", result["shortSummary"])
+
     def test_router_reports_missing_optional_component_instead_of_extractive_summary(self) -> None:
         with patch.dict("os.environ", {
             "NOTESBUDDY_ANALYSIS_RUNTIME": "missing-runtime.exe",
