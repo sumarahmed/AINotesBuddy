@@ -8,6 +8,21 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Fixed
+
+- Local smart-summary diagnostic logging (`llama_cpp_failed`,
+  `llama_cpp_invalid_output`, `summary_repair_fallback`) relied on `print()`,
+  which is silently discarded in the packaged Windows companion: PyInstaller
+  builds it with `console=False`, and its bootloader replaces
+  `sys.stdout`/`sys.stderr` with a null writer for that build type even when
+  the launching process redirects them to a real file. A real bad-summary
+  report could therefore never be diagnosed from the shipped .exe's output,
+  no matter how the process was launched. Diagnostics are now also written
+  directly to `%LOCALAPPDATA%\NotesBuddy\logs\companion.log`, and every
+  generation outcome (first attempt, reinforcement retry, or repair
+  fallback) is now logged, not only failures, so a poor-quality-but-grounded
+  summary that never hits the retry/repair path is still visible.
+
 ## 2026.09.02 - 2026-09-02
 
 ### Added

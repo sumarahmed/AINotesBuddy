@@ -10,8 +10,42 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _diagnostic_log_path() -> Path:
+    base = os.getenv("LOCALAPPDATA", "").strip()
+    root = Path(base) / "NotesBuddy" if base else Path.home() / ".notesbuddy"
+    return root / "logs" / "companion.log"
+
+
+def _log_diagnostic(message: str) -> None:
+    """Best-effort diagnostic logging for local smart-summary generation.
+
+    A packaged windowed build (``console=False``) has no console, and
+    PyInstaller's own bootloader replaces ``sys.stdout``/``sys.stderr`` with a
+    null writer for that build type even when the launching process redirects
+    them to a real file -- ``print()`` alone is silently discarded in the
+    shipped .exe, which is why earlier diagnostic prints never appeared in a
+    log file captured that way. Writing to a fixed file directly bypasses
+    that bootloader behaviour; the print() call is kept too since it works
+    fine when running from source in a real console.
+    """
+
+    line = f"{datetime.now(timezone.utc).isoformat()} {message}"
+    try:
+        print(line, flush=True)
+    except Exception:
+        pass
+    try:
+        log_path = _diagnostic_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
 
 
 ANALYSIS_SCHEMA_VERSION = 1
@@ -1351,10 +1385,9 @@ class LlamaCppMeetingAnalyzer:
                     "The local smart-summary model could not complete the analysis."
                 ) from error
         if completed.returncode != 0:
-            print(
+            _log_diagnostic(
                 "[notesbuddy-analysis] llama_cpp_failed "
-                f"return_code={completed.returncode} stderr={completed.stderr[-800:]!r}",
-                flush=True,
+                f"return_code={completed.returncode} stderr={completed.stderr[-800:]!r}"
             )
             raise MeetingAnalysisUnavailable(
                 "The local smart-summary model could not process this transcript."
@@ -1362,11 +1395,10 @@ class LlamaCppMeetingAnalyzer:
         try:
             return _extract_json(completed.stdout)
         except MeetingAnalysisUnavailable:
-            print(
+            _log_diagnostic(
                 "[notesbuddy-analysis] llama_cpp_invalid_output "
                 f"stdout={ascii(completed.stdout[-1200:])} "
-                f"stderr={ascii(completed.stderr[-1200:])}",
-                flush=True,
+                f"stderr={ascii(completed.stderr[-1200:])}"
             )
             raise
 
@@ -1388,7 +1420,12 @@ class LlamaCppMeetingAnalyzer:
             retry_tokens = min(8_192, self.output_tokens * 2)
             raw = self._generate(prompt, output_tokens=retry_tokens)
         try:
-            return normalise_analysis(raw, prepared)
+            result = normalise_analysis(raw, prepared)
+            _log_diagnostic(
+                "[notesbuddy-analysis] summary_accepted path=first_attempt "
+                f"summary={ascii(result.get('shortSummary'))[:300]}"
+            )
+            return result
         except MeetingAnalysisUnavailable as error:
             if "summary" not in str(error).lower():
                 raise
@@ -1412,7 +1449,12 @@ class LlamaCppMeetingAnalyzer:
                     "highlight, decision, or action item verbatim as the "
                     "summary."
                 )
-                return normalise_analysis(retry_raw, prepared)
+                result = normalise_analysis(retry_raw, prepared)
+                _log_diagnostic(
+                    "[notesbuddy-analysis] summary_accepted path=reinforcement_retry "
+                    f"summary={ascii(result.get('shortSummary'))[:300]}"
+                )
+                return result
             except MeetingAnalysisUnavailable as retry_error:
                 if "summary" not in str(retry_error).lower():
                     raise
@@ -1426,18 +1468,22 @@ class LlamaCppMeetingAnalyzer:
                 retry_candidates = (
                     (retry_raw,) if isinstance(retry_raw, dict) else ()
                 )
-                print(
+                _log_diagnostic(
                     "[notesbuddy-analysis] summary_repair_fallback "
                     f"first_attempt={ascii(_clean_text(raw.get('shortSummary')) if isinstance(raw, dict) else raw)[:300]} "
-                    f"retry_attempt={ascii(_clean_text(retry_raw.get('shortSummary')) if isinstance(retry_raw, dict) else retry_raw)[:300]}",
-                    flush=True,
+                    f"retry_attempt={ascii(_clean_text(retry_raw.get('shortSummary')) if isinstance(retry_raw, dict) else retry_raw)[:300]}"
                 )
-                return normalise_analysis(
+                result = normalise_analysis(
                     _repair_summary_from_grounded_items(
                         raw, prepared, *retry_candidates
                     ),
                     prepared,
                 )
+                _log_diagnostic(
+                    "[notesbuddy-analysis] summary_accepted path=repair_fallback "
+                    f"summary={ascii(result.get('shortSummary'))[:300]}"
+                )
+                return result
 
     def analyze(
         self,
