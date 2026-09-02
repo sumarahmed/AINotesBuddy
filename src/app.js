@@ -3186,21 +3186,7 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
         render();
       },
     });
-    console.info(
-      "[notesbuddy] analysis response received:",
-      "highlights=" + (result?.highlights?.length ?? "n/a"),
-      "decisions=" + (result?.decisions?.length ?? "n/a"),
-      "actionItems=" + (result?.actionItems?.length ?? "n/a"),
-    );
-    const applied = applyMeetingAnalysisToMeeting(meeting, result);
-    console.info(
-      "[notesbuddy] after applying to meeting:",
-      "applied=" + applied,
-      "highlights=" + meeting.highlights?.length,
-      "decisions=" + meeting.decisions?.length,
-      "actions=" + meeting.actions?.length,
-    );
-    if (!applied) {
+    if (!applyMeetingAnalysisToMeeting(meeting, result)) {
       throw new Error(
         "The service returned analysis that was not grounded in this transcript.",
       );
