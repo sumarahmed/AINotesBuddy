@@ -266,9 +266,9 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
   **GPU acceleration for smart summary** component is available in Settings
   once a compatible GPU is already accelerating speech-to-text -- it's a
   separate ~250MB opt-in download (not bundled for everyone, since most
-  users don't have a discrete NVIDIA GPU), and switching quality tiers
-  afterward currently reinstalls that tier's own CPU-only runtime, so it
-  needs reinstalling after a tier change.
+  users don't have a discrete NVIDIA GPU), installed into its own directory
+  independent of whichever quality tier is selected, so switching tiers
+  afterward does not affect it.
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,

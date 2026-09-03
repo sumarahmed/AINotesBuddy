@@ -329,9 +329,14 @@ first-time onboarding.
 The bundled runtime is CPU-only by default -- confirmed structural, not a
 missed flag, by downloading and inspecting llama.cpp's own official
 `-bin-win-cpu-x64.zip` release asset. An optional `analysis-cuda` component
-(same shared destination, so installing it replaces the CPU-only
-`llama-cli.exe`/DLLs in place) carries the GPU-capable alternative build
-instead. `LlamaCppMeetingAnalyzer` passes `-ngl 999` only when the installed
+carries the GPU-capable alternative build instead, installed into its own
+`analysis-gpu` destination rather than the GGUF tiers' shared `analysis`
+one -- component installation is a wholesale directory swap, not a file
+overlay, so a runtime-only package sharing that directory would silently
+delete whichever GGUF was installed there. `LocalAnalysisRouter` prefers
+this separate runtime, when present, over the CPU-only one; the GGUF always
+resolves from the untouched `analysis` directory regardless of which
+runtime is active. `LlamaCppMeetingAnalyzer` passes `-ngl 999` only when the installed
 runtime actually has `ggml-cuda.dll` next to it *and* `engine.local_accelerator("auto")`
 -- the exact same CUDA-availability probe `LocalDiarizationEngine` already
 uses for speech-to-text, not a second detector -- reports a usable GPU. A

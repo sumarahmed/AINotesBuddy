@@ -512,6 +512,44 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
         self.assertNotIn("Launch date confirmed", merged["shortSummary"])
         self.assertNotIn("Budget review completed", merged["shortSummary"])
 
+    def test_router_prefers_the_separate_gpu_runtime_when_installed(self) -> None:
+        # analysis-cuda installs into its own directory, never the shared
+        # "analysis" one the GGUF tiers use -- confirmed necessary live: an
+        # earlier design sharing that destination silently deleted the
+        # installed GGUF the moment analysis-cuda was installed, since
+        # component installation replaces a destination directory wholesale,
+        # not file-by-file, and this runtime-only package has no model of
+        # its own to put back.
+        with tempfile.TemporaryDirectory() as directory:
+            cpu_runtime = Path(directory) / "cpu" / "llama-cli.exe"
+            gpu_runtime = Path(directory) / "gpu" / "llama-cli.exe"
+            cpu_runtime.parent.mkdir()
+            gpu_runtime.parent.mkdir()
+            cpu_runtime.touch()
+            gpu_runtime.touch()
+            with patch.dict("os.environ", {
+                "NOTESBUDDY_ANALYSIS_RUNTIME": str(cpu_runtime),
+                "NOTESBUDDY_ANALYSIS_GPU_RUNTIME": str(gpu_runtime),
+                "NOTESBUDDY_ANALYSIS_MODEL_PATH": "missing-model-dir",
+            }):
+                analyzer = LocalAnalysisRouter._analyzer()
+            self.assertEqual(analyzer.runtime_path, gpu_runtime)
+
+    def test_router_falls_back_to_the_cpu_runtime_without_a_gpu_install(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cpu_runtime = Path(directory) / "cpu" / "llama-cli.exe"
+            cpu_runtime.parent.mkdir()
+            cpu_runtime.touch()
+            with patch.dict("os.environ", {
+                "NOTESBUDDY_ANALYSIS_RUNTIME": str(cpu_runtime),
+                "NOTESBUDDY_ANALYSIS_GPU_RUNTIME": str(
+                    Path(directory) / "gpu" / "llama-cli.exe"
+                ),
+                "NOTESBUDDY_ANALYSIS_MODEL_PATH": "missing-model-dir",
+            }):
+                analyzer = LocalAnalysisRouter._analyzer()
+            self.assertEqual(analyzer.runtime_path, cpu_runtime)
+
     def test_router_reports_missing_optional_component_instead_of_extractive_summary(self) -> None:
         with patch.dict("os.environ", {
             "NOTESBUDDY_ANALYSIS_RUNTIME": "missing-runtime.exe",

@@ -41,6 +41,17 @@ def configure_component_environment(root: Path | None = None) -> Path:
     # LocalAnalysisRouter resolves the actual *.gguf filename at request
     # time, since each tier's model file has a different name.
     os.environ["NOTESBUDDY_ANALYSIS_MODEL_PATH"] = str(target / "analysis")
+    # The optional analysis-cuda component deliberately has its own
+    # destination, separate from "analysis" -- component installation is a
+    # wholesale directory swap (see components.py's _install_one), not a
+    # file overlay, so a runtime-only package sharing the tiers' own
+    # directory would silently delete whichever GGUF was installed there.
+    # LocalAnalysisRouter prefers this runtime, when present, over the
+    # CPU-only one above, while the GGUF always still resolves from
+    # NOTESBUDDY_ANALYSIS_MODEL_PATH regardless of which runtime is active.
+    os.environ["NOTESBUDDY_ANALYSIS_GPU_RUNTIME"] = str(
+        target / "analysis-gpu" / "llama-cli.exe"
+    )
     return target
 
 

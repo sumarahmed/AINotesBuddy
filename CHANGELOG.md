@@ -21,10 +21,19 @@ remain compatible with semantic-version tooling.
   existing NVIDIA whisper-acceleration pack) and `cudart64_12.dll` (one
   ~540KB file, extracted at release-build time from a ~391MB redistributable
   so end users never download that whole archive). A new optional
-  `analysis-cuda` component carries this alternate runtime, sharing the same
-  destination directory the three quality tiers already use -- installing it
-  replaces the CPU-only runtime in place, the same way switching tiers
-  already replaces the previous GGUF. `LlamaCppMeetingAnalyzer` offloads all
+  `analysis-cuda` component carries this alternate runtime, installed into
+  its own `analysis-gpu` destination rather than the `analysis` one the
+  three quality tiers share. That separation was itself a real fix, not the
+  original design: component installation replaces a destination directory
+  wholesale (renamed aside, not merged file-by-file), confirmed the hard
+  way when an earlier version sharing the tiers' own destination silently
+  deleted the installed GGUF the first time `analysis-cuda` -- a
+  runtime-only package with no model file of its own -- was installed on a
+  real machine, verified live and fixed before this ever reached a
+  released build. `LocalAnalysisRouter` now prefers the separate GPU
+  runtime, when present, over the CPU-only one; the GGUF always resolves
+  from the untouched `analysis` directory regardless of which runtime is
+  active. `LlamaCppMeetingAnalyzer` offloads all
   layers only when the installed runtime actually has the CUDA backend *and*
   the same GPU-availability probe `LocalDiarizationEngine` already uses for
   speech-to-text confirms a usable GPU, retrying once on CPU if a

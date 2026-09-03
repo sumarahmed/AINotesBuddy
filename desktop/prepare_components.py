@@ -328,18 +328,20 @@ def _prepare_analysis_component(work: Path, output: Path, version: str, tier: di
 def _prepare_analysis_cuda_component(work: Path, output: Path, version: str) -> tuple[str, dict]:
     """GPU-capable llama.cpp runtime, opt-in and separate from the three GGUF
     tiers (the download is ~250MB vs. ~18.5MB for CPU-only, and most users
-    don't have a discrete NVIDIA GPU). Shares the same "analysis" destination
-    the tiers already use, so installing this replaces the CPU-only
-    llama-cli.exe/DLLs in place -- exactly how installing a different tier
-    already replaces the previous GGUF. Ships no model weights of its own; a
+    don't have a discrete NVIDIA GPU). Ships no model weights of its own; a
     GGUF tier must already be installed for there to be anything to run.
 
-    Known v1 rough edge: switching quality tiers afterward reinstalls that
-    tier's own bundled CPU-only runtime over these files, silently reverting
-    to CPU until this component is reinstalled. Runtime choice and model
-    choice aren't independently tracked -- acceptable for v1 since
-    reinstalling this component is the same one-click action as installing
-    any other component.
+    Deliberately uses its own destination ("analysis-gpu"), NOT the shared
+    "analysis" destination the three GGUF tiers use. Component installation
+    is a wholesale directory swap, not a file overlay (components.py's
+    _install_one renames the whole target directory aside and replaces it) --
+    confirmed the hard way: an earlier version of this component shared the
+    "analysis" destination and silently deleted the installed GGUF the first
+    time it was installed, since this runtime-only package has no model file
+    of its own to put back. LocalAnalysisRouter prefers this separate
+    runtime, when present, over the CPU-only one; the GGUF always resolves
+    from the untouched "analysis" directory regardless of which runtime is
+    active.
     """
 
     component_id = "analysis-cuda"
@@ -403,7 +405,7 @@ def _prepare_analysis_cuda_component(work: Path, output: Path, version: str) -> 
         component_id,
         "GPU acceleration for smart summary",
         version,
-        "analysis",
+        "analysis-gpu",
         "analysis",
         archive,
     )

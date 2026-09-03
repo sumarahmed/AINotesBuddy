@@ -172,7 +172,10 @@ class PrepareComponentsTests(unittest.TestCase):
                 cudart_bytes = archive.read("cudart64_12.dll")
 
             self.assertEqual(component_id, "analysis-cuda")
-            self.assertEqual(metadata["destination"], "analysis")
+            # Deliberately its own destination, not the tiers' shared
+            # "analysis" one -- sharing it would let this runtime-only
+            # package's wholesale-replace install delete the installed GGUF.
+            self.assertEqual(metadata["destination"], "analysis-gpu")
             self.assertIn("llama-cli.exe", names)
             self.assertIn("ggml-cuda.dll", names)
             self.assertIn("cudart64_12.dll", names)

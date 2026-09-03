@@ -1771,8 +1771,18 @@ class LocalAnalysisRouter:
         model_path = LocalAnalysisRouter._resolve_model_path(
             os.getenv("NOTESBUDDY_ANALYSIS_MODEL_PATH", "")
         )
+        # The optional analysis-cuda component installs into its own
+        # directory (see components.py's configure_component_environment)
+        # so its install can never wholesale-replace whichever GGUF tier's
+        # directory the model itself lives in. Prefer it when present; the
+        # GGUF path above is unaffected either way.
+        gpu_runtime = os.getenv("NOTESBUDDY_ANALYSIS_GPU_RUNTIME", "").strip()
+        cpu_runtime = os.getenv("NOTESBUDDY_ANALYSIS_RUNTIME", "")
+        runtime_path = (
+            gpu_runtime if gpu_runtime and Path(gpu_runtime).is_file() else cpu_runtime
+        )
         return LlamaCppMeetingAnalyzer(
-            runtime_path=os.getenv("NOTESBUDDY_ANALYSIS_RUNTIME", ""),
+            runtime_path=runtime_path,
             model_path=model_path,
             output_tokens=LocalAnalysisRouter._output_tokens_for(model_path),
         )
