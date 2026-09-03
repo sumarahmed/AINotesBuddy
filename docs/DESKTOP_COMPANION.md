@@ -17,6 +17,16 @@ GitHub Release shortly after startup and every 24 hours, then shows a tray
 notification and enables **Download update**. It never downloads or installs an
 update without the user's choice, and a failed check does not affect recording.
 
+The website's own side of that comparison originally used only a static
+version string baked into `src/runtime-config.js` at deploy time, correct
+only as of the last deploy. It now also queries GitHub's real release API
+directly (`GET /repos/.../releases/latest`, which allows unauthenticated
+cross-origin requests) on page load, caching the result in `localStorage`
+for 12 hours to stay well inside GitHub's 60-requests-per-hour unauthenticated
+limit even on a shared corporate network. A failed or rate-limited check
+silently falls back to the static value; the update banner/dialog and the
+**Download update** link both use whichever value is current.
+
 Version `2026.08.3` aligns microphone and meeting-output words before building
 speaker segments. Matching meeting speech that leaked into the microphone is
 removed word by word, while unmatched microphone speech remains **You** and the

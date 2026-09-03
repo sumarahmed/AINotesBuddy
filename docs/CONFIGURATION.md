@@ -46,7 +46,7 @@ streams. It applies to the next capture.
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
 | Product version | `2026.09.03` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
-| Latest companion version | `2026.09.10` | Public, non-secret value in `src/runtime-config.js` used for existing-user update warnings |
+| Latest companion version | `2026.09.10` static fallback in `src/runtime-config.js`; refreshed from GitHub's real release API on load | Used for existing-user update warnings; the live value (cached in `localStorage` for 12h) wins whenever the check succeeds, this is only the fallback |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
 | Runtime transcription mode | `hybrid` | Public non-secret setting in `src/runtime-config.js` |

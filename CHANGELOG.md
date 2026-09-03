@@ -10,6 +10,20 @@ remain compatible with semantic-version tooling.
 
 ### Added
 
+- The website's companion-update check now also queries GitHub's real
+  release API directly on page load (`GET /repos/.../releases/latest`,
+  which allows unauthenticated cross-origin requests -- confirmed live, not
+  assumed) instead of relying solely on a static version string baked into
+  `src/runtime-config.js` at deploy time, which only stayed accurate as
+  long as someone remembered to bump it on every companion release. Cached
+  in `localStorage` for 12 hours to stay well inside GitHub's
+  60-requests-per-hour unauthenticated limit even on a shared corporate
+  network; a failed or rate-limited check silently falls back to the
+  static value, verified live by simulating a network failure. The parsing
+  logic (find the installer asset, strip the `companion-v` tag prefix) is
+  a pure function in `meeting-audio.js`, directly unit tested rather than
+  living inline in the fetch call.
+
 - Optional GPU acceleration for local smart-summary generation, previously
   always CPU-only. Confirmed structural rather than a missed flag: the
   bundled `llama.cpp` runtime is llama.cpp's own official CPU-only Windows

@@ -290,13 +290,29 @@ const runtimeTranscriptionEndpoint =
   runtimeTranscriptionMode === "local"
     ? runtimeLocalCompanionEndpoint
     : runtimeHostedTranscriptionEndpoint;
-const latestCompanionVersion = String(
+// Reassigned in place once refreshLatestCompanionReleaseFromGitHub() resolves
+// (a `let`, not `const`, specifically so every existing template literal
+// referencing these two identifiers picks up the live value automatically on
+// its next render() call, with zero call-site changes needed). Until then,
+// or if that live check fails, this static value baked into runtime-config.js
+// at deploy time is the fallback -- accurate only as of the last deploy.
+let latestCompanionVersion = String(
   runtimeConfig.latestCompanionVersion || APP_VERSION,
 );
-const companionDownloadUrl = String(
+let companionDownloadUrl = String(
   runtimeConfig.companionDownloadUrl ||
     `https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v${latestCompanionVersion}/NotesBuddyCompanion-Setup-${latestCompanionVersion}.exe`,
 );
+const COMPANION_RELEASE_CHECK_URL =
+  "https://api.github.com/repos/sumarahmed/AINotesBuddy/releases/latest";
+const COMPANION_RELEASE_CHECK_STORAGE_KEY = "notesbuddy-companion-release-check";
+// GitHub's unauthenticated REST API allows 60 requests/hour per client IP --
+// comfortably enough for one browser's occasional page loads, but a shared
+// corporate NAT could exhaust it if every visit re-checked. Caching in
+// localStorage for half a day keeps this well inside that budget while
+// still catching a new release same-day, roughly matching the installed
+// companion's own independent 24h self-check cadence (desktop_app.py).
+const COMPANION_RELEASE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const companionSetupSessionKey = "notesbuddy-companion-setup-deferred";
 const defaultSettings = {
   autoSummarize: true,
@@ -3050,6 +3066,39 @@ function setHostedSessionPreference(enabled) {
   storeSessionFlag(companionSetupSessionKey, enabled);
 }
 
+async function refreshLatestCompanionReleaseFromGitHub() {
+  const cached = loadStored(COMPANION_RELEASE_CHECK_STORAGE_KEY, null);
+  if (cached?.version && cached?.downloadUrl && typeof cached.checkedAt === "number") {
+    latestCompanionVersion = cached.version;
+    companionDownloadUrl = cached.downloadUrl;
+    if (Date.now() - cached.checkedAt < COMPANION_RELEASE_CHECK_INTERVAL_MS) {
+      return;
+    }
+  }
+  try {
+    const response = await fetch(COMPANION_RELEASE_CHECK_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!response.ok) return;
+    const parsed = MeetingAudio.parseLatestCompanionRelease(await response.json());
+    if (!parsed) return;
+    latestCompanionVersion = parsed.version;
+    companionDownloadUrl = parsed.downloadUrl;
+    try {
+      localStorage.setItem(
+        COMPANION_RELEASE_CHECK_STORAGE_KEY,
+        JSON.stringify({ ...parsed, checkedAt: Date.now() }),
+      );
+    } catch {
+      // Best-effort cache only; the live value above is still applied.
+    }
+    render();
+  } catch {
+    // Network failure, rate limit, or an unreachable GitHub -- the static
+    // value baked into runtime-config.js at deploy time keeps working.
+  }
+}
+
 async function connectLocalCompanion({
   silent = false,
   force = false,
@@ -3931,6 +3980,7 @@ window.addEventListener("pagehide", () => {
 
 render();
 if (usesHybridTranscription()) {
+  refreshLatestCompanionReleaseFromGitHub().catch(() => {});
   if (state.preferHostedForSession) {
     activateHostedFallback();
     render();

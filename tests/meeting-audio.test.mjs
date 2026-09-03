@@ -24,6 +24,38 @@ test("compares Year.Month.MinorRelease versions including legacy companions", ()
   );
 });
 
+test("parses a real GitHub release response into a version and installer download URL", () => {
+  const release = {
+    tag_name: "companion-v2026.09.10",
+    assets: [
+      { name: "Source code (zip)", browser_download_url: "https://example.invalid/wrong.zip" },
+      {
+        name: "NotesBuddyCompanion-Setup-2026.09.10.exe",
+        browser_download_url:
+          "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.09.10/NotesBuddyCompanion-Setup-2026.09.10.exe",
+      },
+    ],
+  };
+  assert.deepEqual(MeetingAudio.parseLatestCompanionRelease(release), {
+    version: "2026.09.10",
+    downloadUrl:
+      "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.09.10/NotesBuddyCompanion-Setup-2026.09.10.exe",
+  });
+});
+
+test("returns null for a release with no matching installer asset or malformed input", () => {
+  assert.equal(
+    MeetingAudio.parseLatestCompanionRelease({
+      tag_name: "companion-v2026.09.10",
+      assets: [{ name: "unrelated-file.zip", browser_download_url: "https://example.invalid/x.zip" }],
+    }),
+    null,
+  );
+  assert.equal(MeetingAudio.parseLatestCompanionRelease({}), null);
+  assert.equal(MeetingAudio.parseLatestCompanionRelease(null), null);
+  assert.equal(MeetingAudio.parseLatestCompanionRelease(undefined), null);
+});
+
 test("routes long hybrid recordings to hosted acceleration without changing short or private jobs", () => {
   const common = {
     runtimeMode: "hybrid",

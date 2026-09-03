@@ -102,6 +102,26 @@
     return compareVersions(installedVersion, latestVersion) === -1;
   }
 
+  // Pure parsing of GitHub's `GET /repos/.../releases/latest` response, kept
+  // separate from the actual fetch (in app.js) so the "find the installer
+  // asset, strip the companion-v tag prefix" logic is directly testable
+  // without a network call. Returns null on anything unexpected rather than
+  // throwing, since a malformed/unexpected response should fall back to the
+  // static configured version, not break the caller.
+  function parseLatestCompanionRelease(release) {
+    const version = String(release?.tag_name || "")
+      .trim()
+      .replace(/^companion-v/i, "");
+    const asset = Array.isArray(release?.assets)
+      ? release.assets.find((item) =>
+          /^NotesBuddyCompanion-Setup-.*\.exe$/i.test(String(item?.name || "")),
+        )
+      : null;
+    const downloadUrl = String(asset?.browser_download_url || "");
+    if (!version || !downloadUrl) return null;
+    return { version, downloadUrl };
+  }
+
   function initialsForName(name) {
     const words = cleanName(name, "Speaker")
       .split(/\s+/)
@@ -1415,6 +1435,7 @@
     initialsForName,
     isVersionOutdated,
     normaliseMeetingAnalysis,
+    parseLatestCompanionRelease,
     parseTimestamp,
     primaryRecordingSource,
     recordingAsset,

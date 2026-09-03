@@ -33,7 +33,9 @@ for speech-to-text and speaker diarization.
 - Live progress and an elapsed timer while professional analysis runs,
   instead of a static "Analyzing…" message
 - Windows tray/control-panel app with automatic short-lived browser pairing
-- Existing-user website warnings and daily desktop checks for companion updates
+- Existing-user website warnings (checked live against GitHub's real release
+  API, cached for 12 hours, with a static deploy-time fallback) and daily
+  desktop checks for companion updates
 - Local-first website selection with a disclosed online fallback
 - First-entry Windows setup guide with download, installation, and live
   connection confirmation

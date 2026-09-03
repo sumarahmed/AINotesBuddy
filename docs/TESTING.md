@@ -33,6 +33,9 @@ The JavaScript tests cover:
   on screen;
 - **You**, detected, renamed, and unknown speaker labels;
 - rename propagation to participants;
+- parsing GitHub's real release API response into the installer version and
+  download URL, and returning null (not throwing) for a release with no
+  matching installer asset or otherwise malformed input;
 - structured analysis validation and rejection of invalid evidence IDs;
 - authenticated local multipart client construction;
 - automatic desktop discovery, pairing, token validation, and incompatibility
