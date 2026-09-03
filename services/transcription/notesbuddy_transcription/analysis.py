@@ -16,6 +16,7 @@ from typing import Any
 
 from .diagnostics import diagnostic_log_path as _diagnostic_log_path
 from .diagnostics import log_diagnostic as _log_diagnostic
+from .engine import local_accelerator
 
 
 def _field_counts(source: object) -> str:
@@ -1304,8 +1305,34 @@ class LlamaCppMeetingAnalyzer:
         self.maximum_chunk_characters = max(6_000, maximum_chunk_characters)
         self._generation_lock = threading.Lock()
 
+    def _has_gpu_runtime(self) -> bool:
+        return (self.runtime_path.parent / "ggml-cuda.dll").is_file()
+
+    def _gpu_layers(self) -> int | None:
+        """Number of layers to offload to GPU, or ``None`` for CPU-only.
+
+        Only offloads when the installed runtime actually ships the CUDA
+        backend (a CPU-only install must never claim GPU use even if a GPU
+        happens to be present) and a CUDA-capable GPU is actually usable --
+        reusing the exact same detection ``LocalDiarizationEngine`` already
+        relies on for speech-to-text, rather than probing twice.
+        """
+
+        if not self._has_gpu_runtime():
+            return None
+        try:
+            accelerator = local_accelerator("auto")
+        except Exception:  # noqa: BLE001 - detection must never block analysis
+            return None
+        return 999 if accelerator.get("available") else None
+
     def configuration_status(self) -> dict[str, object]:
         ready = self.runtime_path.is_file() and self.model_path.is_file()
+        gpu_ready = ready and self._has_gpu_runtime()
+        accelerator = (
+            local_accelerator("auto") if gpu_ready else {"available": False, "name": "CPU"}
+        )
+        gpu_available = bool(gpu_ready and accelerator.get("available"))
         return {
             "ready": ready,
             "model": self.name if ready else "",
@@ -1314,6 +1341,9 @@ class LlamaCppMeetingAnalyzer:
                 if ready
                 else "install the Smart summary component"
             ),
+            "device": "cuda" if gpu_available else "cpu",
+            "accelerator": str(accelerator.get("name") or "CPU"),
+            "gpuAvailable": gpu_available,
         }
 
     @staticmethod
@@ -1354,7 +1384,8 @@ class LlamaCppMeetingAnalyzer:
             schema_path.write_text(
                 json.dumps(OUTPUT_JSON_SCHEMA, ensure_ascii=False), encoding="utf-8"
             )
-            command = [
+            gpu_layers = self._gpu_layers()
+            base_command = [
                 str(self.runtime_path), "--model", str(self.model_path),
                 "-sys", SYSTEM_PROMPT,
                 "--file", str(prompt_path), "--json-schema-file", str(schema_path),
@@ -1384,26 +1415,51 @@ class LlamaCppMeetingAnalyzer:
                 "--no-jinja",
                 "--no-display-prompt", "--simple-io", "--color", "off",
             ]
+            command = (
+                base_command + ["--n-gpu-layers", str(gpu_layers)]
+                if gpu_layers is not None
+                else base_command
+            )
             # CPU decode time is dominated by the number of tokens generated,
             # not the prompt length (prefill is far cheaper per token than
             # decode). A timeout keyed only on prompt length under-budgets
             # short-prompt, full-length completions and was observed to
-            # expire mid-generation on real meeting transcripts.
+            # expire mid-generation on real meeting transcripts. GPU decode is
+            # materially faster, but the timeout stays sized for the CPU
+            # worst case since a failed GPU attempt retries on CPU below and
+            # must not be cut off mid-retry.
             timeout_seconds = max(
                 300,
                 min(1_800, 200 + len(prompt) // 120 + output_tokens // 3),
             )
-            try:
-                with self._generation_lock:
-                    completed = subprocess.run(
-                        command, capture_output=True, text=True, encoding="utf-8",
-                        errors="replace", timeout=timeout_seconds,
-                        startupinfo=startupinfo, check=False,
-                    )
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise MeetingAnalysisUnavailable(
-                    "The local smart-summary model could not complete the analysis."
-                ) from error
+
+            def run(command_to_run: list[str]) -> subprocess.CompletedProcess[str]:
+                try:
+                    with self._generation_lock:
+                        return subprocess.run(
+                            command_to_run, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace",
+                            timeout=timeout_seconds, startupinfo=startupinfo,
+                            check=False,
+                        )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise MeetingAnalysisUnavailable(
+                        "The local smart-summary model could not complete the analysis."
+                    ) from error
+
+            completed = run(command)
+            if completed.returncode != 0 and gpu_layers is not None:
+                # A quick, clean non-zero exit on the GPU attempt (as opposed
+                # to a timeout, which retrying would just double) most likely
+                # means CUDA init failed at runtime despite the installed
+                # component and a GPU being detected -- e.g. a driver issue
+                # or another process holding VRAM. Retry once on CPU rather
+                # than failing a professional analysis outright.
+                _log_diagnostic(
+                    "[notesbuddy-analysis] llama_cpp_gpu_failed retrying on CPU "
+                    f"return_code={completed.returncode} stderr={completed.stderr[-400:]!r}"
+                )
+                completed = run(base_command)
         if completed.returncode != 0:
             _log_diagnostic(
                 "[notesbuddy-analysis] llama_cpp_failed "

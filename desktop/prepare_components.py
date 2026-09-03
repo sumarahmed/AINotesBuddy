@@ -97,12 +97,43 @@ LLAMA_CPP_LICENSE_URL = (
 )
 LLAMA_CPP_LICENSE_BYTES = 1_078
 LLAMA_CPP_LICENSE_SHA256 = "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+# GPU-capable alternative to LLAMA_CPP_ARCHIVE, same pinned release. Verified
+# directly by downloading and inspecting it (not assumed): a complete,
+# self-consistent runtime -- llama-cli.exe plus every supporting llama-*/
+# ggml-* DLL the CPU-only build also ships, plus ggml-cuda.dll. Its own
+# import strings (checked with `grep -a` on the extracted DLL) show its only
+# external dependencies are cublas64_12.dll, cudart64_12.dll, and nvcuda.dll
+# (the last ships with the NVIDIA display driver itself, never bundled).
+LLAMA_CPP_CUDA_ARCHIVE = f"llama-{LLAMA_CPP_RELEASE}-bin-win-cuda-12.4-x64.zip"
+LLAMA_CPP_CUDA_ARCHIVE_BYTES = 250_892_658
+LLAMA_CPP_CUDA_ARCHIVE_SHA256 = "96d64faeb5b8e655341f32b26ad3e51fbea8bff0bc8120ad3dbffdc0b05b8ad3"
+LLAMA_CPP_CUDA_ARCHIVE_URL = (
+    f"https://github.com/ggml-org/llama.cpp/releases/download/"
+    f"{LLAMA_CPP_RELEASE}/{LLAMA_CPP_CUDA_ARCHIVE}"
+)
+# Only cudart64_12.dll from this redistributable is actually needed --
+# cublas64_12.dll/cublasLt64_12.dll are already provided by the existing
+# nvidia-cuda12 pack for faster-whisper's ctranslate2 backend, and
+# ggml-cuda.dll links against that exact file. This ~391MB archive is
+# downloaded once here, at release-prep time, purely to extract one ~540KB
+# file; end users never download it whole.
+LLAMA_CPP_CUDART_ARCHIVE = "cudart-llama-bin-win-cuda-12.4-x64.zip"
+LLAMA_CPP_CUDART_ARCHIVE_BYTES = 391_443_627
+LLAMA_CPP_CUDART_ARCHIVE_SHA256 = "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+LLAMA_CPP_CUDART_ARCHIVE_URL = (
+    f"https://github.com/ggml-org/llama.cpp/releases/download/"
+    f"{LLAMA_CPP_RELEASE}/{LLAMA_CPP_CUDART_ARCHIVE}"
+)
 MODELS = (
     ("whisper-base", "Systran/faster-whisper-base", False, "models/faster-whisper-selected", "speech", "Balanced speech model"),
     ("whisper-small", "Systran/faster-whisper-small", False, "models/faster-whisper-selected", "speech", "Accurate speech model"),
     ("speaker-diarization", "pyannote/speaker-diarization-community-1", True, "speaker", "speaker", "Speaker recognition runtime and model"),
 )
-COMPONENT_IDS = tuple(item[0] for item in MODELS) + tuple(ANALYSIS_TIERS_BY_ID) + ("nvidia-cuda12",)
+COMPONENT_IDS = (
+    tuple(item[0] for item in MODELS)
+    + tuple(ANALYSIS_TIERS_BY_ID)
+    + ("nvidia-cuda12", "analysis-cuda")
+)
 
 
 def _zip_directory(
@@ -173,7 +204,12 @@ def _download_verified(
         partial.unlink(missing_ok=True)
 
 
-def _extract_llama_runtime(archive_path: Path, destination: Path) -> None:
+def _extract_llama_runtime(
+    archive_path: Path,
+    destination: Path,
+    *,
+    extra_required: frozenset[str] = frozenset(),
+) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive_path) as archive:
         selected = [
@@ -184,7 +220,9 @@ def _extract_llama_runtime(archive_path: Path, destination: Path) -> None:
             and (member.filename == "llama-cli.exe" or member.filename.lower().endswith(".dll"))
         ]
         names = {member.filename for member in selected}
-        required = {"llama-cli.exe", "llama-cli-impl.dll", "llama-common.dll", "llama.dll", "ggml.dll"}
+        required = {
+            "llama-cli.exe", "llama-cli-impl.dll", "llama-common.dll", "llama.dll", "ggml.dll",
+        } | extra_required
         missing = sorted(required - names)
         if missing:
             raise RuntimeError(
@@ -193,6 +231,13 @@ def _extract_llama_runtime(archive_path: Path, destination: Path) -> None:
         for member in selected:
             with archive.open(member) as source, (destination / member.filename).open("wb") as output:
                 shutil.copyfileobj(source, output, length=1024 * 1024)
+
+
+def _extract_cudart_dll(archive_path: Path, destination_file: Path) -> None:
+    with zipfile.ZipFile(archive_path) as archive, archive.open("cudart64_12.dll") as source:
+        destination_file.parent.mkdir(parents=True, exist_ok=True)
+        with destination_file.open("wb") as output:
+            shutil.copyfileobj(source, output, length=1024 * 1024)
 
 
 def _prepare_analysis_component(work: Path, output: Path, version: str, tier: dict) -> tuple[str, dict]:
@@ -280,6 +325,90 @@ def _prepare_analysis_component(work: Path, output: Path, version: str, tier: di
     return key, value
 
 
+def _prepare_analysis_cuda_component(work: Path, output: Path, version: str) -> tuple[str, dict]:
+    """GPU-capable llama.cpp runtime, opt-in and separate from the three GGUF
+    tiers (the download is ~250MB vs. ~18.5MB for CPU-only, and most users
+    don't have a discrete NVIDIA GPU). Shares the same "analysis" destination
+    the tiers already use, so installing this replaces the CPU-only
+    llama-cli.exe/DLLs in place -- exactly how installing a different tier
+    already replaces the previous GGUF. Ships no model weights of its own; a
+    GGUF tier must already be installed for there to be anything to run.
+
+    Known v1 rough edge: switching quality tiers afterward reinstalls that
+    tier's own bundled CPU-only runtime over these files, silently reverting
+    to CPU until this component is reinstalled. Runtime choice and model
+    choice aren't independently tracked -- acceptable for v1 since
+    reinstalling this component is the same one-click action as installing
+    any other component.
+    """
+
+    component_id = "analysis-cuda"
+    source = work / component_id
+    source.mkdir(parents=True)
+
+    inputs = work / ".inputs"
+    cuda_archive = inputs / LLAMA_CPP_CUDA_ARCHIVE
+    _download_verified(
+        LLAMA_CPP_CUDA_ARCHIVE_URL,
+        cuda_archive,
+        expected_bytes=LLAMA_CPP_CUDA_ARCHIVE_BYTES,
+        expected_sha256=LLAMA_CPP_CUDA_ARCHIVE_SHA256,
+    )
+    _extract_llama_runtime(cuda_archive, source, extra_required=frozenset({"ggml-cuda.dll"}))
+
+    cudart_archive = inputs / LLAMA_CPP_CUDART_ARCHIVE
+    _download_verified(
+        LLAMA_CPP_CUDART_ARCHIVE_URL,
+        cudart_archive,
+        expected_bytes=LLAMA_CPP_CUDART_ARCHIVE_BYTES,
+        expected_sha256=LLAMA_CPP_CUDART_ARCHIVE_SHA256,
+    )
+    _extract_cudart_dll(cudart_archive, source / "cudart64_12.dll")
+
+    _download_verified(
+        LLAMA_CPP_LICENSE_URL,
+        source / "LICENSE-llama.cpp.txt",
+        expected_bytes=LLAMA_CPP_LICENSE_BYTES,
+        expected_sha256=LLAMA_CPP_LICENSE_SHA256,
+    )
+    provenance = {
+        "schemaVersion": 1,
+        "runtime": {
+            "repository": "ggml-org/llama.cpp",
+            "release": LLAMA_CPP_RELEASE,
+            "asset": LLAMA_CPP_CUDA_ARCHIVE,
+            "bytes": LLAMA_CPP_CUDA_ARCHIVE_BYTES,
+            "sha256": LLAMA_CPP_CUDA_ARCHIVE_SHA256,
+            "license": "MIT",
+        },
+        "cudaRuntimeRedistributable": {
+            "repository": "ggml-org/llama.cpp",
+            "release": LLAMA_CPP_RELEASE,
+            "asset": LLAMA_CPP_CUDART_ARCHIVE,
+            "extractedFile": "cudart64_12.dll",
+            "note": (
+                "Only cudart64_12.dll is extracted from this asset -- "
+                "cublas64_12.dll/cublasLt64_12.dll are provided by the "
+                "nvidia-cuda12 component instead."
+            ),
+        },
+    }
+    (source / "COMPONENT_PROVENANCE.json").write_text(
+        json.dumps(provenance, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    archive = output / f"NotesBuddy-{component_id}-{version}.zip"
+    _zip_directory(source, archive)
+    return _asset(
+        component_id,
+        "GPU acceleration for smart summary",
+        version,
+        "analysis",
+        "analysis",
+        archive,
+    )
+
+
 def _existing_components(manifest_path: Path) -> dict[str, dict]:
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -352,11 +481,32 @@ def main() -> int:
     if "nvidia-cuda12" in selected:
         if not arguments.gpu_libs.is_dir():
             raise RuntimeError("The pinned NVIDIA runtime directory is missing.")
+        # Staged into a work copy rather than writing into --gpu-libs itself,
+        # so this script never mutates the maintainer-provided input
+        # directory. cudart64_12.dll is folded in here (not shipped whole
+        # via the ~391MB cudart-llama archive -- see
+        # _prepare_analysis_cuda_component) so the CUDA-capable smart-summary
+        # runtime's only other dependency, ggml-cuda.dll, resolves fully from
+        # this one existing pack.
+        gpu_source = work / "nvidia-cuda12"
+        shutil.copytree(arguments.gpu_libs, gpu_source)
+        inputs = work / ".inputs"
+        cudart_archive = inputs / LLAMA_CPP_CUDART_ARCHIVE
+        _download_verified(
+            LLAMA_CPP_CUDART_ARCHIVE_URL,
+            cudart_archive,
+            expected_bytes=LLAMA_CPP_CUDART_ARCHIVE_BYTES,
+            expected_sha256=LLAMA_CPP_CUDART_ARCHIVE_SHA256,
+        )
+        _extract_cudart_dll(cudart_archive, gpu_source / "cudart64_12.dll")
         gpu_archive = output / f"NotesBuddy-nvidia-cuda12-{arguments.version}.zip"
         # CUDA/cuDNN DLLs compress poorly with Deflate. ZIP-LZMA remains readable
         # by Python's standard library and avoids making users download ~1.25 GB.
-        _zip_directory(arguments.gpu_libs, gpu_archive, compression=zipfile.ZIP_LZMA)
+        _zip_directory(gpu_source, gpu_archive, compression=zipfile.ZIP_LZMA)
         key, value = _asset("nvidia-cuda12", "NVIDIA acceleration pack", arguments.version, "gpu", "accelerator", gpu_archive)
+        components[key] = value
+    if "analysis-cuda" in selected:
+        key, value = _prepare_analysis_cuda_component(work, output, arguments.version)
         components[key] = value
     manifest = {"schemaVersion": 1, "releaseVersion": arguments.version, "components": components}
     arguments.manifest.parent.mkdir(parents=True, exist_ok=True)

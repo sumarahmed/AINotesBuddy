@@ -101,6 +101,15 @@ The Python suite covers:
   re-deriving one from concatenated highlight/decision/action titles;
 - component installer packaging, including each smart-summary quality tier
   and the shared-destination replace-on-install behavior;
+- the optional GPU-capable smart-summary runtime component: it contains the
+  CUDA backend and a separately-sourced `cudart64_12.dll` but not the
+  already-provided `cublas64_12.dll`, and folding `cudart64_12.dll` into the
+  NVIDIA acceleration pack without mutating the maintainer-provided input
+  directory;
+- `LlamaCppMeetingAnalyzer` GPU offload: only passes `-ngl` when the
+  installed runtime actually has the CUDA backend and a GPU is detected
+  (never when only one of those is true), retries once on CPU after a
+  failed GPU-flagged run, and reports device/accelerator status;
 - server-side analysis progress store: pollable while a request is in
   flight, cleared after completion.
 - anonymous session opacity, expiry/error handling, issuance limits, active-job

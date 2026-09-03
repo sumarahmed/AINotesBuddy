@@ -261,10 +261,14 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
   packaging, or system-audio-capture equivalent; a Mac user can still record
   their own microphone in the browser, but meeting-audio capture and local
   transcription/analysis are unavailable there today.
-- Local smart-summary generation runs on CPU by default. The High quality
-  tier in particular can take many minutes per meeting on CPU; there is no
-  GPU acceleration pack for it yet (the existing NVIDIA pack only
-  accelerates speech-to-text, not the smart-summary model).
+- Local smart-summary generation runs on CPU by default; the High quality
+  tier in particular can take many minutes per meeting on CPU. An optional
+  **GPU acceleration for smart summary** component is available in Settings
+  once a compatible GPU is already accelerating speech-to-text -- it's a
+  separate ~250MB opt-in download (not bundled for everyone, since most
+  users don't have a discrete NVIDIA GPU), and switching quality tiers
+  afterward currently reinstalls that tier's own CPU-only runtime, so it
+  needs reinstalling after a tier change.
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,

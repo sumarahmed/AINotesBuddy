@@ -22,6 +22,30 @@ from notesbuddy_transcription.analysis import (  # noqa: E402
 )
 
 
+# Minimal fixtures for GPU-offload tests, which only care about what command
+# gets built and whether a retry happens -- not evidence-grounding detail,
+# already covered by the tests below. Summary text matches the cited
+# segment's text exactly so grounding validation trivially passes.
+# prepare_transcript_segments() overwrites each segment's own id with a
+# positional "S0001"-style id for the model-facing prompt/evidence scheme
+# (analysis.py:327), so a single input segment must be cited as "S0001"
+# regardless of whatever id the raw segment carried.
+_MINIMAL_SEGMENTS = [
+    {
+        "id": "seg-1",
+        "speaker": "Presenter",
+        "text": "The team confirmed the launch date is Friday.",
+    },
+]
+_MINIMAL_VALID_RESULT = {
+    "shortSummary": "The team confirmed the launch date is Friday.",
+    "summaryEvidenceSegmentIds": ["S0001"],
+    "highlights": [],
+    "decisions": [],
+    "actionItems": [],
+}
+
+
 class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
     def setUp(self) -> None:
         # _generate_and_normalise() logs every generation outcome to
@@ -33,6 +57,116 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
         env_patch = patch.dict(os.environ, {"NOTESBUDDY_LOG_DIR": self._log_dir.name})
         env_patch.start()
         self.addCleanup(env_patch.stop)
+
+    def test_offloads_to_gpu_when_the_cuda_runtime_and_a_gpu_are_both_present(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            (Path(directory) / "ggml-cuda.dll").touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(_MINIMAL_VALID_RESULT), "stderr": ""},
+            )()
+            with patch(
+                "notesbuddy_transcription.analysis.local_accelerator",
+                return_value={"available": True, "name": "NVIDIA Test GPU"},
+            ), patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                return_value=completed,
+            ) as run:
+                analyzer.analyze(segments=_MINIMAL_SEGMENTS, meeting_title="Test")
+            command = run.call_args.args[0]
+            self.assertIn("--n-gpu-layers", command)
+            self.assertEqual(
+                command[command.index("--n-gpu-layers") + 1], "999"
+            )
+
+    def test_never_claims_gpu_use_without_the_cuda_runtime_installed(self) -> None:
+        # A CPU-only install (the default) must never pass -ngl even if a GPU
+        # happens to be present -- ggml-cuda.dll genuinely is not there.
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(_MINIMAL_VALID_RESULT), "stderr": ""},
+            )()
+            with patch(
+                "notesbuddy_transcription.analysis.local_accelerator",
+                return_value={"available": True, "name": "NVIDIA Test GPU"},
+            ), patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                return_value=completed,
+            ) as run:
+                analyzer.analyze(segments=_MINIMAL_SEGMENTS, meeting_title="Test")
+            command = run.call_args.args[0]
+            self.assertNotIn("--n-gpu-layers", command)
+
+    def test_retries_on_cpu_after_a_failed_gpu_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            (Path(directory) / "ggml-cuda.dll").touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            failed = type(
+                "Completed", (), {"returncode": 1, "stdout": "", "stderr": "CUDA error"}
+            )()
+            succeeded = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(_MINIMAL_VALID_RESULT), "stderr": ""},
+            )()
+            with patch(
+                "notesbuddy_transcription.analysis.local_accelerator",
+                return_value={"available": True, "name": "NVIDIA Test GPU"},
+            ), patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                side_effect=[failed, succeeded],
+            ) as run:
+                result = analyzer.analyze(
+                    segments=_MINIMAL_SEGMENTS, meeting_title="Test"
+                )
+            self.assertEqual(run.call_count, 2)
+            first_command, second_command = (
+                call.args[0] for call in run.call_args_list
+            )
+            self.assertIn("--n-gpu-layers", first_command)
+            self.assertNotIn("--n-gpu-layers", second_command)
+            self.assertIn("shortSummary", result)
+
+    def test_configuration_status_reports_device_and_accelerator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            cpu_only = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            status = cpu_only.configuration_status()
+            self.assertEqual(status["device"], "cpu")
+            self.assertFalse(status["gpuAvailable"])
+
+            (Path(directory) / "ggml-cuda.dll").touch()
+            gpu_ready = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            with patch(
+                "notesbuddy_transcription.analysis.local_accelerator",
+                return_value={"available": True, "name": "NVIDIA Test GPU"},
+            ):
+                status = gpu_ready.configuration_status()
+            self.assertEqual(status["device"], "cuda")
+            self.assertTrue(status["gpuAvailable"])
+            self.assertEqual(status["accelerator"], "NVIDIA Test GPU")
 
     def test_generates_synthesised_grounded_analysis_from_text_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

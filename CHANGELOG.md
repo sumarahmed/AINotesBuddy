@@ -10,6 +10,29 @@ remain compatible with semantic-version tooling.
 
 ### Added
 
+- Optional GPU acceleration for local smart-summary generation, previously
+  always CPU-only. Confirmed structural rather than a missed flag: the
+  bundled `llama.cpp` runtime is llama.cpp's own official CPU-only Windows
+  release asset, with no CUDA backend compiled in at all. Verified feasible
+  directly, not assumed -- downloaded and inspected llama.cpp's official
+  CUDA build for the exact same pinned release: a complete, self-consistent
+  alternate runtime whose only external dependencies (checked via `grep -a`
+  on its own import strings) are `cublas64_12.dll` (already provided by the
+  existing NVIDIA whisper-acceleration pack) and `cudart64_12.dll` (one
+  ~540KB file, extracted at release-build time from a ~391MB redistributable
+  so end users never download that whole archive). A new optional
+  `analysis-cuda` component carries this alternate runtime, sharing the same
+  destination directory the three quality tiers already use -- installing it
+  replaces the CPU-only runtime in place, the same way switching tiers
+  already replaces the previous GGUF. `LlamaCppMeetingAnalyzer` offloads all
+  layers only when the installed runtime actually has the CUDA backend *and*
+  the same GPU-availability probe `LocalDiarizationEngine` already uses for
+  speech-to-text confirms a usable GPU, retrying once on CPU if a
+  GPU-flagged run fails. Offered in Settings once a compatible GPU is
+  already accelerating transcription, and auto-included during first-time
+  setup under the same condition -- an opt-in ~250MB addition, not bundled
+  for everyone, since most users don't have a discrete NVIDIA GPU.
+
 - Guest speech now appears in the live transcript panel while a meeting is
   still recording, whether or not headphones are worn. Previously, live
   "Guest" text only ever appeared by accident: without headphones, the

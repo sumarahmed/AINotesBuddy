@@ -99,7 +99,13 @@ re-transcribed every ~5 seconds while still being captured, so guest speech
 appears in the live transcript during recording instead of only after
 **Transcribe and identify speakers**, working the same way whether or not
 headphones prevent the old mic-leakage-based approach from ever seeing guest
-audio at all. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
+audio at all. The same release also adds an optional **GPU acceleration for
+smart summary** component: local smart-summary generation previously always
+ran on CPU (the bundled `llama.cpp` runtime had no CUDA backend compiled in
+at all), confirmed structural by downloading and inspecting llama.cpp's own
+official CUDA build for the same pinned release before adding it as a new
+component. Settings offers it once a compatible GPU is already accelerating
+transcription. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
 
 ## User flow
 
@@ -170,7 +176,14 @@ Public releases provide independent reusable assets for:
   `analysis-pro` (`unsloth/Qwen3-4B-Instruct-2507-GGUF`). All three share one
   destination folder, so installing a different tier replaces whichever was
   installed before. See [`desktop/MODEL_NOTICES.md`](../desktop/MODEL_NOTICES.md)
-  for why Balanced is recommended over Fast.
+  for why Balanced is recommended over Fast;
+- `analysis-cuda`, an optional GPU-capable `llama.cpp` runtime for the smart-summary
+  step, sharing that same destination folder -- installing it replaces the
+  CPU-only runtime in place, the same way switching quality tiers already
+  does. Ships no model weights of its own; a quality tier must already be
+  installed. Switching tiers afterward reinstalls that tier's own bundled
+  CPU-only runtime, silently reverting to CPU until `analysis-cuda` is
+  reinstalled -- a known rough edge, not a bug.
 
 The publisher—not each customer—accepts the gated model conditions and uses a
 read-only `HF_TOKEN` only when intentionally preparing a new component release.

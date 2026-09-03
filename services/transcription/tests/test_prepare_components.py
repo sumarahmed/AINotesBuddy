@@ -122,6 +122,111 @@ class PrepareComponentsTests(unittest.TestCase):
             self.assertEqual(provenance["model"]["sha256"], sha256(model))
             self.assertEqual(provenance["runtime"]["release"], prepare_components.LLAMA_CPP_RELEASE)
 
+    def test_analysis_cuda_pack_contains_gpu_runtime_and_cudart(self) -> None:
+        runtime = io.BytesIO()
+        with zipfile.ZipFile(runtime, "w") as archive:
+            archive.writestr("llama-cli.exe", b"cli")
+            archive.writestr("llama-cli-impl.dll", b"cli implementation")
+            archive.writestr("llama-common.dll", b"common")
+            archive.writestr("llama.dll", b"llama")
+            archive.writestr("ggml.dll", b"ggml")
+            archive.writestr("ggml-cuda.dll", b"cuda backend")
+            archive.writestr("ggml-cpu-x64.dll", b"cpu")
+            archive.writestr("llama-server.exe", b"omit")
+        runtime_payload = runtime.getvalue()
+
+        cudart = io.BytesIO()
+        with zipfile.ZipFile(cudart, "w") as archive:
+            archive.writestr("cudart64_12.dll", b"cuda runtime")
+            archive.writestr("cublas64_12.dll", b"omit, already have this")
+        cudart_payload = cudart.getvalue()
+
+        def fake_download(url, destination, *, expected_bytes, expected_sha256):
+            del expected_bytes, expected_sha256
+            if url == prepare_components.LLAMA_CPP_CUDA_ARCHIVE_URL:
+                payload = runtime_payload
+            elif url == prepare_components.LLAMA_CPP_CUDART_ARCHIVE_URL:
+                payload = cudart_payload
+            else:
+                payload = b"MIT"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "work"
+            output = root / "output"
+            work.mkdir()
+            output.mkdir()
+            with patch(
+                "desktop.prepare_components._download_verified", side_effect=fake_download
+            ):
+                component_id, metadata = prepare_components._prepare_analysis_cuda_component(
+                    work, output, "test-version"
+                )
+
+            component_archive = output / "NotesBuddy-analysis-cuda-test-version.zip"
+            with zipfile.ZipFile(component_archive) as archive:
+                names = set(archive.namelist())
+                provenance = json.loads(archive.read("COMPONENT_PROVENANCE.json"))
+                cudart_bytes = archive.read("cudart64_12.dll")
+
+            self.assertEqual(component_id, "analysis-cuda")
+            self.assertEqual(metadata["destination"], "analysis")
+            self.assertIn("llama-cli.exe", names)
+            self.assertIn("ggml-cuda.dll", names)
+            self.assertIn("cudart64_12.dll", names)
+            self.assertNotIn("llama-server.exe", names)
+            self.assertNotIn("cublas64_12.dll", names, "already provided by nvidia-cuda12")
+            self.assertEqual(cudart_bytes, b"cuda runtime")
+            self.assertEqual(
+                provenance["runtime"]["asset"], prepare_components.LLAMA_CPP_CUDA_ARCHIVE
+            )
+            self.assertEqual(
+                provenance["cudaRuntimeRedistributable"]["extractedFile"], "cudart64_12.dll"
+            )
+
+    def test_nvidia_pack_folds_in_cudart_without_mutating_input_directory(self) -> None:
+        cudart = io.BytesIO()
+        with zipfile.ZipFile(cudart, "w") as archive:
+            archive.writestr("cudart64_12.dll", b"cuda runtime")
+        cudart_payload = cudart.getvalue()
+
+        def fake_download(url, destination, *, expected_bytes, expected_sha256):
+            del expected_bytes, expected_sha256
+            self.assertEqual(url, prepare_components.LLAMA_CPP_CUDART_ARCHIVE_URL)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(cudart_payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gpu_libs = root / "gpu-libs"
+            gpu_libs.mkdir()
+            (gpu_libs / "cublas64_12.dll").write_bytes(b"existing cublas")
+            output = root / "output"
+
+            arguments = [
+                "prepare_components.py", "--version", "test-version",
+                "--component", "nvidia-cuda12",
+                "--output", str(output), "--gpu-libs", str(gpu_libs),
+                "--manifest", str(root / "manifest.json"),
+            ]
+            with patch.object(sys, "argv", arguments), patch(
+                "desktop.prepare_components._download_verified", side_effect=fake_download
+            ):
+                prepare_components.main()
+
+            # The maintainer-provided input directory must never be mutated.
+            self.assertEqual(
+                sorted(path.name for path in gpu_libs.iterdir()), ["cublas64_12.dll"]
+            )
+            with zipfile.ZipFile(
+                output / "NotesBuddy-nvidia-cuda12-test-version.zip"
+            ) as archive:
+                names = set(archive.namelist())
+            self.assertIn("cublas64_12.dll", names)
+            self.assertIn("cudart64_12.dll", names)
+
     def test_selective_build_retains_existing_manifest_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

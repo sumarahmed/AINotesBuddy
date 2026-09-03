@@ -577,6 +577,15 @@ function localAcceleratorLabel() {
     : "local CPU";
 }
 
+function localAnalysisAcceleratorLabel() {
+  const accelerator = String(
+    state.companion.metadata?.analysisAccelerator || "local CPU",
+  );
+  return state.companion.metadata?.analysisGpuAvailable
+    ? accelerator
+    : "local CPU";
+}
+
 function transcriptionRouteForMeeting(meeting) {
   return MeetingAudio.selectTranscriptionRoute({
     runtimeMode: runtimeTranscriptionMode,
@@ -1325,6 +1334,25 @@ function settingsPanel() {
         <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
         <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
       </section>`;
+  const analysisGpuInstalling =
+    state.componentJob &&
+    ["queued", "downloading", "installing"].includes(state.componentJob.status);
+  const analysisAccelerationSettings =
+    hybridConnected && state.companion.metadata?.analysisAvailable
+      ? `<section class="settings-section">
+        <span class="eyebrow">Smart meeting summary speed</span>
+        <p class="settings-help">Using ${escapeHtml(localAnalysisAcceleratorLabel())} to generate summaries.${
+          state.companion.metadata?.gpuAvailable && !state.companion.metadata?.analysisGpuAvailable
+            ? " A compatible GPU is already accelerating transcription; installing one more component lets it accelerate meeting summaries too."
+            : ""
+        }</p>
+        ${
+          state.companion.metadata?.gpuAvailable && !state.companion.metadata?.analysisGpuAvailable
+            ? `<button type="button" class="button button--quiet" data-action="install-analysis-gpu" ${analysisGpuInstalling ? "disabled" : ""}>${icon("sparkles", 14)}Enable GPU acceleration</button>`
+            : ""
+        }
+      </section>`
+      : "";
   const autoTranscribeDescription = hosted
     ? "Send saved source tracks to the public transcription service after capture."
     : hybrid
@@ -1352,6 +1380,7 @@ function settingsPanel() {
         <p class="settings-help">System follows your device's own light/dark setting.</p>
       </section>
       ${transcriptionSettings}
+      ${analysisAccelerationSettings}
       <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After speaker transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
@@ -1490,14 +1519,8 @@ function companionOnboarding() {
   </div>`;
 }
 
-async function installCompanionComponents(preset) {
+async function runComponentInstall(requested, onReady) {
   const client = createTranscriptionClient({ mode: "local" });
-  const requested = [
-    preset === "base" ? "whisper-base" : "whisper-small",
-    "speaker-diarization",
-    state.settings.analysisModelTier || "analysis-standard",
-    ...(state.companion.metadata?.gpuAvailable ? ["nvidia-cuda12"] : []),
-  ];
   try {
     state.componentJob = await client.installComponents(requested);
     render();
@@ -1513,11 +1536,34 @@ async function installCompanionComponents(preset) {
     state.companion.metadata = { ...state.companion.metadata, ...health };
     state.componentJob = null;
     render();
-    showToast("Local AI components ready", `${health.accelerator || "Local processing"} is ready for transcription and smart meeting analysis.`);
+    onReady(health);
   } catch (error) {
     state.componentJob = { ...(state.componentJob || {}), status: "failed", error: error?.message || "Component installation failed." };
     render();
   }
+}
+
+async function installCompanionComponents(preset) {
+  const requested = [
+    preset === "base" ? "whisper-base" : "whisper-small",
+    "speaker-diarization",
+    state.settings.analysisModelTier || "analysis-standard",
+    ...(state.companion.metadata?.gpuAvailable ? ["nvidia-cuda12", "analysis-cuda"] : []),
+  ];
+  await runComponentInstall(requested, (health) => {
+    showToast("Local AI components ready", `${health.accelerator || "Local processing"} is ready for transcription and smart meeting analysis.`);
+  });
+}
+
+async function installAnalysisGpuAcceleration() {
+  await runComponentInstall(["analysis-cuda"], (health) => {
+    showToast(
+      "GPU acceleration ready",
+      health.analysisGpuAvailable
+        ? `Smart meeting summary now uses ${health.analysisAccelerator || "your GPU"}.`
+        : "Installed, but a compatible GPU was not detected — smart meeting summary will keep using the CPU.",
+    );
+  });
 }
 
 async function pauseCompanionComponents() {
@@ -3653,6 +3699,9 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "install-components") {
     await installCompanionComponents(button.dataset.preset || "small");
+    return;
+  } else if (action === "install-analysis-gpu") {
+    await installAnalysisGpuAcceleration();
     return;
   } else if (action === "pause-components") {
     await pauseCompanionComponents();

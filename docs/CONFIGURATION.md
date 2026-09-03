@@ -54,6 +54,7 @@ streams. It applies to the next capture.
 | Hosted fallback endpoint | Empty by default | Set only after a public service passes production verification; an empty value prevents a broken fallback from being offered |
 | Local processing priority | All recording lengths | A connected companion prevents hybrid jobs from being routed online |
 | Analysis model | One of three installable local GGUF tiers (`analysis-tiny`/`analysis-standard`/`analysis-pro`), selected in the companion setup screen | Runs through `llama-cli.exe`; a hosted instruction model can replace it through `NOTESBUDDY_ANALYSIS_MODEL` |
+| Analysis GPU acceleration | Off by default, optional `analysis-cuda` component | Offloads all layers (`-ngl 999`) to a detected CUDA GPU only when the installed runtime actually has `ggml-cuda.dll`; retries once on CPU if a GPU-flagged run fails |
 | Analysis schema/prompt version | Schema `1`, prompt `2` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
 | Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |
 | Companion download URL | Versioned GitHub Release `.exe` asset | Direct public Windows installer download |

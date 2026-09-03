@@ -326,6 +326,18 @@ different quality tier replaces the previous one. Settings can trigger that
 same install/replace flow at any time after initial setup, not only during
 first-time onboarding.
 
+The bundled runtime is CPU-only by default -- confirmed structural, not a
+missed flag, by downloading and inspecting llama.cpp's own official
+`-bin-win-cpu-x64.zip` release asset. An optional `analysis-cuda` component
+(same shared destination, so installing it replaces the CPU-only
+`llama-cli.exe`/DLLs in place) carries the GPU-capable alternative build
+instead. `LlamaCppMeetingAnalyzer` passes `-ngl 999` only when the installed
+runtime actually has `ggml-cuda.dll` next to it *and* `engine.local_accelerator("auto")`
+-- the exact same CUDA-availability probe `LocalDiarizationEngine` already
+uses for speech-to-text, not a second detector -- reports a usable GPU. A
+GPU-flagged run that exits non-zero retries once on CPU rather than failing
+the analysis outright.
+
 | Tier | Model | Notes |
 | --- | --- | --- |
 | `analysis-tiny` (Fast) | Qwen2.5-0.5B-Instruct | Smallest download; raw output was found to fail evidence-grounding validation almost entirely on real meeting speech |
