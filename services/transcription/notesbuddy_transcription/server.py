@@ -42,6 +42,7 @@ from .analysis import (
     MeetingAnalysisUnavailable,
     analyzer_from_environment,
 )
+from .diagnostics import log_diagnostic
 from .engine import EngineCancelled, engine_from_environment
 from .pairing import BrowserPairingStore
 from .security import ensure_pairing_token
@@ -244,6 +245,10 @@ def _run_job(job: Job, engine: object) -> None:
                 job.progress = min(1.0, max(0.0, float(value)))
                 job.stage = str(stage)[:120]
 
+    log_diagnostic(
+        f"job {job.id} starting: engine={job.engine_name} "
+        f"sources={sorted(job.paths.keys())}"
+    )
     try:
         result = engine.process(
             microphone_path=job.paths.get("microphone"),
@@ -265,6 +270,10 @@ def _run_job(job: Job, engine: object) -> None:
                 job.segments = list(result.get("segments") or [])
             job.completed_at = _now()
             job.completed_monotonic = time.monotonic()
+        log_diagnostic(
+            f"job {job.id} finished: status={job.status} "
+            f"segments={len(job.segments)}"
+        )
     except EngineCancelled:
         with job.lock:
             job.status = "cancelled"
@@ -278,6 +287,7 @@ def _run_job(job: Job, engine: object) -> None:
             job.error = _safe_error(error, job.work_dir)
             job.completed_at = _now()
             job.completed_monotonic = time.monotonic()
+        log_diagnostic(f"job {job.id} failed: {job.error}")
     finally:
         shutil.rmtree(job.work_dir, ignore_errors=True)
         if job.on_terminal is not None:
@@ -1069,6 +1079,7 @@ def create_app(
 
         work_dir = Path(tempfile.mkdtemp(prefix="notesbuddy-job-"))
         paths: dict[str, Path] = {}
+        source_bytes_by_name: dict[str, int] = {}
         total_upload_bytes = 0
         try:
             for source, upload in uploads.items():
@@ -1079,12 +1090,14 @@ def create_app(
                     maximum_bytes=maximum_source_bytes,
                 )
                 paths[source] = path
+                source_bytes_by_name[source] = source_bytes
                 total_upload_bytes += source_bytes
                 if total_upload_bytes > maximum_total_bytes:
                     raise HTTPException(
                         status_code=413,
                         detail="The combined recordings exceed the configured limit.",
                     )
+            log_diagnostic(f"job upload received: {source_bytes_by_name}")
             job = Job(
                 id=f"job-{uuid4()}",
                 work_dir=work_dir,

@@ -8,7 +8,31 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Added
+
+- `engine.py` and `server.py`, the actual local faster-whisper/pyannote
+  pipeline, had no diagnostic logging at all -- confirmed by reading both
+  files after a real report of a completed recording (real speech confirmed
+  present in the microphone, meeting-output signal correctly detected)
+  coming back with a genuinely empty transcript and no visible error
+  anywhere, client or server. An empty result is not a failure state today:
+  the job still completes with `status: "completed"`, so the existing
+  `job.error` field is never populated for it either. `_log_diagnostic`/
+  `_diagnostic_log_path`, previously private to `analysis.py`, moved to a new
+  shared `diagnostics.py` module; `engine.process()` now logs per-source
+  bytes received, transcribed word counts, diarization turn counts, and an
+  explicit warning line (with likely cause) whenever it produces zero
+  segments; `server.py` logs per-source upload byte sizes and each job's
+  final outcome by job id. All of it lands in the same
+  `%LOCALAPPDATA%\NotesBuddy\logs\companion.log` the smart-summary stage
+  already writes to.
+
 ### Fixed
+
+- An empty-but-successfully-completed transcript showed the same "Speaker
+  transcript ready" toast as a real result, just with "0 speakers" --
+  indistinguishable from success at a glance. It now shows "No speech
+  detected" with guidance to check the capture devices instead.
 
 - Companion Windows-output capture never detected sound while connected to a
   Bluetooth headset, confirmed live from a screenshot showing the status card

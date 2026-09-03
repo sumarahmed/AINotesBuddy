@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import SpeakerTurn, Word, build_transcript
+from .diagnostics import log_diagnostic
 
 
 class EngineCancelled(RuntimeError):
@@ -635,6 +636,27 @@ class LocalDiarizationEngine:
         meeting_turns: list[SpeakerTurn] = []
         languages: list[str] = []
 
+        def source_size(path: Path | None) -> int:
+            try:
+                return path.stat().st_size if path else 0
+            except OSError:
+                return -1
+
+        log_diagnostic(
+            "engine.process starting: microphone=%s (%d bytes) meeting=%s "
+            "(%d bytes) mixed=%s (%d bytes) model=%s device=%s"
+            % (
+                bool(microphone_path),
+                source_size(microphone_path),
+                bool(meeting_path),
+                source_size(meeting_path),
+                bool(mixed_path),
+                source_size(mixed_path),
+                self.whisper_model_name,
+                self.device,
+            )
+        )
+
         if cancel_event.is_set():
             raise EngineCancelled("Transcription cancelled")
 
@@ -646,6 +668,10 @@ class LocalDiarizationEngine:
             )
             if language:
                 languages.append(language)
+            log_diagnostic(
+                f"engine.process microphone transcribed: "
+                f"{len(microphone_words)} words, language={language}"
+            )
 
         # A mixed-only file is an import with no isolated microphone. When a
         # microphone track exists without a meeting track, mixed is the same
@@ -661,11 +687,19 @@ class LocalDiarizationEngine:
             )
             if language:
                 languages.append(language)
+            log_diagnostic(
+                f"engine.process meeting audio transcribed: "
+                f"{len(meeting_words)} words, language={language}"
+            )
             progress(0.68, "identifying meeting speakers")
             meeting_turns = self._diarize_with_heartbeat(
                 remote_path,
                 cancel_event=cancel_event,
                 progress=progress,
+            )
+            log_diagnostic(
+                f"engine.process diarization produced {len(meeting_turns)} "
+                "speaker turns"
             )
 
         if cancel_event.is_set():
@@ -678,6 +712,18 @@ class LocalDiarizationEngine:
         )
         progress(1.0, "completed")
         language = max(set(languages), key=languages.count) if languages else None
+        if not segments:
+            log_diagnostic(
+                "engine.process WARNING: produced an empty transcript -- "
+                f"microphone_words={len(microphone_words)} "
+                f"meeting_words={len(meeting_words)} "
+                f"meeting_turns={len(meeting_turns)}. If both word counts are "
+                "0 despite audible speech, faster-whisper's VAD filter likely "
+                "classified the source audio as silence (low gain, wrong "
+                "capture device, or heavy noise reduction)."
+            )
+        else:
+            log_diagnostic(f"engine.process completed: {len(segments)} segments")
         return {"language": language, "segments": segments}
 
 

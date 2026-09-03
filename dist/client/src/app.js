@@ -3360,10 +3360,17 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
     }
     save();
     render();
-    showToast(
-      "Speaker transcript ready",
-      `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified ${jobMode === "hosted" ? "by the online GPU" : "locally"}.`,
-    );
+    if (meeting.transcript.length) {
+      showToast(
+        "Speaker transcript ready",
+        `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified ${jobMode === "hosted" ? "by the online GPU" : "locally"}.`,
+      );
+    } else {
+      showToast(
+        "No speech detected",
+        `The ${jobMode === "hosted" ? "online transcription service" : "local transcription companion"} did not find any speech in this recording. Check that the right microphone and Windows output device were actually capturing sound.`,
+      );
+    }
     if (state.settings.autoSummarize && meeting.transcript.length) {
       await analyzeMeeting(meeting);
     }
