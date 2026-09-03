@@ -21,6 +21,31 @@ from notesbuddy_transcription.engine import EmptyEngine, EngineCancelled
 
 PAIRING_TOKEN = "test-pairing-token-that-is-long-enough"
 
+# engine.process() and _run_job() log to the real companion log file
+# (%LOCALAPPDATA%\NotesBuddy\logs\companion.log) by default -- confirmed to
+# actually happen after a real log tail handed back to diagnose an empty
+# transcript turned out to be this test suite's own previous run, with fake
+# job ids and engine names ("empty-test-engine") indistinguishable at a
+# glance from genuine activity. Redirect it for the whole module.
+_log_dir_handle: tempfile.TemporaryDirectory | None = None
+_previous_log_dir: str | None = None
+
+
+def setUpModule() -> None:
+    global _log_dir_handle, _previous_log_dir
+    _previous_log_dir = os.environ.get("NOTESBUDDY_LOG_DIR")
+    _log_dir_handle = tempfile.TemporaryDirectory()
+    os.environ["NOTESBUDDY_LOG_DIR"] = _log_dir_handle.name
+
+
+def tearDownModule() -> None:
+    if _previous_log_dir is None:
+        os.environ.pop("NOTESBUDDY_LOG_DIR", None)
+    else:
+        os.environ["NOTESBUDDY_LOG_DIR"] = _previous_log_dir
+    if _log_dir_handle is not None:
+        _log_dir_handle.cleanup()
+
 
 class FakeAnalyzer:
     name = "fake-professional-analyzer"
