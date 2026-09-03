@@ -286,30 +286,81 @@ test("prefers companion Windows output when microphone and meeting tracks are se
   );
 });
 
-test("labels live browser words as Guest only when meeting output overlaps", () => {
-  const spans = [{ startMs: 2800, endMs: 4700 }];
-  assert.deepEqual(
-    MeetingAudio.provisionalDraftSpeaker({
-      startMs: 500,
-      endMs: 1700,
-      meetingActivitySpans: spans,
-    }),
-    {
-      speakerId: "local-user",
-      speaker: "You",
-      initials: "U",
-      color: "teal",
-      source: "microphone",
-      provisional: false,
-    },
+test("live guest words are grouped into one row when close together and split on a longer pause", () => {
+  const result = MeetingAudio.applyPartialGuestSegments(
+    [],
+    [
+      { startMs: 0, endMs: 300, text: "hello" },
+      { startMs: 400, endMs: 700, text: "there" },
+      { startMs: 3000, endMs: 3300, text: "again" },
+    ],
+  );
+  assert.equal(result.length, 2);
+  assert.equal(result[0].text, "hello there");
+  assert.equal(result[0].speakerId, "remote-guest");
+  assert.equal(result[0].provisional, true);
+  assert.equal(result[1].text, "again");
+});
+
+test("live guest transcription replaces provisional rows on every poll instead of duplicating them", () => {
+  const micSegment = {
+    id: "speech-mic-1",
+    speakerId: "local-user",
+    speaker: "You",
+    startMs: 500,
+    endMs: 1200,
+    text: "hello there",
+    isDraft: true,
+    provisional: false,
+  };
+  const firstPoll = MeetingAudio.applyPartialGuestSegments(
+    [micSegment],
+    [{ startMs: 2000, endMs: 2400, text: "hi" }],
+  );
+  assert.equal(firstPoll.length, 2);
+  const firstGuestRow = firstPoll.find(
+    (segment) => segment.speakerId === "remote-guest",
+  );
+  assert.equal(firstGuestRow.text, "hi");
+
+  const secondPoll = MeetingAudio.applyPartialGuestSegments(firstPoll, [
+    { startMs: 2000, endMs: 2400, text: "hi" },
+    { startMs: 2450, endMs: 2900, text: "there" },
+  ]);
+  const guestRows = secondPoll.filter(
+    (segment) => segment.speakerId === "remote-guest",
   );
   assert.equal(
-    MeetingAudio.provisionalDraftSpeaker({
-      startMs: 2900,
-      endMs: 4100,
-      meetingActivitySpans: spans,
-    }).speakerId,
-    "remote-guest",
+    guestRows.length,
+    1,
+    "the revised word list replaces the prior row instead of adding a second one",
+  );
+  assert.equal(guestRows[0].text, "hi there");
+  assert.equal(
+    secondPoll.filter((segment) => segment.id === micSegment.id).length,
+    1,
+    "the unrelated mic segment is left untouched",
+  );
+});
+
+test("live guest rows are time-sorted alongside mic rows even when they arrive out of order", () => {
+  const laterMicSegment = {
+    id: "speech-mic-late",
+    speakerId: "local-user",
+    speaker: "You",
+    startMs: 5000,
+    endMs: 5500,
+    text: "later mic word",
+    isDraft: true,
+    provisional: false,
+  };
+  const result = MeetingAudio.applyPartialGuestSegments(
+    [laterMicSegment],
+    [{ startMs: 1000, endMs: 1300, text: "earlier guest word" }],
+  );
+  assert.deepEqual(
+    result.map((segment) => segment.text),
+    ["earlier guest word", "later mic word"],
   );
 });
 

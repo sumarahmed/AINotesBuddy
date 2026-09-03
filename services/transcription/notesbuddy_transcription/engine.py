@@ -202,6 +202,16 @@ class LocalDiarizationEngine:
         self._whisper = None
         self._diarization = None
         self._load_lock = threading.Lock()
+        # Guards every call into the whisper model. faster-whisper is not
+        # guaranteed safe for concurrent inference, and once live partial
+        # transcription exists this is the first thing that can call
+        # .transcribe() concurrently with a full-recording job. The
+        # full-file path (process()) acquires this blocking -- correctness
+        # matters, a job can afford to wait. The live-chunk path
+        # (transcribe_chunk) acquires it non-blocking and just skips that
+        # tick on contention, so a live caption never queues behind a
+        # multi-minute diarization job.
+        self._inference_lock = threading.Lock()
 
     def _fallback_to_cpu(self, error: BaseException, phase: str) -> None:
         self._whisper = None
@@ -385,22 +395,15 @@ class LocalDiarizationEngine:
             self._fallback_to_cpu(error, "inference")
             return self._transcribe_once(path, cancel_event=cancel_event)
 
-    def _transcribe_once(
+    def _words_from_model_segments(
         self,
-        path: Path,
+        model_segments: Any,
         *,
-        cancel_event: threading.Event,
-    ) -> tuple[list[Word], str | None]:
-        model = self._load_whisper()
-        model_segments, info = model.transcribe(
-            str(path),
-            word_timestamps=True,
-            vad_filter=True,
-            beam_size=1,
-        )
+        cancel_event: threading.Event | None = None,
+    ) -> list[Word]:
         words: list[Word] = []
         for segment in model_segments:
-            if cancel_event.is_set():
+            if cancel_event is not None and cancel_event.is_set():
                 raise EngineCancelled("Transcription cancelled")
             segment_words = getattr(segment, "words", None) or []
             if segment_words:
@@ -438,8 +441,93 @@ class LocalDiarizationEngine:
                             text=text,
                         )
                     )
-        language = str(getattr(info, "language", "") or "").strip() or None
+        return words
+
+    def _transcribe_once(
+        self,
+        path: Path,
+        *,
+        cancel_event: threading.Event,
+    ) -> tuple[list[Word], str | None]:
+        model = self._load_whisper()
+        # Held for the full transcribe-and-consume span, not just the
+        # transcribe() call: faster-whisper's segment iterator is lazy, so
+        # the actual model inference happens while _words_from_model_segments
+        # iterates it, not during transcribe() itself.
+        with self._inference_lock:
+            model_segments, info = model.transcribe(
+                str(path),
+                word_timestamps=True,
+                vad_filter=True,
+                beam_size=1,
+            )
+            words = self._words_from_model_segments(
+                model_segments, cancel_event=cancel_event
+            )
+            language = str(getattr(info, "language", "") or "").strip() or None
         return words, language
+
+    def transcribe_chunk(
+        self, samples: Any, sample_rate: int
+    ) -> list[dict[str, Any]]:
+        """Best-effort transcription of a short in-progress recording chunk.
+
+        Used for live captions while a meeting-audio capture is still
+        running. Skips the tick rather than waiting if a full-recording job
+        already holds the inference lock -- a missed 5-second tick is
+        harmless, queuing several behind a multi-minute job is not. Any
+        failure is swallowed for the same reason: this must never disrupt
+        the recording it runs alongside.
+        """
+
+        if not self._inference_lock.acquire(blocking=False):
+            return []
+        try:
+            model = self._load_whisper()
+            # faster-whisper's numpy-array input path skips resampling
+            # entirely -- it assumes the array is already at the model's
+            # native rate (transcribe.py: `if not isinstance(audio,
+            # np.ndarray): audio = decode_audio(...)`). Only the file-path
+            # input goes through ffmpeg-quality resampling, so a chunk
+            # captured at a different rate must be resampled here first.
+            target_rate = int(model.feature_extractor.sampling_rate)
+            audio = self._resample_for_whisper(samples, sample_rate, target_rate)
+            model_segments, _info = model.transcribe(
+                audio,
+                word_timestamps=True,
+                vad_filter=True,
+                beam_size=1,
+            )
+            words = self._words_from_model_segments(model_segments)
+        except Exception:  # noqa: BLE001 - best-effort live tick, never propagate
+            return []
+        finally:
+            self._inference_lock.release()
+        return [
+            {"startMs": word.start_ms, "endMs": word.end_ms, "text": word.text}
+            for word in words
+        ]
+
+    @staticmethod
+    def _resample_for_whisper(samples: Any, source_rate: int, target_rate: int) -> Any:
+        """Cheap linear-interpolation resample for the live-caption tick.
+
+        Not used by the full-recording path, which resamples through
+        faster-whisper's own ffmpeg-quality file decoder instead -- this is
+        deliberately a lower-quality, dependency-free stand-in acceptable
+        only for a best-effort live draft.
+        """
+
+        import numpy as np
+
+        if source_rate == target_rate or samples.size == 0:
+            return samples.astype("float32", copy=False)
+        duration = samples.shape[0] / float(source_rate)
+        target_length = max(1, int(round(duration * target_rate)))
+        source_indices = np.linspace(0, samples.shape[0] - 1, num=target_length)
+        return np.interp(
+            source_indices, np.arange(samples.shape[0]), samples
+        ).astype("float32")
 
     @staticmethod
     def _annotation_from_output(output: object) -> object:

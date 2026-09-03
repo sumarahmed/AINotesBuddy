@@ -84,6 +84,9 @@ class FakeSystemAudioCapture:
         self.id = capture_id
         self.path = path
         self.status = "recording"
+        self.partial_words: list[dict] = [
+            {"startMs": 0, "endMs": 400, "text": "synthetic guest words"}
+        ]
 
     def public(self) -> dict:
         return {
@@ -128,6 +131,9 @@ class FakeSystemAudioManager:
         if capture is None:
             raise SystemAudioCaptureNotFound("System audio capture was not found.")
         return capture
+
+    def partial_transcript(self, capture_id: str) -> list[dict]:
+        return self.get(capture_id).partial_words
 
     def pause(self, capture_id: str) -> FakeSystemAudioCapture:
         capture = self.get(capture_id)
@@ -485,6 +491,37 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(stopped.headers["content-type"], "audio/wav")
         self.assertTrue(stopped.content.startswith(b"RIFF"))
         self.assertIn(capture_id, self.system_audio.discarded)
+
+    def test_system_audio_partial_transcript_requires_pairing_and_returns_words(
+        self,
+    ) -> None:
+        started = self.client.post(
+            "/v1/system-audio/captures",
+            headers=self.headers,
+        )
+        capture_id = started.json()["captureId"]
+
+        denied = self.client.get(
+            f"/v1/system-audio/captures/{capture_id}/partial-transcript"
+        )
+        self.assertEqual(denied.status_code, 401)
+
+        partial = self.client.get(
+            f"/v1/system-audio/captures/{capture_id}/partial-transcript",
+            headers=self.headers,
+        )
+        self.assertEqual(partial.status_code, 200)
+        self.assertEqual(partial.json()["captureId"], capture_id)
+        self.assertEqual(
+            partial.json()["words"],
+            [{"startMs": 0, "endMs": 400, "text": "synthetic guest words"}],
+        )
+
+        missing = self.client.get(
+            "/v1/system-audio/captures/capture-missing/partial-transcript",
+            headers=self.headers,
+        )
+        self.assertEqual(missing.status_code, 404)
 
     def test_system_audio_capture_can_be_cancelled(self) -> None:
         started = self.client.post(

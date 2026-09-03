@@ -6,6 +6,10 @@
   const LONG_RECORDING_SECONDS = 8 * 60;
   const MINIMUM_TRANSCRIPTION_TIMEOUT_MS = 30 * 60 * 1000;
   const MAXIMUM_TRANSCRIPTION_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+  // Matches MEETING_ACTIVITY_HANGOVER_MS in app.js -- the gap that already
+  // decides when one meeting-activity span ends and a new one begins, reused
+  // here so a live guest word's grouping into a row lines up with that.
+  const LIVE_GUEST_WORD_GAP_MS = 900;
 
   function createId(prefix) {
     const uniquePart =
@@ -134,45 +138,63 @@
       : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
 
-  function provisionalDraftSpeaker({
-    startMs = 0,
-    endMs = startMs,
-    meetingActivitySpans = [],
-  } = {}) {
-    const safeStartMs = Math.max(0, Number(startMs) || 0);
-    const safeEndMs = Math.max(safeStartMs, Number(endMs) || safeStartMs);
-    const alignmentStartMs = Math.max(safeStartMs, safeEndMs - 1400) - 250;
-    const alignmentEndMs = safeEndMs + 250;
-    const meetingWasActive = (Array.isArray(meetingActivitySpans)
-      ? meetingActivitySpans
-      : []
-    ).some((span) => {
-      const spanStartMs = Math.max(0, Number(span?.startMs) || 0);
-      const spanEndMs = Math.max(
-        spanStartMs,
-        Number(span?.endMs) || spanStartMs,
-      );
-      return (
-        spanStartMs <= alignmentEndMs && spanEndMs >= alignmentStartMs
-      );
-    });
-    return meetingWasActive
-      ? {
-          speakerId: "remote-guest",
-          speaker: "Guest",
-          initials: "G",
-          color: "violet",
-          source: "meeting",
-          provisional: true,
-        }
-      : {
-          speakerId: "local-user",
-          speaker: "You",
-          initials: "U",
-          color: "teal",
-          source: "microphone",
-          provisional: false,
-        };
+  // The companion's partial-transcript poll returns a flat, absolute-timed
+  // word list for its trailing window every ~5s, not a prior grouping into
+  // utterances -- group nearby words back into utterance-shaped rows here.
+  function groupWordsIntoUtterances(words) {
+    const segments = [];
+    let current = null;
+    for (const word of words) {
+      if (
+        current &&
+        word.startMs - current.endMs <= LIVE_GUEST_WORD_GAP_MS
+      ) {
+        current.endMs = word.endMs;
+        current.text = `${current.text} ${word.text}`.trim();
+      } else {
+        current = { startMs: word.startMs, endMs: word.endMs, text: word.text };
+        segments.push(current);
+      }
+    }
+    return segments;
+  }
+
+  // Wholesale-replaces the live provisional-guest rows on every poll, rather
+  // than incrementally appending, mirroring how the final diarized
+  // transcript wholesale-replaces every provisional row once processing
+  // completes (applyTranscriptionResult below) -- no cursor/dedup state to
+  // keep in sync, at the cost of the last word or two occasionally revising
+  // on the next tick.
+  function applyPartialGuestSegments(existingSegments, words) {
+    const incoming = (Array.isArray(words) ? words : [])
+      .map((word) => ({
+        startMs: Math.max(0, Number(word?.startMs) || 0),
+        endMs: Math.max(0, Number(word?.endMs) || 0),
+        text: String(word?.text || "").trim(),
+      }))
+      .filter((word) => word.text)
+      .sort((a, b) => a.startMs - b.startMs);
+    const retained = (
+      Array.isArray(existingSegments) ? existingSegments : []
+    ).filter(
+      (segment) =>
+        !(segment.speakerId === "remote-guest" && segment.provisional),
+    );
+    const fresh = groupWordsIntoUtterances(incoming).map((segment) => ({
+      id: createId("speech"),
+      speakerId: "remote-guest",
+      speaker: "Guest",
+      initials: "G",
+      color: "violet",
+      timestamp: formatTimestamp(segment.startMs),
+      startMs: segment.startMs,
+      endMs: segment.endMs,
+      source: "meeting",
+      text: segment.text,
+      isDraft: true,
+      provisional: true,
+    }));
+    return [...retained, ...fresh].sort((a, b) => a.startMs - b.startMs);
   }
 
   function slug(value) {
@@ -1091,6 +1113,14 @@
       );
     }
 
+    getSystemAudioPartialTranscript(captureId) {
+      this.requireLocalSystemAudio();
+      return this.request(
+        `/v1/system-audio/captures/${encodeURIComponent(captureId)}/partial-transcript`,
+        { cache: "no-store" },
+      );
+    }
+
     pauseSystemAudioCapture(captureId) {
       this.requireLocalSystemAudio();
       return this.request(
@@ -1372,6 +1402,7 @@
     LONG_RECORDING_SECONDS,
     CompanionConnector,
     TranscriptionClient,
+    applyPartialGuestSegments,
     applyTranscriptionResult,
     cleanName,
     cleanTranscriptText,
@@ -1386,7 +1417,6 @@
     normaliseMeetingAnalysis,
     parseTimestamp,
     primaryRecordingSource,
-    provisionalDraftSpeaker,
     recordingAsset,
     recordingAssetIds,
     recordingDownloadName,

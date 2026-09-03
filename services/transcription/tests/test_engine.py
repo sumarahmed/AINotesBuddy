@@ -10,6 +10,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notesbuddy_transcription import engine as engine_module
@@ -482,6 +484,82 @@ class LocalEngineAdapterTests(unittest.TestCase):
                 cancel_event=threading.Event(),
                 progress=lambda _value, _stage: None,
             )
+
+
+class FakeChunkWhisper:
+    def __init__(self) -> None:
+        self.calls: list = []
+        self.feature_extractor = SimpleNamespace(sampling_rate=16000)
+
+    def transcribe(self, audio, *, word_timestamps, vad_filter, beam_size):
+        self.calls.append(audio)
+        words = [
+            SimpleNamespace(start=0.1, end=0.4, word="Hello", probability=0.9),
+            SimpleNamespace(start=0.5, end=0.9, word="world", probability=0.85),
+        ]
+        segments = [
+            SimpleNamespace(
+                start=words[0].start,
+                end=words[-1].end,
+                text=" ".join(word.word for word in words),
+                words=words,
+            )
+        ]
+        return segments, SimpleNamespace(language="en")
+
+
+class LiveChunkTranscriptionTests(unittest.TestCase):
+    """transcribe_chunk() powers live captions of the meeting-audio track
+    while a recording is still in progress -- confirms the resample-to-the-
+    model's-native-rate step, and that it never blocks on or disrupts a
+    concurrent full-recording transcription job."""
+
+    def setUp(self) -> None:
+        self.whisper = FakeChunkWhisper()
+        self.engine = LocalDiarizationEngine(hugging_face_token="test-token")
+        self.engine._whisper = self.whisper
+
+    def test_transcribes_a_chunk_already_at_the_models_native_rate(self) -> None:
+        samples = np.zeros(16000, dtype="float32")
+        words = self.engine.transcribe_chunk(samples, 16000)
+        self.assertEqual(
+            words,
+            [
+                {"startMs": 100, "endMs": 400, "text": "Hello"},
+                {"startMs": 500, "endMs": 900, "text": "world"},
+            ],
+        )
+        self.assertEqual(len(self.whisper.calls), 1)
+        self.assertEqual(self.whisper.calls[0].shape[0], samples.shape[0])
+
+    def test_resamples_a_chunk_captured_at_a_different_rate(self) -> None:
+        samples = np.zeros(48000, dtype="float32")  # 1 second at 48kHz
+        self.engine.transcribe_chunk(samples, 48000)
+        self.assertEqual(len(self.whisper.calls), 1)
+        # 1 second resampled down to the model's native 16kHz.
+        self.assertEqual(self.whisper.calls[0].shape[0], 16000)
+
+    def test_skips_the_tick_without_blocking_when_a_job_holds_the_lock(self) -> None:
+        samples = np.zeros(16000, dtype="float32")
+        self.engine._inference_lock.acquire()
+        try:
+            words = self.engine.transcribe_chunk(samples, 16000)
+        finally:
+            self.engine._inference_lock.release()
+        self.assertEqual(words, [])
+        self.assertEqual(
+            self.whisper.calls,
+            [],
+            "must never call the model while a full job holds the lock",
+        )
+
+    def test_swallows_any_error_and_returns_no_words(self) -> None:
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("model exploded")
+
+        self.whisper.transcribe = boom
+        result = self.engine.transcribe_chunk(np.zeros(16000, dtype="float32"), 16000)
+        self.assertEqual(result, [])
 
 
 if __name__ == "__main__":

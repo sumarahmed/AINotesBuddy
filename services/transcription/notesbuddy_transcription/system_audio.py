@@ -20,6 +20,13 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# How much trailing audio each live-caption tick re-transcribes. Bounded and
+# independent of total recording length so tick latency stays flat for a
+# long meeting instead of re-transcribing an ever-growing file.
+PARTIAL_TRANSCRIBE_WINDOW_SECONDS = 25
+PARTIAL_TRANSCRIBE_INTERVAL_SECONDS = 5.0
+
+
 class SystemAudioUnavailable(RuntimeError):
     """Raised when Windows output capture is not available."""
 
@@ -176,6 +183,7 @@ class SystemAudioCapture:
     ready_event: threading.Event = field(default_factory=threading.Event)
     lock: threading.Lock = field(default_factory=threading.Lock)
     thread: threading.Thread | None = None
+    partial_transcript_thread: threading.Thread | None = None
     status: str = "starting"
     device_name: str = "Windows output"
     signal_detected: bool = False
@@ -187,6 +195,7 @@ class SystemAudioCapture:
     created_at: str = field(default_factory=_now)
     started_at: str | None = None
     completed_at: str | None = None
+    partial_words: list[dict[str, Any]] = field(default_factory=list)
 
     def public(self) -> dict[str, Any]:
         with self.lock:
@@ -218,6 +227,7 @@ class SystemAudioCaptureManager:
         backend_factory: Callable[[], object] = SoundCardLoopbackBackend,
         root: Path | None = None,
         platform: str | None = None,
+        chunk_transcriber: Callable[[Any, int], list[dict[str, Any]]] | None = None,
     ) -> None:
         self._backend_factory = backend_factory
         self._root = root or Path(
@@ -226,6 +236,11 @@ class SystemAudioCaptureManager:
         self._platform = platform or sys.platform
         self._captures: dict[str, SystemAudioCapture] = {}
         self._lock = threading.Lock()
+        # Optional: live-caption transcription of each capture's trailing
+        # audio window while it's still recording. None (the default) keeps
+        # this module free of any dependency on the ML engine -- injected by
+        # server.py from the already-constructed LocalDiarizationEngine.
+        self._chunk_transcriber = chunk_transcriber
 
     @property
     def available(self) -> bool:
@@ -289,6 +304,14 @@ class SystemAudioCaptureManager:
         if message:
             self.discard(capture.id)
             raise SystemAudioUnavailable(message)
+        if self._chunk_transcriber is not None:
+            capture.partial_transcript_thread = threading.Thread(
+                target=self._partial_transcribe_loop,
+                args=(capture,),
+                name="notesbuddy-partial-transcript",
+                daemon=True,
+            )
+            capture.partial_transcript_thread.start()
         return capture
 
     def _record(self, capture: SystemAudioCapture) -> None:
@@ -341,6 +364,82 @@ class SystemAudioCaptureManager:
         finally:
             capture.ready_event.set()
 
+    def _partial_transcribe_loop(self, capture: SystemAudioCapture) -> None:
+        """Best-effort live captions: re-transcribe a trailing window every
+        few seconds while this capture is still recording.
+
+        Reads the WAV file being written by ``_record`` above, in-process
+        and read-only, using ``capture.frame_count`` (updated under
+        ``capture.lock`` right after each write) as a safe lower bound on
+        how many frames actually exist on disk. A separate OS process
+        cannot safely read this file mid-write -- the header's real size is
+        only patched by the ``wave`` module on close, and writes are not
+        flushed per-iteration -- but reading raw bytes up to an
+        already-confirmed frame count, in the same process, is safe: writes
+        and the counter increment happen in that order on the recorder
+        thread, so this never reads past what was actually written.
+        """
+
+        assert self._chunk_transcriber is not None
+        while not capture.stop_event.wait(PARTIAL_TRANSCRIBE_INTERVAL_SECONDS):
+            if capture.pause_event.is_set():
+                continue
+            with capture.lock:
+                frame_count = capture.frame_count
+                channels = capture.channels
+                sample_rate = capture.sample_rate
+            if frame_count <= 0:
+                continue
+            window_frames = min(
+                frame_count, sample_rate * PARTIAL_TRANSCRIBE_WINDOW_SECONDS
+            )
+            start_frame = frame_count - window_frames
+            byte_offset = 44 + start_frame * channels * 2
+            try:
+                with open(capture.path, "rb") as handle:
+                    handle.seek(byte_offset)
+                    raw = handle.read(window_frames * channels * 2)
+            except OSError:
+                continue
+            if not raw:
+                continue
+            samples = self._pcm_bytes_to_mono_float32(raw, channels)
+            if samples.size == 0:
+                continue
+            try:
+                words = self._chunk_transcriber(samples, sample_rate)
+            except Exception:  # noqa: BLE001 - must never disrupt the recording
+                continue
+            if not words:
+                continue
+            window_start_ms = round(start_frame / sample_rate * 1000)
+            absolute_words = [
+                {
+                    "startMs": window_start_ms + int(word["startMs"]),
+                    "endMs": window_start_ms + int(word["endMs"]),
+                    "text": word["text"],
+                }
+                for word in words
+            ]
+            with capture.lock:
+                capture.partial_words = absolute_words
+
+    @staticmethod
+    def _pcm_bytes_to_mono_float32(raw: bytes, channels: int) -> Any:
+        import numpy as np
+
+        samples = np.frombuffer(raw, dtype="<i2")
+        usable_frames = samples.size // max(1, channels)
+        if usable_frames == 0:
+            return np.zeros(0, dtype="float32")
+        samples = samples[: usable_frames * channels].reshape(usable_frames, channels)
+        return samples.astype("float32").mean(axis=1) / 32768.0
+
+    def partial_transcript(self, capture_id: str) -> list[dict[str, Any]]:
+        capture = self.get(capture_id)
+        with capture.lock:
+            return list(capture.partial_words)
+
     def get(self, capture_id: str) -> SystemAudioCapture:
         with self._lock:
             capture = self._captures.get(capture_id)
@@ -380,6 +479,12 @@ class SystemAudioCaptureManager:
                 raise SystemAudioUnavailable(
                     "Windows audio capture did not stop cleanly."
                 )
+        if capture.partial_transcript_thread is not None:
+            # Best-effort thread; a lingering join here must not block the
+            # real recording result, but it must finish before the caller
+            # goes on to request the full transcription job for this same
+            # file, so it isn't still holding the engine's inference lock.
+            capture.partial_transcript_thread.join(timeout=3)
         with capture.lock:
             if capture.status == "failed":
                 raise SystemAudioUnavailable(
@@ -399,6 +504,8 @@ class SystemAudioCaptureManager:
         capture.pause_event.clear()
         if capture.thread is not None:
             capture.thread.join(timeout=5)
+        if capture.partial_transcript_thread is not None:
+            capture.partial_transcript_thread.join(timeout=3)
         self.discard(capture_id)
         return capture
 
@@ -416,6 +523,8 @@ class SystemAudioCaptureManager:
             capture.pause_event.clear()
             if capture.thread is not None:
                 capture.thread.join(timeout=3)
+            if capture.partial_transcript_thread is not None:
+                capture.partial_transcript_thread.join(timeout=3)
         shutil.rmtree(self._root, ignore_errors=True)
         with self._lock:
             self._captures.clear()

@@ -10,6 +10,30 @@ remain compatible with semantic-version tooling.
 
 ### Added
 
+- Guest speech now appears in the live transcript panel while a meeting is
+  still recording, whether or not headphones are worn. Previously, live
+  "Guest" text only ever appeared by accident: without headphones, the
+  other side's audio leaked acoustically out of the speakers into the
+  microphone, and the browser's own speech recognition happened to pick it
+  up, guessed at "Guest" via a timing heuristic against a meeting-activity
+  signal. With headphones there is no leakage path, so nothing guest-side
+  ever appeared live -- the real content only existed once "Transcribe and
+  identify speakers" ran the full pipeline after Finish. The companion now
+  re-transcribes a bounded trailing window (~25s) of the meeting-audio
+  loopback recording every ~5 seconds while it's still being captured,
+  in-process and read-only against the file `system_audio.py` is still
+  writing, and returns the result over a new
+  `GET /v1/system-audio/captures/{id}/partial-transcript` route. The
+  browser wholesale-replaces the live provisional-guest rows on every poll
+  (mirroring how the final diarized transcript already wholesale-replaces
+  every provisional row, rather than tracking a cursor/dedup state), and
+  sorts the live segment list by timestamp afterward, since a guest word
+  from a several-second-delayed poll can arrive with an earlier timestamp
+  than a microphone segment already on screen. This mechanism fully
+  replaces the old mic-leakage heuristic for everyone -- microphone speech
+  is always attributed to the local user now, since it's a strictly
+  cleaner signal that no longer depends on acoustic leakage at all.
+
 - `engine.py` and `server.py`, the actual local faster-whisper/pyannote
   pipeline, had no diagnostic logging at all -- confirmed by reading both
   files after a real report of a completed recording (real speech confirmed

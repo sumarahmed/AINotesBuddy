@@ -2043,6 +2043,20 @@ function clearCurrentMeetingAudioActivity() {
   setMeetingAudioCurrentlyActive(false);
 }
 
+// Wholesale-replaces the live provisional-guest rows on every poll, rather
+// than incrementally appending, mirroring how the final diarized transcript
+// wholesale-replaces every provisional row once processing completes
+// (MeetingAudio.applyTranscriptionResult) -- no cursor/dedup state to keep
+// in sync, at the cost of the last word or two occasionally revising on the
+// next tick.
+function applyPartialGuestWords(words) {
+  state.capture.segments = MeetingAudio.applyPartialGuestSegments(
+    state.capture.segments,
+    words,
+  );
+  updateCaptureRuntimeUI({ transcript: true });
+}
+
 function stopMeetingAudioSignalMonitor() {
   if (captureRuntime.meetingSignalMonitor) {
     window.clearInterval(captureRuntime.meetingSignalMonitor);
@@ -2149,6 +2163,18 @@ function startCompanionMeetingAudioStatusMonitor() {
         setCaptureSourceStatus("meeting", "silent");
         replaceMeetingAudioWarning(message);
         showToast("No Windows meeting sound detected", message);
+      }
+      // Best-effort and independent of the status poll above: an older
+      // companion without this route, or a transient failure here, must
+      // not be treated as "capture stopped" the way a status-poll failure
+      // is below.
+      try {
+        const partial = await client.getSystemAudioPartialTranscript(captureId);
+        if (captureRuntime.companionCaptureId === captureId) {
+          applyPartialGuestWords(partial?.words);
+        }
+      } catch {
+        // Live captions are a bonus on top of the recording, not required.
       }
     } catch (error) {
       stopMeetingAudioSignalMonitor();
@@ -2394,36 +2420,27 @@ function startSpeechRecognition() {
           Math.max(800, text.split(/\s+/).length * 420),
         );
         const startMs = Math.max(0, endMs - estimatedDurationMs);
-        const draftSpeaker = MeetingAudio.provisionalDraftSpeaker({
-          startMs,
-          endMs,
-          meetingActivitySpans: captureRuntime.meetingActivitySpans,
-        });
+        // Microphone speech is always the local user now -- live guest text
+        // comes from actually transcribing the meeting-audio recording
+        // (applyPartialGuestWords), not from guessing at mic audio that
+        // happened to leak the other side's voice in acoustically.
         state.capture.segments.push({
           id: createId("speech"),
-          speakerId: draftSpeaker.speakerId,
-          speaker: draftSpeaker.speaker,
-          initials:
-            draftSpeaker.speakerId === "local-user"
-              ? currentUserInitials()
-              : draftSpeaker.initials,
-          color: draftSpeaker.color,
+          speakerId: "local-user",
+          speaker: "You",
+          initials: currentUserInitials(),
+          color: "teal",
           timestamp: formatTimer(state.capture.elapsed),
           startMs,
           endMs,
-          source: draftSpeaker.source,
+          source: "microphone",
           text,
           isDraft: true,
-          provisional: draftSpeaker.provisional,
+          provisional: false,
         });
       } else {
         interim = `${interim} ${text}`.trim();
-        const endMs = captureClockMs();
-        interimSpeakerId = MeetingAudio.provisionalDraftSpeaker({
-          startMs: Math.max(0, endMs - 1400),
-          endMs,
-          meetingActivitySpans: captureRuntime.meetingActivitySpans,
-        }).speakerId;
+        interimSpeakerId = "local-user";
       }
     }
     state.capture.interimTranscript = interim;

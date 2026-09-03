@@ -351,7 +351,9 @@ def create_app(
             "NOTESBUDDY_ACCESS_MODE must be 'local' or 'anonymous'."
         )
     hosted = access_mode == "anonymous"
-    active_system_audio = system_audio_capture or SystemAudioCaptureManager()
+    active_system_audio = system_audio_capture or SystemAudioCaptureManager(
+        chunk_transcriber=getattr(active_engine, "transcribe_chunk", None)
+    )
     trusted_origins = (
         list(allowed_origins)
         if allowed_origins is not None
@@ -835,6 +837,25 @@ def create_app(
             _raise_system_audio_error(error)
         response.headers["Cache-Control"] = "no-store"
         return capture.public()
+
+    @app.get("/v1/system-audio/captures/{capture_id}/partial-transcript")
+    def get_system_audio_partial_transcript(
+        capture_id: str,
+        response: Response,
+        _access: None = Depends(require_local_system_audio_access),
+    ) -> dict[str, Any]:
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        try:
+            words = active_system_audio.partial_transcript(capture_id)
+        except (
+            SystemAudioUnavailable,
+            SystemAudioCaptureConflict,
+            SystemAudioCaptureNotFound,
+        ) as error:
+            _raise_system_audio_error(error)
+        response.headers["Cache-Control"] = "no-store"
+        return {"captureId": capture_id, "words": words}
 
     @app.post("/v1/system-audio/captures/{capture_id}/pause")
     def pause_system_audio_capture(

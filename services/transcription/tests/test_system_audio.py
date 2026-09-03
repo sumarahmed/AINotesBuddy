@@ -8,6 +8,7 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
+from notesbuddy_transcription import system_audio as system_audio_module
 from notesbuddy_transcription.system_audio import (
     SoundCardLoopbackBackend,
     SystemAudioCaptureConflict,
@@ -233,6 +234,99 @@ class SoundCardLoopbackBackendTests(unittest.TestCase):
 
         with self.assertRaises(SystemAudioUnavailable):
             SoundCardLoopbackBackend(communications_id_provider=lambda: None)
+
+
+class PartialTranscriptionTests(unittest.TestCase):
+    """Live captions of the meeting-audio track: a background thread reads
+    the WAV file _record() is still writing, in-process, and hands trailing
+    windows to an injected chunk_transcriber every few seconds."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _manager(self, chunk_transcriber) -> SystemAudioCaptureManager:
+        return SystemAudioCaptureManager(
+            backend_factory=FakeLoopbackBackend,
+            root=Path(self.temporary.name) / "captures",
+            platform="win32",
+            chunk_transcriber=chunk_transcriber,
+        )
+
+    def test_no_partial_thread_started_without_a_chunk_transcriber(self) -> None:
+        manager = self._manager(None)
+        capture = manager.start()
+        self.assertIsNone(capture.partial_transcript_thread)
+        manager.stop(capture.id)
+        manager.shutdown()
+
+    def test_partial_transcript_thread_ticks_and_populates_words(self) -> None:
+        calls: list[tuple] = []
+
+        def fake_chunk_transcriber(samples, sample_rate):
+            calls.append((samples.shape, sample_rate))
+            return [{"startMs": 0, "endMs": 300, "text": "hello"}]
+
+        manager = self._manager(fake_chunk_transcriber)
+        with patch.object(
+            system_audio_module, "PARTIAL_TRANSCRIBE_INTERVAL_SECONDS", 0.05
+        ):
+            capture = manager.start()
+            deadline = time.monotonic() + 2
+            words: list = []
+            while not words:
+                if time.monotonic() >= deadline:
+                    self.fail("Live-caption thread never produced partial words.")
+                time.sleep(0.01)
+                words = manager.partial_transcript(capture.id)
+            manager.stop(capture.id)
+        manager.shutdown()
+
+        self.assertEqual(words, [{"startMs": 0, "endMs": 300, "text": "hello"}])
+        self.assertGreaterEqual(len(calls), 1)
+        shape, sample_rate = calls[0]
+        self.assertEqual(sample_rate, 48_000)
+        self.assertGreater(shape[0], 0, "must pass non-empty audio to transcribe")
+
+    def test_partial_thread_stops_promptly_when_capture_stops(self) -> None:
+        manager = self._manager(lambda samples, sample_rate: [])
+        with patch.object(
+            system_audio_module, "PARTIAL_TRANSCRIBE_INTERVAL_SECONDS", 0.05
+        ):
+            capture = manager.start()
+            time.sleep(0.1)
+            manager.stop(capture.id)
+        self.assertFalse(capture.partial_transcript_thread.is_alive())
+        manager.shutdown()
+
+    def test_partial_thread_stops_promptly_on_cancel(self) -> None:
+        manager = self._manager(lambda samples, sample_rate: [])
+        with patch.object(
+            system_audio_module, "PARTIAL_TRANSCRIBE_INTERVAL_SECONDS", 0.05
+        ):
+            capture = manager.start()
+            time.sleep(0.1)
+            manager.cancel(capture.id)
+        self.assertFalse(capture.partial_transcript_thread.is_alive())
+        manager.shutdown()
+
+    def test_a_failing_chunk_transcriber_never_crashes_the_capture(self) -> None:
+        def boom(samples, sample_rate):
+            raise RuntimeError("model exploded")
+
+        manager = self._manager(boom)
+        with patch.object(
+            system_audio_module, "PARTIAL_TRANSCRIBE_INTERVAL_SECONDS", 0.05
+        ):
+            capture = manager.start()
+            time.sleep(0.15)
+            completed = manager.stop(capture.id)
+
+        self.assertEqual(completed.public()["status"], "completed")
+        self.assertEqual(manager.partial_transcript(capture.id), [])
+        manager.shutdown()
 
 
 if __name__ == "__main__":
