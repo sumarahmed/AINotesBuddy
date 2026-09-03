@@ -32,10 +32,66 @@ class SystemAudioCaptureNotFound(RuntimeError):
     """Raised when a requested capture does not exist."""
 
 
+def _communications_default_render_id(
+    *, platform: str | None = None
+) -> str | None:
+    """Best-effort id of the Windows Communications-role default output device.
+
+    ``soundcard.default_speaker()`` queries the Console role (confirmed in its
+    bundled WASAPI backend). Meeting/VoIP apps generally follow the separate
+    Communications role instead, which Windows switches to a connected
+    Bluetooth headset independently of Console/Multimedia -- the two roles can
+    point at different physical devices, which is why loopback capture matched
+    against the Console-role speaker can silently listen to the wrong one.
+    Returns ``None`` on any failure so callers can fall back to the existing
+    speaker-based match untouched.
+    """
+    if (platform or sys.platform) != "win32":
+        return None
+    try:
+        import comtypes
+        from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+        from pycaw.constants import CLSID_MMDeviceEnumerator, EDataFlow, ERole
+        from pycaw.utils import AudioUtilities
+    except ImportError:
+        return None
+    com_initialized = False
+    try:
+        try:
+            comtypes.CoInitialize()
+            com_initialized = True
+        except OSError:
+            pass
+        enumerator = comtypes.CoCreateInstance(
+            CLSID_MMDeviceEnumerator,
+            IMMDeviceEnumerator,
+            comtypes.CLSCTX_INPROC_SERVER,
+        )
+        endpoint = enumerator.GetDefaultAudioEndpoint(
+            EDataFlow.eRender.value, ERole.eCommunications.value
+        )
+        device = AudioUtilities.CreateDevice(endpoint)
+        return str(device.id) if device is not None else None
+    except Exception:  # noqa: BLE001 - purely advisory, never block capture
+        return None
+    finally:
+        if com_initialized:
+            try:
+                comtypes.CoUninitialize()
+            except OSError:
+                pass
+
+
 class SoundCardLoopbackBackend:
     """Open the default Windows render endpoint as a WASAPI loopback source."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        communications_id_provider: Callable[[], str | None] = (
+            _communications_default_render_id
+        ),
+    ) -> None:
         import soundcard
 
         self._soundcard = soundcard
@@ -51,14 +107,27 @@ class SoundCardLoopbackBackend:
         ]
         speaker_id = str(getattr(self.speaker, "id", ""))
         speaker_name = str(getattr(self.speaker, "name", ""))
-        self.microphone = next(
-            (
-                microphone
-                for microphone in loopbacks
-                if str(getattr(microphone, "id", "")) == speaker_id
-            ),
-            None,
-        )
+
+        self.microphone = None
+        communications_id = communications_id_provider()
+        if communications_id:
+            self.microphone = next(
+                (
+                    microphone
+                    for microphone in loopbacks
+                    if str(getattr(microphone, "id", "")) == communications_id
+                ),
+                None,
+            )
+        if self.microphone is None:
+            self.microphone = next(
+                (
+                    microphone
+                    for microphone in loopbacks
+                    if str(getattr(microphone, "id", "")) == speaker_id
+                ),
+                None,
+            )
         if self.microphone is None:
             self.microphone = next(
                 (
@@ -87,7 +156,8 @@ class SoundCardLoopbackBackend:
             raise SystemAudioUnavailable(
                 "The default Windows speaker does not expose a loopback source."
             )
-        self.device_name = speaker_name or "Default Windows output"
+        matched_name = str(getattr(self.microphone, "name", ""))
+        self.device_name = matched_name or speaker_name or "Default Windows output"
 
     def recorder(self, *, sample_rate: int, channels: int, block_size: int):
         return self.microphone.recorder(

@@ -10,6 +10,24 @@ remain compatible with semantic-version tooling.
 
 ### Fixed
 
+- Companion Windows-output capture never detected sound while connected to a
+  Bluetooth headset, confirmed live from a screenshot showing the status card
+  stuck on "Listening to Speakers (Realtek(R) Audio)" -- the onboard device --
+  while meeting audio was actually playing through the headset. Root cause,
+  confirmed by reading the bundled `soundcard` package's own Windows backend:
+  `soundcard.default_speaker()` queries Windows' Console-role default output
+  device. Meeting/VoIP audio instead follows the separate Communications-role
+  default, which Windows switches to a connected Bluetooth headset
+  independently of Console/Multimedia -- the two roles can point at different
+  physical devices, so loopback capture silently attached to the wrong one
+  and never received the meeting's audio. `SoundCardLoopbackBackend` now
+  queries the Communications-role default endpoint id directly (via `pycaw`,
+  already a companion dependency) and prefers a loopback source matching it,
+  falling back to the previous Console-role speaker match unchanged when no
+  Communications-role device is found. The reported device name shown in the
+  UI now also reflects whichever device was actually matched, rather than
+  always the Console-role speaker's name.
+
 - Decisions and action items came back empty for two different real
   meetings, across every chunk and every retry, confirmed live via the
   diagnostic logging above: the model's own raw JSON output never

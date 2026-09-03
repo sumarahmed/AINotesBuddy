@@ -1,14 +1,19 @@
 import struct
+import sys
 import tempfile
 import time
+import types
 import unittest
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
 from notesbuddy_transcription.system_audio import (
+    SoundCardLoopbackBackend,
     SystemAudioCaptureConflict,
     SystemAudioCaptureManager,
     SystemAudioCaptureNotFound,
+    SystemAudioUnavailable,
 )
 
 
@@ -139,6 +144,95 @@ class SystemAudioCaptureTests(unittest.TestCase):
         self.assertFalse(path.exists())
         with self.assertRaises(SystemAudioCaptureNotFound):
             self.manager.get(capture.id)
+
+
+class FakeScDevice:
+    def __init__(self, id: str, name: str, *, isloopback: bool = False) -> None:
+        self.id = id
+        self.name = name
+        self.isloopback = isloopback
+
+    def recorder(self, **_kwargs: object) -> FakeRecorder:
+        return FakeRecorder()
+
+
+class SoundCardLoopbackBackendTests(unittest.TestCase):
+    """Windows exposes independent Console and Communications default-output
+    roles; a Bluetooth headset can be the Communications default while the
+    onboard speaker stays the Console default. Loopback capture must follow
+    the device meeting audio actually plays through, not whichever role
+    happens to be queried."""
+
+    def install_fake_soundcard(self, *, speaker, loopbacks) -> None:
+        fake_module = types.SimpleNamespace(
+            default_speaker=lambda: speaker,
+            all_microphones=lambda include_loopback=False: loopbacks,
+        )
+        patcher = patch.dict(sys.modules, {"soundcard": fake_module})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_prefers_communications_role_device_over_console_role_speaker(
+        self,
+    ) -> None:
+        console_speaker = FakeScDevice("console-id", "Speakers (Realtek(R) Audio)")
+        onboard_loopback = FakeScDevice(
+            "console-id", "Speakers (Realtek(R) Audio)", isloopback=True
+        )
+        bluetooth_loopback = FakeScDevice(
+            "bt-id", "Headphones (WH-1000XM4 Hands-Free AG Audio)", isloopback=True
+        )
+        self.install_fake_soundcard(
+            speaker=console_speaker,
+            loopbacks=[onboard_loopback, bluetooth_loopback],
+        )
+
+        backend = SoundCardLoopbackBackend(
+            communications_id_provider=lambda: "bt-id"
+        )
+
+        self.assertIs(backend.microphone, bluetooth_loopback)
+        self.assertEqual(
+            backend.device_name, "Headphones (WH-1000XM4 Hands-Free AG Audio)"
+        )
+
+    def test_falls_back_to_console_role_speaker_when_no_communications_device(
+        self,
+    ) -> None:
+        console_speaker = FakeScDevice("console-id", "Speakers (Realtek(R) Audio)")
+        onboard_loopback = FakeScDevice(
+            "console-id", "Speakers (Realtek(R) Audio)", isloopback=True
+        )
+        self.install_fake_soundcard(
+            speaker=console_speaker, loopbacks=[onboard_loopback]
+        )
+
+        backend = SoundCardLoopbackBackend(communications_id_provider=lambda: None)
+
+        self.assertIs(backend.microphone, onboard_loopback)
+        self.assertEqual(backend.device_name, "Speakers (Realtek(R) Audio)")
+
+    def test_ignores_communications_id_with_no_matching_loopback(self) -> None:
+        console_speaker = FakeScDevice("console-id", "Speakers (Realtek(R) Audio)")
+        onboard_loopback = FakeScDevice(
+            "console-id", "Speakers (Realtek(R) Audio)", isloopback=True
+        )
+        self.install_fake_soundcard(
+            speaker=console_speaker, loopbacks=[onboard_loopback]
+        )
+
+        backend = SoundCardLoopbackBackend(
+            communications_id_provider=lambda: "stale-disconnected-id"
+        )
+
+        self.assertIs(backend.microphone, onboard_loopback)
+
+    def test_raises_when_no_loopback_source_available(self) -> None:
+        console_speaker = FakeScDevice("console-id", "Speakers (Realtek(R) Audio)")
+        self.install_fake_soundcard(speaker=console_speaker, loopbacks=[])
+
+        with self.assertRaises(SystemAudioUnavailable):
+            SoundCardLoopbackBackend(communications_id_provider=lambda: None)
 
 
 if __name__ == "__main__":
