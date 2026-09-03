@@ -151,7 +151,10 @@ select {
   font: inherit;
 }
 
-button {
+button,
+input,
+textarea,
+select {
   color: inherit;
 }
 
@@ -2241,6 +2244,7 @@ kbd {
   font-weight: 600;
   line-height: 1.12;
   letter-spacing: -0.8px;
+  color: var(--ink);
   text-overflow: ellipsis;
   outline: 0;
   background: transparent;
@@ -2915,18 +2919,22 @@ kbd {
   align-items: center;
   padding: 20px 22px;
   margin-bottom: 16px;
-  background: var(--paper);
-  border: 1px solid var(--line-soft);
+  background: var(--teal-pale);
+  border: 1px solid var(--teal-soft);
   border-left: 3px solid var(--teal);
   border-radius: 13px;
 }
 
 .transcription-workspace--failed {
+  background: var(--coral-soft);
+  border-color: var(--coral-soft);
   border-left-color: var(--coral);
 }
 
 .transcription-workspace--queued,
 .transcription-workspace--processing {
+  background: var(--amber-soft);
+  border-color: var(--amber-soft);
   border-left-color: var(--amber);
 }
 
