@@ -69,7 +69,7 @@ def _field_counts(source: object) -> str:
 
 
 ANALYSIS_SCHEMA_VERSION = 1
-ANALYSIS_PROMPT_VERSION = 2
+ANALYSIS_PROMPT_VERSION = 3
 NOT_SPECIFIED = "Not specified"
 PRIORITIES = {"High", "Medium", "Low"}
 GROUNDING_STOP_WORDS = {
@@ -207,7 +207,16 @@ Requirements:
 1. shortSummary: fewer than 300 words in clear paragraphs. Explain the purpose, main topics, overall outcome, and important next steps only when supported.
 2. highlights: concise important discussion points, findings, concerns, updates, risks, opportunities, and recommendations. Combine repeated or related points.
 3. decisions: confirmed decisions and agreements only. Include context and responsible person/team when stated. Never turn suggestions, proposals, questions, or unresolved discussion into decisions.
-4. actionItems: clear, specific, separate tasks. Use "Not specified" when owner or due date is absent. Do not infer, calculate, or invent a deadline; every weekday, month, relative date, and numeric date must appear in the cited evidence. The task must represent the stated commitment, not a prerequisite. Put prerequisites and dependencies in notes unless they were separately assigned as tasks. Priority must be High, Medium, or Low based only on urgency expressed; otherwise use Medium.
+4. actionItems: clear, specific, separate tasks. Use "Not specified" when owner or due date is absent. Do not invent a deadline that is not in the cited evidence. The task is the stated commitment itself, not a prerequisite for it -- put prerequisites and dependencies in notes instead. Priority is High, Medium, or Low based only on urgency actually expressed; otherwise Medium.
+
+Look specifically for decisions and action items even when they are mentioned briefly in passing, not only when a speaker announces them formally -- a short sentence agreeing to something, or one person saying they will handle something, still counts. A meeting almost always contains at least one of each if people discussed next steps at all.
+
+Example of an exchange and its correct extraction:
+[S0012 | 00:14 | Jordan Lee] We agreed to move the launch date to March 10th since QA needs more time.
+[S0013 | 00:19 | Priya Shah] Okay, I will send the updated budget spreadsheet to the team by Friday.
+->
+"decisions": [{"decision": "Move the launch date to March 10th.", "context": "QA needs more time.", "owner": "Not specified", "evidenceSegmentIds": ["S0012"]}]
+"actionItems": [{"task": "Send the updated budget spreadsheet to the team.", "owner": "Priya Shah", "dueDate": "Friday", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0013"]}]
 
 Every summary and list item must cite one or more transcript segment IDs that directly support it. If no confirmed decisions exist, return an empty decisions array. If no action items exist, return an empty actionItems array.
 

@@ -8,6 +8,25 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Fixed
+
+- Decisions and action items came back empty for two different real
+  meetings, across every chunk and every retry, confirmed live via the
+  diagnostic logging above: the model's own raw JSON output never
+  contained anything in those arrays, even though its own generated
+  summary text clearly described committed actions ("an invite will be
+  sent to Ramana", "the agreement was made to hold the workshop on
+  Tuesday at 1 PM"). Not a validation or merge bug -- there was nothing to
+  validate. The `decisions`/`actionItems` instructions carry noticeably
+  more constraints than `highlights` (confirmed-only, strict date
+  provenance, "commitment not prerequisite"), which the installed model
+  was apparently treating as a bar it could not clear, defaulting to
+  empty arrays. The prompt now includes a concrete worked example showing
+  a decision and an action item extracted from a short exchange, and
+  explicitly asks the model to look for them even when mentioned briefly
+  in passing, not only when formally announced. Analysis prompt version
+  bumped to 3.
+
 ### Added
 
 - Diagnostic logging now records highlights/decisions/actionItems counts
