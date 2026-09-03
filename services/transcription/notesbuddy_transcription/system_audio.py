@@ -384,45 +384,50 @@ class SystemAudioCaptureManager:
         while not capture.stop_event.wait(PARTIAL_TRANSCRIBE_INTERVAL_SECONDS):
             if capture.pause_event.is_set():
                 continue
-            with capture.lock:
-                frame_count = capture.frame_count
-                channels = capture.channels
-                sample_rate = capture.sample_rate
-            if frame_count <= 0:
-                continue
-            window_frames = min(
-                frame_count, sample_rate * PARTIAL_TRANSCRIBE_WINDOW_SECONDS
-            )
-            start_frame = frame_count - window_frames
-            byte_offset = 44 + start_frame * channels * 2
+            # The whole tick, not just the transcriber call, is best-effort:
+            # a single bad read/conversion must skip this tick, not silently
+            # kill the thread and leave live captions stopped for the rest
+            # of the recording (a thread's exception never propagates
+            # anywhere -- it just ends the thread and logs to stderr).
             try:
-                with open(capture.path, "rb") as handle:
-                    handle.seek(byte_offset)
-                    raw = handle.read(window_frames * channels * 2)
-            except OSError:
-                continue
-            if not raw:
-                continue
-            samples = self._pcm_bytes_to_mono_float32(raw, channels)
-            if samples.size == 0:
-                continue
-            try:
-                words = self._chunk_transcriber(samples, sample_rate)
+                self._partial_transcribe_tick(capture)
             except Exception:  # noqa: BLE001 - must never disrupt the recording
                 continue
-            if not words:
-                continue
-            window_start_ms = round(start_frame / sample_rate * 1000)
-            absolute_words = [
-                {
-                    "startMs": window_start_ms + int(word["startMs"]),
-                    "endMs": window_start_ms + int(word["endMs"]),
-                    "text": word["text"],
-                }
-                for word in words
-            ]
-            with capture.lock:
-                capture.partial_words = absolute_words
+
+    def _partial_transcribe_tick(self, capture: SystemAudioCapture) -> None:
+        with capture.lock:
+            frame_count = capture.frame_count
+            channels = capture.channels
+            sample_rate = capture.sample_rate
+        if frame_count <= 0:
+            return
+        window_frames = min(
+            frame_count, sample_rate * PARTIAL_TRANSCRIBE_WINDOW_SECONDS
+        )
+        start_frame = frame_count - window_frames
+        byte_offset = 44 + start_frame * channels * 2
+        with open(capture.path, "rb") as handle:
+            handle.seek(byte_offset)
+            raw = handle.read(window_frames * channels * 2)
+        if not raw:
+            return
+        samples = self._pcm_bytes_to_mono_float32(raw, channels)
+        if samples.size == 0:
+            return
+        words = self._chunk_transcriber(samples, sample_rate)
+        if not words:
+            return
+        window_start_ms = round(start_frame / sample_rate * 1000)
+        absolute_words = [
+            {
+                "startMs": window_start_ms + int(word["startMs"]),
+                "endMs": window_start_ms + int(word["endMs"]),
+                "text": word["text"],
+            }
+            for word in words
+        ]
+        with capture.lock:
+            capture.partial_words = absolute_words
 
     @staticmethod
     def _pcm_bytes_to_mono_float32(raw: bytes, channels: int) -> Any:
