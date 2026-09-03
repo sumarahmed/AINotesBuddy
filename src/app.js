@@ -1,7 +1,13 @@
 const app = document.getElementById("root");
 const MeetingAudio = globalThis.NotesBuddyMeetingAudio;
 const runtimeConfig = globalThis.NotesBuddyRuntime || {};
-const APP_VERSION = String(runtimeConfig.appVersion || "2026.09.01");
+// Single source of truth for product identity. Rebranding is editing this
+// object only -- name and mark are read everywhere else, never hardcoded.
+const BRAND = {
+  name: "NotesBuddy",
+  mark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+};
+const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.18");
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -212,7 +218,7 @@ function resetMeetingAnalysis(meeting, status = "not-requested", error = null) {
   if (!meeting) return false;
   meeting.overview = meeting.transcript?.length
     ? "Professional analysis has not been generated for this transcript yet."
-    : "A completed transcript is required before NotesBuddy can create a professional meeting analysis.";
+    : `A completed transcript is required before ${BRAND.name} can create a professional meeting analysis.`;
   meeting.highlights = [];
   meeting.decisions = [];
   meeting.actions = [];
@@ -307,6 +313,7 @@ const defaultSettings = {
   transcriptionToken: "",
   companionSetupCompleted: false,
   analysisModelTier: "analysis-standard",
+  theme: "system",
 };
 const initialSettings = {
   ...defaultSettings,
@@ -355,7 +362,6 @@ const state = {
   },
   companionUpdateDismissed: false,
   componentJob: null,
-  smartSummaryJob: null,
   playbackSourceByMeeting: {},
   toasts: [],
   capture: {
@@ -674,8 +680,8 @@ function longDate(iso) {
 
 function brand(compact = false) {
   return `<div class="brand ${compact ? "brand--compact" : ""}">
-    <div class="brand__mark" aria-hidden="true"><span></span><span></span><span></span></div>
-    ${compact ? "" : '<span class="brand__word">NotesBuddy</span>'}
+    <div class="brand__mark" aria-hidden="true">${BRAND.mark}</div>
+    ${compact ? "" : `<span class="brand__word">${escapeHtml(BRAND.name)}</span>`}
   </div>`;
 }
 
@@ -1031,16 +1037,8 @@ function summaryView(meeting) {
     .filter(Boolean)
     .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
     .join("");
-  const analysisProgressPercent = Math.round(
-    Math.min(1, Math.max(0, Number(meeting.analysis?.progress) || 0)) * 100,
-  );
-  const analysisElapsedLabel = meeting.analysis?.requestedAt
-    ? MeetingAudio.formatTimestamp(
-        Date.now() - new Date(meeting.analysis.requestedAt).getTime(),
-      )
-    : "";
   const analysisNotice = analysisRunning
-    ? `<div class="analysis-notice analysis-notice--working">${icon("refresh", 15)}<span><strong>${escapeHtml(meeting.analysis?.stage || "Analyzing the complete transcript")}</strong><small>Building evidence-grounded summary, decisions, and actions…</small><div class="component-progress" aria-live="polite"><div><span>${analysisElapsedLabel} elapsed</span><b>${analysisProgressPercent}%</b></div><i><span style="width:${analysisProgressPercent}%"></span></i></div></span></div>`
+    ? `<div class="analysis-notice analysis-notice--working">${icon("refresh", 15)}<span><strong>Analyzing the complete transcript</strong><small>Building evidence-grounded summary, decisions, and actions…</small></span></div>`
     : analysisStatus === "failed"
       ? `<div class="analysis-notice analysis-notice--error">${icon("x", 15)}<span><strong>Professional analysis could not be completed</strong><small>${escapeHtml(meeting.analysis?.error || "Try refreshing from the transcript again.")}</small></span></div>`
       : analysisStatus === "completed" && meeting.analysis?.usedSavedDraft
@@ -1311,7 +1309,7 @@ function settingsPanel() {
     ? `<section class="settings-section">
         <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
         <div class="service-check"><span class="service-check__status service-check__status--${updateRequired ? "update" : escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
-        <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} for automatic local GPU acceleration.` : hybridConnected ? `NotesBuddy ${escapeHtml(state.companion.metadata?.version || "")} is using ${escapeHtml(localAcceleratorLabel())}. All recording lengths are processed locally while it remains connected.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
+        <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} for automatic local GPU acceleration.` : hybridConnected ? `${escapeHtml(BRAND.name)} ${escapeHtml(state.companion.metadata?.version || "")} is using ${escapeHtml(localAcceleratorLabel())}. All recording lengths are processed locally while it remains connected.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
         <div class="companion-actions"><button type="button" class="button button--quiet" data-action="show-companion-setup">Setup guide</button><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}${updateRequired ? "Download update" : "Windows downloads"}</a></div>
       </section>`
     : hosted
@@ -1327,36 +1325,6 @@ function settingsPanel() {
         <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
         <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
       </section>`;
-  const smartSummarySettings = hybridConnected
-    ? (() => {
-        const available = state.companion.metadata?.components?.components || {};
-        const tiers = [
-          { id: "analysis-tiny", label: "Fast" },
-          { id: "analysis-standard", label: "Balanced" },
-          { id: "analysis-pro", label: "High quality" },
-        ].filter((tier) => available[tier.id]);
-        if (!tiers.length) return "";
-        const job = state.smartSummaryJob;
-        const running = job && ["queued", "downloading", "installing"].includes(job.status);
-        const progress = Math.max(0, Math.min(100, Math.round((Number(job?.progress) || 0) * 100)));
-        return `<section class="settings-section">
-          <span class="eyebrow">Smart summary model</span>
-          <div class="component-options component-options--compact">
-            ${tiers
-              .map((tier) => {
-                const meta = available[tier.id] || {};
-                const size = formatBytes(Number(meta.downloadBytes || 0));
-                const isInstalled = Boolean(meta.installed);
-                return `<button type="button" class="component-options__tier${isInstalled ? " component-options__tier--selected" : ""}" data-action="switch-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${running || isInstalled ? "disabled" : ""} aria-pressed="${isInstalled}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong><span>${isInstalled ? "Installed" : "Not installed"}</span></button>`;
-              })
-              .join("")}
-          </div>
-          ${running ? `<div class="component-progress" aria-live="polite"><div><span>${escapeHtml(job.stage || "Downloading")}</span><b>${progress}%</b></div><i><span style="width:${progress}%"></span></i></div>` : ""}
-          ${job?.status === "failed" ? `<p class="settings-help">${escapeHtml(job.error || "Switching models failed. Try again.")}</p>` : ""}
-          <p class="settings-help">Choosing a different tier downloads it once, then replaces the tier currently installed.</p>
-        </section>`;
-      })()
-    : "";
   const autoTranscribeDescription = hosted
     ? "Send saved source tracks to the public transcription service after capture."
     : hybrid
@@ -1371,8 +1339,19 @@ function settingsPanel() {
         <label><span>Your name</span><input data-input="profile-name" value="${escapeHtml(currentUserName())}" maxlength="80" autocomplete="name" aria-label="Your name"></label>
         <p class="settings-help">Used for your greeting, initials, transcript attribution, and assigned follow-ups. Saved only in this browser profile.</p>
       </section>
+      <section class="settings-section">
+        <span class="eyebrow">Appearance</span>
+        <div class="theme-switcher" role="radiogroup" aria-label="Theme">
+          ${["system", "light", "dark"]
+            .map(
+              (option) =>
+                `<button type="button" role="radio" aria-checked="${state.settings.theme === option}" class="${state.settings.theme === option ? "theme-switcher__option--active" : ""}" data-action="set-theme" data-theme="${option}">${option === "system" ? "System" : option === "light" ? "Light" : "Dark"}</button>`,
+            )
+            .join("")}
+        </div>
+        <p class="settings-help">System follows your device's own light/dark setting.</p>
+      </section>
       ${transcriptionSettings}
-      ${smartSummarySettings}
       <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After speaker transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
@@ -1384,8 +1363,8 @@ function profileOnboarding() {
     <section class="profile-setup-card" role="dialog" aria-modal="true" aria-labelledby="profile-setup-title">
       ${brand()}
       <span class="eyebrow">Set up this browser</span>
-      <h1 id="profile-setup-title">Welcome to NotesBuddy</h1>
-      <p>What should NotesBuddy call you? Your name stays in this browser and is used for greetings, transcript attribution, and follow-ups.</p>
+      <h1 id="profile-setup-title">Welcome to ${escapeHtml(BRAND.name)}</h1>
+      <p>What should ${escapeHtml(BRAND.name)} call you? Your name stays in this browser and is used for greetings, transcript attribution, and follow-ups.</p>
       <form data-form="profile-setup" novalidate>
         <label for="profile-setup-name">Your name</label>
         <input id="profile-setup-name" data-input="profile-setup-name" name="name" maxlength="80" autocomplete="name" placeholder="e.g. Alex Morgan" required autofocus>
@@ -1482,7 +1461,7 @@ function companionOnboarding() {
         <h1 id="companion-setup-title">Desktop companion is working</h1>
         <p>${escapeHtml(state.companion.metadata?.version ? `NotesBuddy Companion ${state.companion.metadata.version}` : "NotesBuddy Companion")} is running on this computer. A compatible version captures Windows meeting output directly and transcribes saved recordings locally without a model or pairing token.</p>
         <div class="companion-setup__privacy">${icon("shield", 18)}<div><strong>On-device processing active</strong><span>Audio is sent only to the companion on 127.0.0.1 while it remains connected.</span></div></div>
-        <button type="button" class="button button--primary companion-setup__primary" data-action="complete-companion-setup">Continue to NotesBuddy ${icon("chevronRight", 16)}</button>
+        <button type="button" class="button button--primary companion-setup__primary" data-action="complete-companion-setup">Continue to ${escapeHtml(BRAND.name)} ${icon("chevronRight", 16)}</button>
       </section>
     </div>`;
   }
@@ -1541,30 +1520,6 @@ async function installCompanionComponents(preset) {
   }
 }
 
-async function switchAnalysisTier(tierId) {
-  const client = createTranscriptionClient({ mode: "local" });
-  try {
-    state.smartSummaryJob = await client.installComponents([tierId]);
-    render();
-    while (["queued", "downloading", "installing"].includes(state.smartSummaryJob.status)) {
-      await new Promise((resolve) => window.setTimeout(resolve, 600));
-      state.smartSummaryJob = await client.componentJob(state.smartSummaryJob.jobId);
-      render();
-    }
-    if (state.smartSummaryJob.status !== "completed") {
-      throw new Error(state.smartSummaryJob.error || "Switching the smart summary model failed.");
-    }
-    const health = await client.health();
-    state.companion.metadata = { ...state.companion.metadata, ...health };
-    state.smartSummaryJob = null;
-    render();
-    showToast("Smart summary model updated", `${health.analysisModel || "The new model"} will be used for future analyses.`);
-  } catch (error) {
-    state.smartSummaryJob = { ...(state.smartSummaryJob || {}), status: "failed", error: error?.message || "Switching the smart summary model failed." };
-    render();
-  }
-}
-
 async function pauseCompanionComponents() {
   if (!state.componentJob?.jobId) return;
   const client = createTranscriptionClient({ mode: "local" });
@@ -1594,7 +1549,17 @@ function toastRegion() {
   return `<div class="toast-region" aria-live="polite">${state.toasts.map((toast) => `<div class="toast"><span>${icon("check", 14)}</span><div><strong>${escapeHtml(toast.title)}</strong>${toast.description ? `<p>${escapeHtml(toast.description)}</p>` : ""}</div></div>`).join("")}</div>`;
 }
 
+function applyTheme() {
+  const theme = state.settings.theme;
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.setAttribute("data-theme", theme);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+}
+
 function render(focusTarget = "") {
+  applyTheme();
   const currentPlayer = app.querySelector("audio[data-audio-id]");
   const playbackSnapshot =
     currentPlayer?.src && (currentPlayer.currentTime > 0 || !currentPlayer.paused)
@@ -2557,7 +2522,7 @@ async function startCapture() {
         captureRuntime.streams.meeting ||
           captureRuntime.companionCaptureId ||
           (useCompanionAudio && state.capture.systemAudioOn)
-          ? "NotesBuddy will continue with the meeting audio."
+          ? `${BRAND.name} will continue with the meeting audio.`
           : "Allow microphone access, then start capture again.",
       );
     }
@@ -2916,7 +2881,7 @@ async function finishCapture() {
     ],
     overview: transcriptText
       ? `This meeting contains synchronized local audio and ${segments.length} draft browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Run speaker transcription before generating the professional analysis.`
-      : "This meeting contains locally stored audio. Speaker transcription has not run, and NotesBuddy did not generate sample transcript text.",
+      : `This meeting contains locally stored audio. Speaker transcription has not run, and ${BRAND.name} did not generate sample transcript text.`,
     highlights: [],
     decisions: [],
     actions: [],
@@ -3158,8 +3123,6 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
     status: "processing",
     error: null,
     requestedAt: new Date().toISOString(),
-    progress: 0,
-    stage: "Starting analysis",
   };
   save();
   render();
@@ -3178,13 +3141,6 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
         endMs: segment.endMs,
         text: segment.text,
       })),
-      onProgress(value, stage) {
-        if (meeting.analysis?.status !== "processing") return;
-        meeting.analysis.progress = Number(value) || 0;
-        meeting.analysis.stage = String(stage || "Analyzing");
-        save();
-        render();
-      },
     });
     if (!applyMeetingAnalysisToMeeting(meeting, result)) {
       throw new Error(
@@ -3400,7 +3356,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
       meeting.transcript.length ? "not-requested" : "unavailable",
     );
     if (!meeting.transcript.length) {
-      meeting.overview = `The ${usesHostedTranscription() ? "public transcription service" : "local transcription companion"} did not return speech text, so NotesBuddy did not generate an analysis.`;
+      meeting.overview = `The ${usesHostedTranscription() ? "public transcription service" : "local transcription companion"} did not return speech text, so ${BRAND.name} did not generate an analysis.`;
     }
     save();
     render();
@@ -3674,9 +3630,6 @@ app.addEventListener("click", async (event) => {
   } else if (action === "install-components") {
     await installCompanionComponents(button.dataset.preset || "small");
     return;
-  } else if (action === "switch-analysis-tier") {
-    if (button.dataset.tier) await switchAnalysisTier(button.dataset.tier);
-    return;
   } else if (action === "pause-components") {
     await pauseCompanionComponents();
     return;
@@ -3700,7 +3653,7 @@ app.addEventListener("click", async (event) => {
     render();
     showToast(
       "Using online transcription",
-      "NotesBuddy will ask about the Windows companion again in a future browser session.",
+      `${BRAND.name} will ask about the Windows companion again in a future browser session.`,
     );
     return;
   } else if (action === "open-nav") {
@@ -3798,6 +3751,9 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "setting-toggle") {
     state.settings[button.dataset.id] = !state.settings[button.dataset.id];
+    save();
+  } else if (action === "set-theme") {
+    state.settings.theme = button.dataset.theme;
     save();
   }
   render();
