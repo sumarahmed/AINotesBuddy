@@ -22,6 +22,7 @@ application's control.
 | Hosted anonymous session token | Browser `sessionStorage` | Session expiry or tab/session storage deletion |
 | Microphone, meeting, mixed audio | Browser IndexedDB | Until meeting/site data is deleted |
 | Active Windows-output capture | Companion random temporary WAV | Deleted after local transfer, cancellation, or shutdown |
+| Live guest-caption partial transcription | Companion process memory (read from the same active-capture temporary WAV) | Replaced every ~5 seconds; discarded when the capture stops, is cancelled, or the companion shuts down; never written to disk or logged |
 | Browser live-speech audio | Browser speech provider when enabled | Provider/browser controlled |
 | Local companion job audio | Random OS temporary directory | Removed after job success, failure, or cancellation |
 | Hosted job audio | Host container temporary directory | Removed after job success, failure, or cancellation |
@@ -95,19 +96,28 @@ the browser provider.
 
 Users can disable **Browser live transcript draft** in Settings. MediaRecorder
 continues independently. NotesBuddy stores only results returned by the API,
-marks them as draft, and never inserts sample transcript text. While capture is
+marks them as draft, and never inserts sample transcript text. Browser Speech
+Recognition accepts only the microphone chosen by the browser, so every
+phrase it returns is shown as **You**; it never consumes the isolated
+Windows-output track and cannot itself produce Guest words. While capture is
 active, NotesBuddy also keeps in-memory timestamp spans for detected
-Windows/shared-output activity. A returned phrase overlapping those spans is
-shown as provisional **Guest**; other returned phrases remain **You**. The
-spans contain timing only, not voiceprints or names. Final local/hosted
-transcription replaces these provisional rows with synchronized source and
+Windows/shared-output activity, which still drives the **Guest speaking**
+placeholder shown before any live guest words arrive. Final local/hosted
+transcription replaces every provisional row with synchronized source and
 pyannote speaker results.
 
-Browser Speech Recognition accepts the microphone chosen by the browser; it
-does not consume the isolated Windows-output track. Consequently the UI may
-detect **Guest speaking** from system output without receiving live Guest
-words, especially when headphones prevent acoustic leakage. The stored meeting
-track remains available for the authoritative post-recording transcription.
+With a compatible companion connected, live **Guest** text comes from a
+second, independent source instead: the companion re-transcribes a trailing
+window (~25 seconds) of the meeting-audio recording every ~5 seconds while it
+is still being captured, reading the same temporary WAV described below --
+see [Local transcription companion](#local-transcription-companion) for that
+mechanism's own data handling. This works identically whether or not
+headphones prevent the other side's audio from leaking into the microphone,
+since it processes the actual captured recording rather than guessing from
+acoustic leakage. Without a compatible companion, the UI still shows **Guest
+speaking** from the timing spans above, but no live guest words. The stored
+meeting track remains available either way for the authoritative
+post-recording transcription.
 
 ## Local transcription companion
 
@@ -143,6 +153,16 @@ Active WASAPI capture uses a separate random temporary WAV. The protected stop
 route transfers it over loopback and deletes it after the response. Cancellation
 or companion shutdown also deletes it. The companion permits only one active
 Windows-output capture.
+
+While that capture is active, the companion also reads a trailing window of
+the same temporary WAV every ~5 seconds, in-process, to produce live guest
+captions -- see [Live captions](ARCHITECTURE.md#live-captions-partial-transcription)
+for the mechanism. This never opens a new network exposure: the same
+already-local audio is read more often, not sent anywhere new. Each cycle's
+result replaces the previous one in companion process memory only; nothing
+from this path is written to disk, logged, or retained once the browser has
+polled it, and it is discarded entirely when the capture stops, is
+cancelled, or the companion shuts down.
 
 The returned transcript is saved in the browser meeting record. The companion
 keeps recent job status/results in process memory for one hour by default (and

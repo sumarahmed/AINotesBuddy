@@ -53,6 +53,23 @@ remain compatible with semantic-version tooling.
 
 ### Fixed
 
+- Running the Python test suite on a real machine was writing directly into
+  the real `%LOCALAPPDATA%\NotesBuddy\logs\companion.log` -- confirmed after
+  a log tail handed back to diagnose an empty transcript turned out to be a
+  previous test run of this suite, with fake job ids and engine names
+  indistinguishable at a glance from genuine activity. `test_server.py` and
+  `test_engine.py` now redirect `NOTESBUDDY_LOG_DIR` to a throwaway
+  directory for their whole module. Separately, the live-caption background
+  thread's per-tick work (file read, PCM conversion, transcription) is now
+  one unit under a single broad exception handler instead of narrowly around
+  just the transcription call -- a failure anywhere in a tick previously
+  killed the whole thread permanently, silently stopping live captions for
+  the rest of that recording with nothing surfaced anywhere, since a
+  thread's exception has nowhere to propagate. Caught by CI, not local
+  testing: the lightweight `requirements-test.txt` set didn't include numpy,
+  which the local verification venv already had as a transitive
+  faster-whisper/torch dependency.
+
 - An empty-but-successfully-completed transcript showed the same "Speaker
   transcript ready" toast as a real result, just with "0 speakers" --
   indistinguishable from success at a glance. It now shows "No speech

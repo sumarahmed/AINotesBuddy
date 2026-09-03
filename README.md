@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.09.02` (`Year.Month.MinorRelease`)
+**Current version:** `2026.09.03` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -21,8 +21,10 @@ for speech-to-text and speaker diarization.
 - Pause, resume, playback, seeking, source switching, download, and reload
 - Microphone-only fallback if meeting sharing is cancelled or unsupported
 - Persistent warning when meeting sharing stops during a recording
-- Optional browser live-speech draft showing **You** and provisional **Guest**
-  labels from synchronized meeting-output activity, with no inserted sample text
+- Live transcript during recording: isolated microphone speech shown as **You**
+  via optional browser speech recognition, and the meeting-audio recording
+  itself re-transcribed by the companion every few seconds and shown as
+  **Guest**, whether or not headphones are worn -- no inserted sample text
 - Local faster-whisper transcription and pyannote speaker diarization companion
 - Three selectable local smart-summary quality tiers (Fast, Balanced,
   High quality), each an independently downloadable GGUF model; the
@@ -96,14 +98,18 @@ their real names from Teams. Rename those session-local labels after
 transcription. Very short turns, overlapping speech, low volume, and heavily
 compressed meeting audio can still cause two people to be grouped together.
 
-During capture, NotesBuddy can distinguish the isolated microphone as **You**
-and active Windows/shared output as a provisional **Guest**. The live Guest
-label is a timing hint, not voice recognition. Browser Speech Recognition still
-listens to the microphone, so Guest words appear live only when that service
-hears the remote voice; with headphones it may show **Guest speaking** without
-words. After processing, the saved draft is replaced by the synchronized
-microphone transcript plus pyannote's **Speaker 1**, **Speaker 2**, and other
-remote groups.
+During capture, NotesBuddy shows a live transcript from two independent
+sources. The isolated microphone is transcribed by the browser's own speech
+recognition and always shown as **You**. With a compatible companion
+connected, the meeting-audio recording is separately re-transcribed by the
+companion every few seconds and shown as **Guest** -- this works the same way
+whether or not headphones are worn, since it reads the actual captured
+recording rather than relying on the other person's voice leaking
+acoustically into the microphone. Before the companion's first live result
+arrives, or without a compatible companion connected, the UI shows **Guest
+speaking** without words. After processing, the saved draft is replaced by the
+synchronized microphone transcript plus pyannote's **Speaker 1**, **Speaker
+2**, and other remote groups.
 
 ### Local speaker transcription
 

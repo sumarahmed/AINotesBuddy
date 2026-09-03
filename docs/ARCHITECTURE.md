@@ -27,6 +27,8 @@ flowchart LR
     Share["Browser share fallback"] --> MeetingStream["Meeting MediaStream"]
     MicStream --> MicRecorder["Microphone MediaRecorder"]
     Loopback --> MeetingWav["Temporary stereo WAV"]
+    MeetingWav -->|"~5s trailing-window re-transcription"| LiveCaption["Live guest caption (in-progress)"]
+    LiveCaption -->|"partial-transcript poll"| Client
     MeetingStream --> MeetingRecorder["Meeting MediaRecorder"]
     MicStream --> Mixer["Web Audio mixer"]
     MeetingStream --> Mixer
@@ -99,8 +101,10 @@ Owns:
 - template rendering and event delegation;
 - microphone, companion-loopback, and display-fallback permission flow;
 - coordinated browser `MediaRecorder` instances plus companion WAV transfer;
-- optional browser speech-recognition draft with timestamp-aligned provisional
-  **You**/**Guest** attribution;
+- optional browser speech-recognition draft, always attributed to **You**;
+- live companion polling for guest captions during recording, wholesale-
+  replacing the provisional **Guest** rows on every poll and time-sorting the
+  merged live segment list;
 - IndexedDB storage and `localStorage` metadata;
 - audio hydration, playback, seeking, source download;
 - transcription job lifecycle and cancellation;
@@ -143,9 +147,15 @@ and validated against source by `npm test`.
    and Windows-output tracks.
 5. Start browser recorders together and collect chunks every 500 ms. Poll the
    companion for current output level, or analyze the browser meeting track,
-   and merge active samples into capture-clock meeting-activity spans.
-6. Label browser speech outside those spans as **You** and overlapping speech
-   as provisional **Guest**. This is source/timing attribution, not biometrics.
+   and merge active samples into capture-clock meeting-activity spans (this
+   still drives the **Guest speaking** placeholder shown before any live
+   words arrive).
+6. Browser-recognized microphone speech is always **You**. With a compatible
+   companion connected, poll it every ~5s for a live re-transcription of a
+   trailing window of the meeting-audio recording and show the result as
+   **Guest** -- real transcribed content, not a timing guess, and unaffected
+   by whether headphones prevent acoustic leakage into the microphone. See
+   [Live captions](#live-captions-partial-transcription) below.
 7. Pause/resume browser recorders, mixer, and companion capture together.
 8. On finish, stop browser recorders and download the companion WAV before
    stopping local tracks. The companion deletes its temporary file after the
@@ -233,6 +243,50 @@ The shared engine and API live under `services/transcription/`.
 
 Cancellation sets a cooperative event. Native model work may finish its current
 operation before observing it, but terminal cleanup always runs.
+
+### Live captions (partial transcription)
+
+A second, independent path runs alongside the job lifecycle above while a
+system-audio capture is active, so guest speech can appear in the live
+transcript instead of only after **Transcribe and identify speakers**:
+
+1. `SystemAudioCaptureManager` starts a background thread per capture (only
+   when a `chunk_transcriber` was injected -- `server.py` wires in
+   `LocalDiarizationEngine.transcribe_chunk`) alongside the existing WASAPI
+   recorder thread.
+2. Every ~5 seconds, it reads `capture.frame_count` under `capture.lock` as a
+   safe lower bound on frames actually written so far, then reads raw PCM
+   bytes directly from the WAV file the recorder thread is still writing --
+   in the same process, bypassing the `wave` module, since a separate OS
+   process cannot safely read a file mid-write (unflushed buffers, a header
+   size only patched on close). This bounds the read to a trailing ~25-second
+   window, independent of total recording length, so tick latency stays flat.
+3. `transcribe_chunk()` resamples the chunk to the model's native rate (only
+   the full-file path gets ffmpeg-quality resampling; this is a lower-quality,
+   dependency-free stand-in acceptable only for a best-effort live draft),
+   then runs it through the same lazily-loaded, already-warm faster-whisper
+   model the job lifecycle uses -- guarded by a shared inference lock that the
+   live path acquires non-blocking (skipping that tick on contention) so a
+   caption tick never queues behind a multi-minute diarization job.
+4. Results are served over `GET
+   /v1/system-audio/captures/{id}/partial-transcript`, gated by the same
+   `require_local_system_audio_access` dependency as its sibling routes.
+   `src/app.js` polls it alongside the existing status poll and
+   wholesale-replaces the live provisional-**Guest** rows on every response
+   (mirroring how the final diarized transcript already wholesale-replaces
+   every provisional row, rather than tracking incremental cursor/dedup
+   state), then re-sorts the merged live segment list by timestamp, since a
+   guest word from a several-second-delayed poll can carry an earlier
+   timestamp than a microphone segment already on screen.
+
+The whole per-tick body is one unit wrapped in a single broad exception
+handler: any failure (a bad read, a conversion error, a transcription error)
+skips just that tick rather than killing the background thread, since a
+thread's exception has nowhere to propagate and would otherwise silently stop
+live captions for the rest of that recording. The thread is explicitly
+stopped and joined on `.stop()`/`.cancel()`/`.shutdown()`, before the real
+end-of-recording transcription for that same file can need the same
+inference lock.
 
 ### Hosted anonymous boundary
 

@@ -2,6 +2,15 @@
 
 Status: implemented and verified
 
+Update for `2026.09.10`: live **Guest** text during recording no longer
+depends on the microphone accidentally overhearing the other side's audio.
+The companion now re-transcribes a trailing window of the meeting-audio
+recording every ~5 seconds while it is still being captured and the browser
+shows that as live **Guest** text, working identically whether or not
+headphones prevent any acoustic leakage into the microphone. Browser speech
+recognition results are now always attributed to **You**; see
+[Architecture: Live captions](ARCHITECTURE.md#live-captions-partial-transcription).
+
 Update for `2026.08.3`: microphone and meeting transcripts are aligned at
 word level using their synchronized timestamps and normalized text. Only an
 ordered, time-local phrase found in both sources is removed from the microphone

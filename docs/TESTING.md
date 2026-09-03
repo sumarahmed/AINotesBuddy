@@ -26,6 +26,11 @@ The JavaScript tests cover:
 - source preference and asset selection;
 - complete transcript text beyond 80 characters;
 - cross-source echo de-duplication;
+- live guest-caption words grouped into utterance-shaped rows on a gap
+  threshold, wholesale-replacing (never duplicating) the provisional
+  **Guest** segment group on every poll, and re-sorted by timestamp when a
+  guest row arrives with an earlier timestamp than a microphone row already
+  on screen;
 - **You**, detected, renamed, and unknown speaker labels;
 - rename propagation to participants;
 - structured analysis validation and rejection of invalid evidence IDs;
@@ -70,6 +75,15 @@ The Python suite covers:
 - desktop CLI, loopback, and Windows autostart command construction;
 - direct system-output start/status/pause/resume/stop/cancel API behavior;
 - stereo WAV writing, signal detection, active-capture conflict, and cleanup;
+- live-caption chunk transcription: resampling a captured-rate chunk to the
+  model's native rate, non-blocking inference-lock contention returning no
+  words instead of waiting on a full-recording job, and swallowing any
+  transcription error;
+- the partial-transcript background thread: ticking and populating results
+  while a capture runs, a failing chunk transcriber never crashing the
+  capture, and stopping promptly on capture stop/cancel;
+- the partial-transcript API route, gated the same way as its sibling
+  system-audio routes;
 - bundled offline-model path selection without a per-user model token;
 - allowed/denied CORS origins and private-network preflight;
 - multipart source upload and asynchronous job polling;
@@ -208,6 +222,11 @@ Use headphones to prevent acoustic feedback and a non-confidential source tab.
 - Rename each remote speaker and verify search, copy, and exported Markdown.
 - Confirm microphone speech is **You**.
 - Confirm uncertain unassigned words are **Unknown speaker**, not a guessed name.
+- With headphones worn (no acoustic leakage into the microphone possible),
+  confirm live **Guest** words still appear during recording within roughly
+  5-10 seconds of the other person speaking -- this is the scenario that
+  previously never worked, since the old mechanism depended entirely on
+  leakage. Confirm they still appear the same way without headphones.
 - Cancel a long job and confirm no `notesbuddy-job-*` temporary directory
   remains after the worker reaches terminal state.
 

@@ -80,7 +80,26 @@ decisions, and action items, or re-validating an already-verified
 concatenated summary too strictly; and diagnostic logging that now actually
 reaches a log file from the packaged `console=False` build, since a plain
 `print()` is silently discarded there even when the launching process
-redirects output. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
+redirects output.
+
+Version `2026.09.10` fixes Windows-output capture silently listening to the
+wrong device while a Bluetooth headset is connected: `soundcard`'s
+`default_speaker()` only ever queries the Console role, while meeting/VoIP
+audio generally follows the separate Communications role, which Windows
+switches to a connected headset independently of Console/Multimedia --
+confirmed by reading the bundled library's own WASAPI backend, not assumed.
+Loopback capture now prefers a device matching the Communications-role
+default (via `pycaw`, already a dependency), falling back to the previous
+Console-role match unchanged when none is found. The same release adds
+diagnostic logging to the transcription engine and job pipeline itself
+(previously the one part of the companion with none at all -- an empty
+transcript was indistinguishable from a genuine failure with nothing to
+investigate), and live guest captions: the meeting-audio recording is now
+re-transcribed every ~5 seconds while still being captured, so guest speech
+appears in the live transcript during recording instead of only after
+**Transcribe and identify speakers**, working the same way whether or not
+headphones prevent the old mic-leakage-based approach from ever seeing guest
+audio at all. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
 
 ## User flow
 
@@ -244,6 +263,19 @@ For a dependency-light package smoke test, omit model preparation and run:
 - If the website opens a browser share picker, it is using fallback capture;
   restart/update the companion and choose **Look for companion** in Settings.
 - Use headphones to reduce the local microphone picking up remote echo.
+
+**Live Guest captions never appear during recording**
+
+- Confirm the website reports companion `2026.09.10` or later. Older
+  companions only produce guest text after **Transcribe and identify
+  speakers**, not live.
+- Confirm the Meeting badge reaches **Sound detected** first -- live
+  captions transcribe the same captured recording, so they need real audio
+  in it. Expect roughly 5-10 seconds of delay after speech starts before the
+  first words appear.
+- This does not depend on headphones. If it still never appears with a
+  current companion and confirmed sound detected, check
+  `%LOCALAPPDATA%\NotesBuddy\logs\companion.log`.
 
 Speaker diarization distinguishes detected voices by time. It does not know
 people's real names; users rename **Speaker 1**, **Speaker 2**, and so on after
