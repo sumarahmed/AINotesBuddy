@@ -6,6 +6,31 @@ The client owns microphone/browser-fallback capture, browser storage, playback,
 and UI. The companion owns Windows-output capture plus local speech-to-text and
 speaker diarization.
 
+## Brand icon surfaces
+
+One design (a teal roundel with an over-the-head headphone band) renders
+everywhere the product shows an icon or logo. Missing one of these when the
+mark changes is exactly what happened once already (2026.09.05: the tray
+icon, the window title bar, and the in-app sidebar logo were each fixed in
+separate follow-up rounds after the favicon/installer/`.exe` icon had
+already shipped) -- check every row below together whenever the icon
+changes again:
+
+| Surface | File | Format |
+| --- | --- | --- |
+| Website favicon | [`favicon.svg`](../favicon.svg) / [`favicon.ico`](../favicon.ico), linked from [`index.html`](../index.html) | SVG (primary), ICO (fallback) |
+| In-app sidebar logo | `BRAND.mark` in [`src/app.js`](../src/app.js) | Inline stroke SVG, sits on `.brand__mark`'s existing teal gradient box in `styles.css` -- no own background/fill |
+| Windows installer's own icon | `SetupIconFile` in [`desktop/installer/NotesBuddyCompanion.iss`](../desktop/installer/NotesBuddyCompanion.iss) | ICO |
+| Companion `.exe` icon (propagates to its shortcuts and the uninstaller, both of which already reference the exe's own icon) | `icon=` in [`desktop/NotesBuddyCompanion.spec`](../desktop/NotesBuddyCompanion.spec) | ICO |
+| Companion window title bar | `root.iconbitmap(...)` in `desktop_app.py`, reading `bundled_icon_path("notesbuddy.ico")` | ICO (Tk's `iconbitmap` requires one specifically on Windows) |
+| Companion system tray icon | `pystray.Icon(...)` in `desktop_app.py`'s `_start_tray()`, reading `bundled_icon_path("notesbuddy.png")` | PNG |
+
+The two bundled raster/ICO source files live at `desktop/assets/notesbuddy.ico`
+and `desktop/assets/notesbuddy.png`, both regenerated together by the same
+one-off Pillow script (not checked in -- the design is simple geometry:
+a filled circle, a stroked arc, two rounded rectangles) so every packaged
+surface always matches the SVG favicon and the in-app logo exactly.
+
 ## Design goals
 
 - Keep original recordings and meeting records local by default.

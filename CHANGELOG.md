@@ -10,6 +10,16 @@ remain compatible with semantic-version tooling.
 
 ### Added
 
+- Applying the unified icon (above) turned out to need two more follow-up
+  spots, each reported live from a screenshot after the first round shipped:
+  the companion window's own title bar (Tk defaults to its own feather logo
+  until `iconbitmap` is set explicitly -- fixing the tray icon separately
+  does not cover this) and the in-app sidebar logo (`BRAND.mark` in
+  `app.js`, previously an unrelated hand-drawn musical-note glyph). See
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#brand-icon-surfaces) for
+  the full checklist of every icon surface, kept together specifically so
+  a future icon change does not repeat this same one-at-a-time discovery.
+
 - One consistent icon everywhere: a teal roundel with an over-the-head
   headphone band, replacing what were previously several unrelated glyphs
   (the tray icon drew an ad hoc teal-square-with-play-triangle via PIL

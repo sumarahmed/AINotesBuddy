@@ -5,7 +5,12 @@ const runtimeConfig = globalThis.NotesBuddyRuntime || {};
 // object only -- name and mark are read everywhere else, never hardcoded.
 const BRAND = {
   name: "NotesBuddy",
-  mark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+  // Same over-the-head headphone mark used for the favicon, the Windows
+  // installer, the companion .exe (title bar + tray icon), and here --
+  // one consistent icon everywhere. Pure stroke outline, no fill or own
+  // background, so it sits correctly on .brand__mark's existing teal
+  // gradient box (see styles.css) the same way the previous note glyph did.
+  mark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="2.5" y="12" width="4" height="7" rx="2"/><rect x="17.5" y="12" width="4" height="7" rx="2"/></svg>`,
 };
 const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.18");
 const SUMMARY_VERSION = 3;
