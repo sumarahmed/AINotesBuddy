@@ -19,6 +19,10 @@ datas = [
         str(project_root / "desktop" / "assets" / "notesbuddy.png"),
         ".",
     ),
+    (
+        str(project_root / "desktop" / "assets" / "notesbuddy.ico"),
+        ".",
+    ),
 ]
 binaries = []
 hiddenimports = collect_submodules("uvicorn") + ["soundfile"]

@@ -114,17 +114,19 @@ def fetch_latest_companion_release(
     }
 
 
-def bundled_icon_path() -> Path:
+def bundled_icon_path(filename: str = "notesbuddy.png") -> Path:
     """Same lookup pattern as components.py's bundled_manifest_path():
     the packaged build resolves bundled data files relative to
     sys._MEIPASS, a source-tree run resolves them relative to this
-    repo's desktop/assets directory instead.
+    repo's desktop/assets directory instead. filename is "notesbuddy.png"
+    for the tray icon (pystray/Pillow) or "notesbuddy.ico" for the Tk
+    window icon (Tk's iconbitmap on Windows requires an .ico specifically).
     """
 
     bundle_root = getattr(sys, "_MEIPASS", "")
     if bundle_root:
-        return Path(bundle_root) / "notesbuddy.png"
-    return Path(__file__).parents[2] / "desktop" / "assets" / "notesbuddy.png"
+        return Path(bundle_root) / filename
+    return Path(__file__).parents[2] / "desktop" / "assets" / filename
 
 
 def companion_endpoint(port: int) -> str:
@@ -356,6 +358,15 @@ class DesktopWindow:
 
         self.root = tk.Tk()
         self.root.title(f"NotesBuddy Desktop Companion {COMPANION_VERSION}")
+        # Fixing the pystray tray icon earlier only covered the tray/
+        # taskbar-preview glyph -- the window's own title bar icon is a
+        # separate Tk setting that defaults to Tk's own feather logo on
+        # Windows until set explicitly here. Best-effort: a missing or
+        # unreadable icon file must not stop the window from opening.
+        try:
+            self.root.iconbitmap(str(bundled_icon_path("notesbuddy.ico")))
+        except (tk.TclError, OSError):
+            pass
         self.root.geometry("580x590")
         self.root.minsize(540, 550)
         self.root.protocol("WM_DELETE_WINDOW", self._close_window)
