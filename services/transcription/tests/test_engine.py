@@ -272,6 +272,18 @@ class BundledModelConfigurationTests(unittest.TestCase):
         # -- mirrors analysis-cuda's own separate-destination fix for the
         # same reason: a wholesale directory-swap install would otherwise
         # delete the shared model the moment the GPU worker is installed.
+        #
+        # speaker_worker is re-resolved from the environment on every
+        # access (not cached at construction) -- this engine is a
+        # long-lived singleton for the whole server process, so caching it
+        # in __init__ would mean an install after the companion started
+        # could never take effect without a restart. Confirmed live
+        # (2026-09-05): installing speaker-diarization-cuda through the
+        # real companion API while it was already running did not change
+        # diarizationDevice until this was fixed. The assertion must
+        # therefore stay inside the patched-environment scope, matching
+        # real usage (env vars set once at process startup and left
+        # standing) rather than construct-then-inspect-after-reverting.
         with tempfile.TemporaryDirectory() as directory:
             cpu_worker = Path(directory) / "cpu" / "NotesBuddySpeakerWorker.exe"
             gpu_worker = Path(directory) / "gpu" / "NotesBuddySpeakerWorkerGPU.exe"
@@ -284,7 +296,7 @@ class BundledModelConfigurationTests(unittest.TestCase):
                 "NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker),
             }):
                 engine = LocalDiarizationEngine(device="cpu")
-            self.assertEqual(engine.speaker_worker, gpu_worker)
+                self.assertEqual(engine.speaker_worker, gpu_worker)
 
     def test_falls_back_to_the_cpu_speaker_worker_without_a_gpu_install(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -298,7 +310,29 @@ class BundledModelConfigurationTests(unittest.TestCase):
                 ),
             }):
                 engine = LocalDiarizationEngine(device="cpu")
-            self.assertEqual(engine.speaker_worker, cpu_worker)
+                self.assertEqual(engine.speaker_worker, cpu_worker)
+
+    def test_speaker_worker_install_after_construction_is_picked_up_without_restart(
+        self,
+    ) -> None:
+        # The scenario that motivated the property redesign: an engine
+        # constructed before the GPU component was installed must still
+        # pick it up on the very next diarization call.
+        with tempfile.TemporaryDirectory() as directory:
+            cpu_worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
+            cpu_worker.touch()
+            with patch.dict(
+                "os.environ", {"NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker)}
+            ):
+                engine = LocalDiarizationEngine(device="cpu")
+                self.assertEqual(engine.speaker_worker, cpu_worker)
+
+                gpu_worker = Path(directory) / "NotesBuddySpeakerWorkerGPU.exe"
+                gpu_worker.touch()
+                with patch.dict(
+                    "os.environ", {"NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker)}
+                ):
+                    self.assertEqual(engine.speaker_worker, gpu_worker)
 
     def test_reports_gpu_diarization_device_when_gpu_worker_is_configured(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -308,8 +342,8 @@ class BundledModelConfigurationTests(unittest.TestCase):
                 "os.environ", {"NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker)}
             ):
                 engine = LocalDiarizationEngine(device="cpu")
-            status = engine.configuration_status()
-            self.assertEqual(status["diarizationDevice"], "cuda")
+                status = engine.configuration_status()
+                self.assertEqual(status["diarizationDevice"], "cuda")
 
     def test_reports_cpu_diarization_device_when_only_cpu_worker_is_configured(
         self,

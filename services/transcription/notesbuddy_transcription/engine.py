@@ -199,15 +199,15 @@ class LocalDiarizationEngine:
             "HF_TOKEN",
             "",
         )
-        # The optional speaker-diarization-cuda component installs into its
-        # own directory (see components.py's configure_component_environment)
-        # so its install can never wholesale-replace the directory the
-        # shared pyannote model lives in. Prefer it when present.
-        gpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER_GPU", "").strip()
-        cpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip()
-        self._speaker_worker_is_gpu = bool(gpu_worker and Path(gpu_worker).is_file())
-        worker_path = gpu_worker if self._speaker_worker_is_gpu else cpu_worker
-        self.speaker_worker = Path(worker_path) if worker_path else None
+        # speaker_worker is a property (below), not resolved here: this
+        # engine is a long-lived singleton for the whole server process
+        # (see server.py's create_app, constructed once at startup), so
+        # resolving it once in __init__ would mean a speaker-diarization-cuda
+        # install after the companion started could never take effect
+        # without a full restart -- confirmed live (2026-09-05), the exact
+        # gap LocalAnalysisRouter._analyzer() already avoided by re-resolving
+        # its own GPU runtime on every call instead of caching it.
+        self._speaker_worker_override: Path | None = None
         self._whisper = None
         self._diarization = None
         self._load_lock = threading.Lock()
@@ -221,6 +221,32 @@ class LocalDiarizationEngine:
         # tick on contention, so a live caption never queues behind a
         # multi-minute diarization job.
         self._inference_lock = threading.Lock()
+
+    @property
+    def speaker_worker(self) -> Path | None:
+        """The isolated diarization subprocess to use, re-resolved from the
+        environment on every access rather than cached -- see __init__'s
+        comment for why. `speaker_worker = ...` (used throughout the test
+        suite to inject a fake worker path) stores an explicit override that
+        takes precedence over environment re-resolution.
+        """
+        if self._speaker_worker_override is not None:
+            return self._speaker_worker_override
+        gpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER_GPU", "").strip()
+        if gpu_worker and Path(gpu_worker).is_file():
+            return Path(gpu_worker)
+        cpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip()
+        return Path(cpu_worker) if cpu_worker else None
+
+    @speaker_worker.setter
+    def speaker_worker(self, value: Path | None) -> None:
+        self._speaker_worker_override = value
+
+    @property
+    def _speaker_worker_is_gpu(self) -> bool:
+        gpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER_GPU", "").strip()
+        worker = self.speaker_worker
+        return bool(gpu_worker and worker is not None and str(worker) == str(Path(gpu_worker)))
 
     def _fallback_to_cpu(self, error: BaseException, phase: str) -> None:
         self._whisper = None
