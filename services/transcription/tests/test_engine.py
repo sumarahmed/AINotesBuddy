@@ -430,7 +430,14 @@ class LocalEngineAdapterTests(unittest.TestCase):
             )
         )
         fake_torch = SimpleNamespace(
-            from_numpy=lambda samples: {"source": samples.source}
+            from_numpy=lambda samples: {"source": samples.source},
+            # This fixture's engine.device resolves via local_accelerator()
+            # against whatever hardware actually runs the test -- CPU-only
+            # CI runners take the CPU-thread-tuning branch here that a
+            # GPU-equipped dev machine skips, so both must be present
+            # regardless of which branch a given machine happens to take.
+            set_num_threads=lambda _n: None,
+            set_num_interop_threads=lambda _n: None,
         )
         with patch.dict(
             "sys.modules",
