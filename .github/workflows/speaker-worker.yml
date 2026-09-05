@@ -62,9 +62,15 @@ jobs:
           # pinned to whatever bare version requirements-models.txt's
           # pyannote.audio pin already resolved to above (not hardcoded,
           # since that resolution can drift as the pin changes over time).
+          # --force-reinstall is required: PEP 440 local-version matching
+          # means pip treats an installed "2.14.0+cpu" as already
+          # satisfying a bare "torch==2.14.0" request, so without it pip
+          # silently no-ops instead of fetching from the CUDA index at all
+          # -- confirmed live (2026-09-05), a real CI run reported "torch
+          # 2.14.0+cpu" after this step ran with no error.
           $torchVersion = python -c "import torch; print(torch.__version__.split('+')[0])"
           Write-Host "Reinstalling CUDA build of torch $torchVersion"
-          python -m pip install --no-deps --index-url https://download.pytorch.org/whl/cu126 "torch==$torchVersion"
+          python -m pip install --no-deps --force-reinstall --index-url https://download.pytorch.org/whl/cu126 "torch==$torchVersion"
 
       - name: Verify torch build
         shell: pwsh
