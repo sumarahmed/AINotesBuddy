@@ -443,6 +443,7 @@ function createEmptyCaptureRuntime() {
     pausedAtMonotonic: null,
     meetingActivitySpans: [],
     meetingActivityLastDetectedAtMs: null,
+    lastLiveTranscriptMarkup: null,
   };
 }
 
@@ -1001,8 +1002,26 @@ function updateCaptureRuntimeUI({ transcript = false } = {}) {
   if (transcript) {
     const container = app.querySelector("[data-live-transcript]");
     if (container) {
-      container.innerHTML = liveTranscriptMarkup(state.capture);
-      container.scrollTop = container.scrollHeight;
+      // The status poll driving this runs every 500ms, far more often than
+      // the underlying data actually changes (partial captions refresh on
+      // a ~5s server-side interval) -- replacing innerHTML and forcing
+      // scrollTop on every one of those ticks reset the reader's scroll
+      // position and read as constant flicker/reloading even when nothing
+      // new had arrived. Skip the update entirely when the markup is
+      // unchanged, and only auto-scroll-to-bottom when the reader was
+      // already near the bottom, so scrolling up to read earlier text is
+      // no longer fought every half second.
+      const nextMarkup = liveTranscriptMarkup(state.capture);
+      if (nextMarkup !== captureRuntime.lastLiveTranscriptMarkup) {
+        const wasNearBottom =
+          container.scrollHeight - container.scrollTop - container.clientHeight <
+          48;
+        captureRuntime.lastLiveTranscriptMarkup = nextMarkup;
+        container.innerHTML = nextMarkup;
+        if (wasNearBottom) {
+          container.scrollTop = container.scrollHeight;
+        }
+      }
     }
   }
 }
