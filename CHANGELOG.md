@@ -8,6 +8,47 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Fixed
+
+- Three real bugs caught during the live rollout of the GPU speaker
+  recognition component below, none of them by local testing:
+  - The `speaker-worker.yml` CI job's CUDA-torch reinstall silently no-op'd
+    -- pip treats an installed `torch==2.14.0+cpu` as already satisfying a
+    bare `torch==2.14.0` request (PEP 440 local-version matching ignores
+    the `+cpu` suffix for `==` without one), so the GPU build's own
+    self-test correctly still reported `+cpu` with no error at all until
+    `--force-reinstall` was added.
+  - The packaged component archive came out at 2.58 GiB using the default
+    Deflate compression -- over GitHub's real 2 GiB release-asset limit,
+    caught by an actual failed upload, not assumed from the limit alone.
+    Switched to `ZIP_LZMA` (the same fix `nvidia-cuda12` already needed for
+    the same reason), bringing it to 1.66 GiB.
+  - `LocalDiarizationEngine.speaker_worker` was resolved once in `__init__`
+    and cached -- harmless for the CPU/GPU choice made at companion
+    startup, but this engine is a long-lived singleton for the whole server
+    process, so installing `speaker-diarization-cuda` *while the companion
+    was already running* (exactly the real install flow) left
+    `diarizationDevice` reporting `cpu` until a full restart. Now a
+    property that re-resolves from the environment on every access,
+    matching the pattern `LocalAnalysisRouter._analyzer()` already used for
+    the identical `analysis-cuda` scenario.
+
+  A fourth issue was a test gap, not a shipped bug: `test_engine.py`'s
+  shared fake-torch fixture only had `from_numpy()`, so any test resolving
+  to `device="cpu"` hit the new CPU thread-tuning call and failed with
+  `AttributeError` -- invisible on this GPU-equipped dev machine (`device`
+  always resolved to `"cuda"` here, skipping that branch entirely) and
+  caught for real only on CI's GPU-less runner.
+
+  End-to-end verification after all four fixes, against the real installed
+  companion: installed `speaker-diarization-cuda` through the live
+  component-install API while the companion was running, then submitted a
+  real ~24 minute meeting recording through `/v1/transcriptions`.
+  `nvidia-smi` showed GPU utilization hit 100% specifically during the
+  "identifying meeting speakers" stage; the job completed in ~97 seconds
+  total (transcription + diarization) and correctly identified 5 distinct
+  speakers.
+
 ### Added
 
 - Optional **GPU acceleration for speaker recognition** component
