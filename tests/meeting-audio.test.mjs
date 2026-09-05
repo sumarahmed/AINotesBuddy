@@ -939,6 +939,68 @@ test("analysis client sends transcript JSON without recording assets", async () 
   });
 });
 
+test("analysis client includes a custom system prompt only when one is given", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { schemaVersion: 1, shortSummary: "Done.", summarySourceSegmentIds: [], highlights: [], decisions: [], actionItems: [] };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    token: "pairing-secret",
+    fetchImpl,
+  });
+  const segments = [{ id: "segment-one", text: "We confirmed the scope." }];
+
+  await client.analyzeTranscript({ meetingTitle: "Scope review", segments });
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    meetingTitle: "Scope review",
+    segments,
+  });
+
+  await client.analyzeTranscript({
+    meetingTitle: "Scope review",
+    segments,
+    systemPrompt: "Focus only on action items.",
+  });
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    meetingTitle: "Scope review",
+    segments,
+    systemPrompt: "Focus only on action items.",
+  });
+});
+
+test("analysis client fetches the real default system prompt from the companion", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { systemPrompt: "You are an expert meeting analyst.", promptVersion: 4 };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    token: "pairing-secret",
+    fetchImpl,
+  });
+
+  const result = await client.getAnalysisPrompt();
+
+  assert.equal(calls[0].url, "http://127.0.0.1:8765/v1/analyses/prompt");
+  assert.equal(result.systemPrompt, "You are an expert meeting analyst.");
+  assert.equal(result.promptVersion, 4);
+});
+
 test("analysis client polls a progress token concurrently and stops after completion", async () => {
   // POST /v1/analyses has no separate job to poll for a result, so this is
   // the only way a caller learns anything during a real chunked local

@@ -10,6 +10,47 @@ remain compatible with semantic-version tooling.
 
 ### Added
 
+- Two more findings from the diarization CPU-boundedness investigation
+  above, both surfaced by trying to compare Balanced vs. High quality
+  output on the same real transcript:
+  - **A persistent smart-summary quality switcher in Settings.** The tier
+    picker previously only existed in the one-time first-setup dialog and
+    disappeared for good the moment a tier was installed -- there was no
+    way to change it afterward short of calling the component-install API
+    directly, which is exactly what comparing tiers required. Both the
+    dialog and the new switcher now share one `ANALYSIS_TIER_OPTIONS` list
+    rather than duplicating the id/label pairs.
+  - **An editable analysis prompt in Settings ("Analysis prompt
+    (advanced)")**, with a new local-only `GET /v1/analyses/prompt` so the
+    field shows the real current default rather than a second hardcoded
+    copy in `app.js` that could drift out of sync with it. Edit it, then
+    use the existing "Refresh from transcript" action to re-run analysis
+    with it. `POST /v1/analyses` accepts an optional `systemPrompt`
+    threaded down to the actual `llama-cli` `-sys` argument; the
+    `--json-schema-file` grammar constraint still enforces the output
+    shape regardless of prompt content, so a bad custom prompt degrades
+    analysis quality rather than breaking the app. Deliberately never
+    honored by the hosted service -- a shared, rate-limited deployment
+    accepting arbitrary caller-supplied system prompts is a real
+    abuse/cost vector a single local companion is not.
+
+  Comparing tiers on the same real transcript (a 48-second recording with
+  two action items phrased as requests: "Mark, can you complete the
+  documentation?" / "Ahmed, can you send an email?") answered the actual
+  question that motivated both features: Balanced (1.7B) produced zero
+  action items despite a correct prose summary; High quality (4B) caught
+  one of the two. A second worked example was added to the shared prompt
+  (bumped to version 4) specifically covering a request phrased as a
+  question rather than a first-person "I will" statement -- the pattern
+  the existing single example didn't cover. Tracing *why* the retry still
+  produced zero on Balanced even with the improved prompt found that its
+  retry attempt generated section-header-like text ("Action Items
+  Assigned") instead of real content, which the evidence-grounding check
+  correctly rejected as ungrounded. That check is working as designed, not
+  a bug to loosen: this is a genuine small-model capability ceiling on
+  short, terse transcripts, not something the prompt alone fixes -- which
+  is exactly why the tier switcher above matters for anyone who hits it.
+
 - Applying the unified icon (above) turned out to need two more follow-up
   spots, each reported live from a screenshot after the first round shipped:
   the companion window's own title bar (Tk defaults to its own feather logo

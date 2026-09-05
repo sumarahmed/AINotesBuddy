@@ -37,7 +37,7 @@ def _field_counts(source: object) -> str:
 
 
 ANALYSIS_SCHEMA_VERSION = 1
-ANALYSIS_PROMPT_VERSION = 3
+ANALYSIS_PROMPT_VERSION = 4
 NOT_SPECIFIED = "Not specified"
 PRIORITIES = {"High", "Medium", "Low"}
 GROUNDING_STOP_WORDS = {
@@ -185,6 +185,14 @@ Example of an exchange and its correct extraction:
 ->
 "decisions": [{"decision": "Move the launch date to March 10th.", "context": "QA needs more time.", "owner": "Not specified", "evidenceSegmentIds": ["S0012"]}]
 "actionItems": [{"task": "Send the updated budget spreadsheet to the team.", "owner": "Priya Shah", "dueDate": "Friday", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0013"]}]
+
+A task is just as often assigned as a request or question directed at someone by name, not only as that person's own first-person statement. Treat the request itself as the action item once it is acknowledged or left unchallenged, even with no formal "I will" from the person taking it on:
+[S0020 | 00:05 | Alex Kim] Mark, can you finish the client documentation this week?
+[S0021 | 00:07 | Mark Diaz] Sure, I'll take care of it.
+[S0022 | 00:09 | Alex Kim] And Priya, can you send the contract over to legal?
+[S0023 | 00:10 | Priya Shah] Yep.
+->
+"actionItems": [{"task": "Finish the client documentation.", "owner": "Mark Diaz", "dueDate": "This week", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0020", "S0021"]}, {"task": "Send the contract to legal.", "owner": "Priya Shah", "dueDate": "Not specified", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0022", "S0023"]}]
 
 Every summary and list item must cite one or more transcript segment IDs that directly support it. If no confirmed decisions exist, return an empty decisions array. If no action items exist, return an empty actionItems array.
 
@@ -1366,7 +1374,13 @@ class LlamaCppMeetingAnalyzer:
             chunks.append(current)
         return chunks
 
-    def _generate(self, prompt: str, *, output_tokens: int | None = None) -> dict[str, Any]:
+    def _generate(
+        self,
+        prompt: str,
+        *,
+        output_tokens: int | None = None,
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
         if not self.runtime_path.is_file() or not self.model_path.is_file():
             raise MeetingAnalysisUnavailable(
                 "Install the Smart summary component before generating professional analysis."
@@ -1387,7 +1401,7 @@ class LlamaCppMeetingAnalyzer:
             gpu_layers = self._gpu_layers()
             base_command = [
                 str(self.runtime_path), "--model", str(self.model_path),
-                "-sys", SYSTEM_PROMPT,
+                "-sys", system_prompt or SYSTEM_PROMPT,
                 "--file", str(prompt_path), "--json-schema-file", str(schema_path),
                 "--ctx-size", str(self.context_tokens), "--predict", str(output_tokens),
                 "--threads", str(max(1, (os.cpu_count() or 4) - 1)),
@@ -1479,10 +1493,14 @@ class LlamaCppMeetingAnalyzer:
             raise
 
     def _generate_and_normalise(
-        self, prompt: str, prepared: list[dict[str, Any]]
+        self,
+        prompt: str,
+        prepared: list[dict[str, Any]],
+        *,
+        system_prompt: str | None = None,
     ) -> dict[str, Any]:
         try:
-            raw = self._generate(prompt)
+            raw = self._generate(prompt, system_prompt=system_prompt)
         except MeetingAnalysisUnavailable as error:
             if "malformed json" not in str(error).lower():
                 raise
@@ -1494,7 +1512,9 @@ class LlamaCppMeetingAnalyzer:
             # advance, so retry once with more room rather than failing
             # a professional analysis outright over a budget guess.
             retry_tokens = min(8_192, self.output_tokens * 2)
-            raw = self._generate(prompt, output_tokens=retry_tokens)
+            raw = self._generate(
+                prompt, output_tokens=retry_tokens, system_prompt=system_prompt
+            )
         try:
             result = normalise_analysis(raw, prepared)
             _log_diagnostic(
@@ -1528,7 +1548,8 @@ class LlamaCppMeetingAnalyzer:
                     "summary. Still return every highlight, confirmed "
                     "decision, and action item you can find, exactly as "
                     "thoroughly as before -- only the summary needs to "
-                    "change."
+                    "change.",
+                    system_prompt=system_prompt,
                 )
                 # A real chunk's retry returned a summary describing a
                 # scheduled follow-up session and a to-be-sent document
@@ -1596,6 +1617,7 @@ class LlamaCppMeetingAnalyzer:
         segments: object,
         meeting_title: object = "",
         progress: Callable[[float, str], None] | None = None,
+        system_prompt: str | None = None,
     ) -> dict[str, Any]:
         def report(value: float, stage: str) -> None:
             if progress is not None:
@@ -1625,7 +1647,11 @@ class LlamaCppMeetingAnalyzer:
                 "do not copy long transcript passages. Use only these segment IDs as evidence.\n\n"
                 f"{self._transcript_text(chunk)}\n\nReturn the required JSON object."
             )
-            partials.append(self._generate_and_normalise(prompt, prepared))
+            partials.append(
+                self._generate_and_normalise(
+                    prompt, prepared, system_prompt=system_prompt
+                )
+            )
         report(0.95, "Combining results")
         merged = self._merge_partials(partials, prepared)
         report(1.0, "Completed")
@@ -1796,9 +1822,13 @@ class LocalAnalysisRouter:
         segments: object,
         meeting_title: object = "",
         progress: Callable[[float, str], None] | None = None,
+        system_prompt: str | None = None,
     ) -> dict[str, Any]:
         return self._analyzer().analyze(
-            segments=segments, meeting_title=meeting_title, progress=progress
+            segments=segments,
+            meeting_title=meeting_title,
+            progress=progress,
+            system_prompt=system_prompt,
         )
 
 

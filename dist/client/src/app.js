@@ -13,6 +13,14 @@ const BRAND = {
   mark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="2.5" y="12" width="4" height="7" rx="2"/><rect x="17.5" y="12" width="4" height="7" rx="2"/></svg>`,
 };
 const APP_VERSION = String(runtimeConfig.appVersion || "2026.08.18");
+// Shared by the one-time setup dialog and the persistent Settings switcher
+// below -- both need the same id/label pairs, filtered against whichever
+// tiers the paired companion's manifest actually offers.
+const ANALYSIS_TIER_OPTIONS = [
+  { id: "analysis-tiny", label: "Fast" },
+  { id: "analysis-standard", label: "Balanced" },
+  { id: "analysis-pro", label: "High quality" },
+];
 const SUMMARY_VERSION = 3;
 const MEETING_ACTIVITY_THRESHOLD = 0.008;
 const MEETING_ACTIVITY_LEAD_MS = 250;
@@ -334,6 +342,9 @@ const defaultSettings = {
   transcriptionToken: "",
   companionSetupCompleted: false,
   analysisModelTier: "analysis-standard",
+  // Empty means "use the companion's own built-in default" -- only ever
+  // non-empty once a user has actually edited it in Settings.
+  analysisSystemPrompt: "",
   theme: "system",
 };
 const initialSettings = {
@@ -1393,6 +1404,53 @@ function settingsPanel() {
         }
       </section>`
       : "";
+  // The tier picker in companionOnboarding() only renders before initial
+  // setup completes and disappears for good the moment a tier is
+  // installed -- there was no way to change it afterward short of calling
+  // the component-install API directly, confirmed live while trying to
+  // compare Balanced vs. High quality output on the same transcript.
+  const analysisTierSettings = (() => {
+    if (!hybridConnected || !state.companion.metadata?.analysisAvailable) {
+      return "";
+    }
+    const available = state.companion.metadata?.components?.components || {};
+    const tiers = ANALYSIS_TIER_OPTIONS.filter((tier) => available[tier.id]);
+    if (tiers.length < 2) return "";
+    const currentTierId = tiers.find((tier) => available[tier.id]?.installed)?.id || "";
+    return `<section class="settings-section">
+        <span class="eyebrow">Smart meeting summary quality</span>
+        <p class="settings-help">Switching downloads the selected model and replaces the one currently installed.</p>
+        <div class="component-options component-options--compact">
+          ${tiers
+            .map((tier) => {
+              const meta = available[tier.id] || {};
+              const size = formatBytes(Number(meta.downloadBytes || 0));
+              const description = meta.tierDescription || "";
+              const isCurrent = tier.id === currentTierId;
+              return `<button type="button" class="component-options__tier${isCurrent ? " component-options__tier--selected" : ""}" data-action="switch-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${analysisGpuInstalling || isCurrent ? "disabled" : ""} aria-pressed="${isCurrent}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong><span>${escapeHtml(description)}</span></button>`;
+            })
+            .join("")}
+        </div>
+      </section>`;
+  })();
+  const analysisPromptSettings =
+    hybridConnected && state.companion.metadata?.analysisAvailable
+      ? (() => {
+          const hasCustomPrompt = Boolean(state.settings.analysisSystemPrompt);
+          const shownPrompt =
+            state.settings.analysisSystemPrompt || defaultAnalysisPromptText;
+          return `<section class="settings-section">
+          <span class="eyebrow">Analysis prompt (advanced)</span>
+          <p class="settings-help">${hasCustomPrompt ? "Using your edited prompt." : "Using the built-in default shown below."} Edit it, then use Refresh from transcript on a meeting's summary to re-run analysis with it.</p>
+          ${
+            defaultAnalysisPromptFetched || hasCustomPrompt
+              ? `<textarea data-setting="analysisSystemPrompt" rows="8" spellcheck="false" aria-label="Analysis system prompt">${escapeHtml(shownPrompt)}</textarea>`
+              : `<p class="settings-help">Loading the current default…</p>`
+          }
+          ${hasCustomPrompt ? `<button type="button" class="button button--quiet" data-action="reset-analysis-prompt">${icon("refresh", 14)}Reset to default</button>` : ""}
+        </section>`;
+        })()
+      : "";
   const speakerGpuInstalling =
     state.componentJob &&
     ["queued", "downloading", "installing"].includes(state.componentJob.status);
@@ -1441,6 +1499,8 @@ function settingsPanel() {
       ${transcriptionSettings}
       ${speakerAccelerationSettings}
       ${analysisAccelerationSettings}
+      ${analysisTierSettings}
+      ${analysisPromptSettings}
       <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After speaker transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
@@ -1496,11 +1556,7 @@ function companionOnboarding() {
       ? " An NVIDIA acceleration pack will also be installed for this computer."
       : " This computer will use the CPU runtime.";
     const available = state.companion.metadata?.components?.components || {};
-    const analysisTiers = [
-      { id: "analysis-tiny", label: "Fast" },
-      { id: "analysis-standard", label: "Balanced" },
-      { id: "analysis-pro", label: "High quality" },
-    ].filter((tier) => available[tier.id]);
+    const analysisTiers = ANALYSIS_TIER_OPTIONS.filter((tier) => available[tier.id]);
     const selectedAnalysisTier =
       analysisTiers.find((tier) => tier.id === state.settings.analysisModelTier)?.id ||
       analysisTiers[1]?.id ||
@@ -1637,6 +1693,45 @@ async function installSpeakerGpuAcceleration() {
         : "Installed, but a compatible GPU was not detected; speaker recognition will keep using the CPU.",
     );
   });
+}
+
+async function switchAnalysisTier(tierId) {
+  state.settings.analysisModelTier = tierId;
+  const label = ANALYSIS_TIER_OPTIONS.find((tier) => tier.id === tierId)?.label || tierId;
+  await runComponentInstall([tierId], () => {
+    showToast(
+      "Smart summary quality updated",
+      `Meeting analysis now uses the ${label} model.`,
+    );
+  });
+}
+
+// Cached rather than fetched on every settingsPanel() render -- it only
+// changes when the companion itself updates, so one fetch per Settings
+// visit is enough. Empty until fetched; the panel shows a loading state
+// rather than guessing at placeholder text that could be wrong.
+let defaultAnalysisPromptText = "";
+let defaultAnalysisPromptFetched = false;
+
+async function refreshDefaultAnalysisPrompt() {
+  const connectedLocally =
+    usesHybridTranscription() &&
+    !usesHostedTranscription() &&
+    state.companion.status === "connected" &&
+    state.companion.metadata?.analysisAvailable;
+  if (defaultAnalysisPromptFetched || !connectedLocally) return;
+  try {
+    const result = await createTranscriptionClient({
+      mode: "local",
+    }).getAnalysisPrompt();
+    defaultAnalysisPromptText = String(result?.systemPrompt || "");
+    defaultAnalysisPromptFetched = true;
+    render();
+  } catch {
+    // Best-effort: Settings falls back to an empty textarea (still fully
+    // usable -- editing it and saving still overrides the real default,
+    // this only affects what's shown as the starting point to edit from).
+  }
 }
 
 async function pauseCompanionComponents() {
@@ -3298,6 +3393,10 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
   try {
     const result = await createMeetingAnalysisClient().analyzeTranscript({
       meetingTitle: meeting.title,
+      // Ignored server-side for the hosted service regardless (see
+      // server.py) -- safe to always pass whatever is saved without
+      // knowing here which client createMeetingAnalysisClient() picked.
+      systemPrompt: state.settings.analysisSystemPrompt || undefined,
       segments: meeting.transcript.map((segment) => ({
         id: segment.id,
         speaker: MeetingAudio.speakerLabel(
@@ -3760,6 +3859,7 @@ app.addEventListener("click", async (event) => {
   } else if (action === "settings") {
     state.settingsOpen = true;
     state.mobileNavOpen = false;
+    refreshDefaultAnalysisPrompt();
   } else if (action === "close-settings") {
     if (event.target.closest("[data-panel='settings']") && !event.target.closest("button")) {
       return;
@@ -3812,6 +3912,12 @@ app.addEventListener("click", async (event) => {
   } else if (action === "install-speaker-gpu") {
     await installSpeakerGpuAcceleration();
     return;
+  } else if (action === "switch-analysis-tier") {
+    await switchAnalysisTier(button.dataset.tier);
+    return;
+  } else if (action === "reset-analysis-prompt") {
+    state.settings.analysisSystemPrompt = "";
+    save();
   } else if (action === "pause-components") {
     await pauseCompanionComponents();
     return;

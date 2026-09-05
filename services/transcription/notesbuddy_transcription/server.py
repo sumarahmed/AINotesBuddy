@@ -39,6 +39,8 @@ from .access import (
     anonymise_client_key,
 )
 from .analysis import (
+    ANALYSIS_PROMPT_VERSION,
+    SYSTEM_PROMPT,
     MeetingAnalysisUnavailable,
     analyzer_from_environment,
 )
@@ -1014,11 +1016,25 @@ def create_app(
                 reservation_owned = True
             except SessionAccessError as error:
                 _raise_session_error(error)
+        # Local-only, opt-in power-user override: exposing the underlying
+        # llama.cpp prompt in Settings so it can be edited and re-applied
+        # via the existing "Refresh from transcript" action. Never honored
+        # for the hosted service -- a shared, rate-limited deployment
+        # accepting arbitrary caller-supplied system prompts is a real
+        # abuse/cost vector a single local companion is not. Capped well
+        # above any reasonable edited prompt's length purely as a sanity
+        # bound, not a meaningful restriction.
+        custom_system_prompt = str(payload.get("systemPrompt") or "").strip()[:20_000]
         try:
             result = active_analyzer.analyze(
                 segments=segments,
                 meeting_title=payload.get("meetingTitle"),
                 progress=report_progress,
+                **(
+                    {"system_prompt": custom_system_prompt or None}
+                    if not hosted
+                    else {}
+                ),
             )
         except MeetingAnalysisUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -1034,6 +1050,20 @@ def create_app(
                 analysis_progress.finish(progress_token)
         response.headers["Cache-Control"] = "no-store"
         return dict(result)
+
+    @app.get("/v1/analyses/prompt")
+    def get_analysis_prompt(
+        response: Response,
+        _owner_digest: str | None = Depends(require_access),
+    ) -> dict[str, Any]:
+        # Local-only, matching the systemPrompt override above: lets
+        # Settings show the real current default so an edited prompt is
+        # visibly a diff from it, without hardcoding a second copy of the
+        # prompt text in app.js that could silently drift out of sync.
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        response.headers["Cache-Control"] = "no-store"
+        return {"systemPrompt": SYSTEM_PROMPT, "promptVersion": ANALYSIS_PROMPT_VERSION}
 
     @app.get("/v1/analyses/progress/{token}")
     def get_analysis_progress(

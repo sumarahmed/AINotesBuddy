@@ -1327,6 +1327,7 @@
     analyzeTranscript({
       meetingTitle = "",
       segments = [],
+      systemPrompt = "",
       onProgress,
       progressIntervalMs = 1500,
     } = {}) {
@@ -1363,18 +1364,27 @@
         }
       };
       if (progressToken) pollLoop();
+      const body = { meetingTitle, segments };
+      if (systemPrompt) body.systemPrompt = systemPrompt;
+      if (progressToken) body.progressToken = progressToken;
       const request = this.request("/v1/analyses", {
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          progressToken ? { meetingTitle, segments, progressToken } : { meetingTitle, segments },
-        ),
+        body: JSON.stringify(body),
       });
       if (!progressToken) return request;
       return request.finally(() => {
         stopped = true;
       });
+    }
+
+    // Local companion only (404 on the hosted service, see server.py) --
+    // lets Settings show the real current default prompt so an edited one
+    // is visibly a diff from it, without a second hardcoded copy in app.js
+    // that could silently drift out of sync with the real one.
+    getAnalysisPrompt() {
+      return this.request("/v1/analyses/prompt");
     }
 
     getJob(jobId) {

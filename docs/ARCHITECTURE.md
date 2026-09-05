@@ -470,6 +470,17 @@ blocking call for compatibility with the hosted/Modal deployment. The browser
 client polls that endpoint on its own short interval while the main request
 is still in flight and stops once it resolves.
 
+`POST /v1/analyses` also accepts an optional `systemPrompt`, threaded down to
+the actual `-sys` argument passed to `llama-cli` in place of the built-in
+default -- the `--json-schema-file` grammar constraint still enforces the
+output shape regardless of prompt content, so a bad custom prompt degrades
+analysis quality rather than breaking the response contract. `GET
+/v1/analyses/prompt` returns the current built-in default so Settings can
+show a real diff rather than a second hardcoded copy. Both are local-only
+(404 on the hosted service): a shared, rate-limited deployment accepting
+arbitrary caller-supplied system prompts is a real abuse/cost vector a
+single local companion is not.
+
 ## Speaker model
 
 ```js

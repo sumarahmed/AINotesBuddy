@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notesbuddy_transcription.analysis import (  # noqa: E402
+    SYSTEM_PROMPT,
     ExtractiveMeetingAnalyzer,
     LlamaCppMeetingAnalyzer,
     LocalAnalysisRouter,
@@ -145,6 +146,51 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
             self.assertIn("--n-gpu-layers", first_command)
             self.assertNotIn("--n-gpu-layers", second_command)
             self.assertIn("shortSummary", result)
+
+    def test_custom_system_prompt_overrides_the_built_in_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(_MINIMAL_VALID_RESULT), "stderr": ""},
+            )()
+            custom_prompt = "Focus only on action items, ignore everything else."
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                return_value=completed,
+            ) as run:
+                analyzer.analyze(
+                    segments=_MINIMAL_SEGMENTS,
+                    meeting_title="Test",
+                    system_prompt=custom_prompt,
+                )
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index("-sys") + 1], custom_prompt)
+
+    def test_omitting_a_custom_system_prompt_uses_the_built_in_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(_MINIMAL_VALID_RESULT), "stderr": ""},
+            )()
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                return_value=completed,
+            ) as run:
+                analyzer.analyze(segments=_MINIMAL_SEGMENTS, meeting_title="Test")
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index("-sys") + 1], SYSTEM_PROMPT)
 
     def test_configuration_status_reports_device_and_accelerator(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
