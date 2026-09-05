@@ -125,8 +125,14 @@ ships for everyone and roughly halved diarization time on a real recording
 in testing. The optional **GPU acceleration for speaker recognition**
 component (`speaker-diarization-cuda`) ships alongside it: confirmed live
 on a real ~24 minute meeting, 11.8x faster than tuned CPU (62s vs. 731s)
-with identical speaker-turn output on both. See [`CHANGELOG.md`](../CHANGELOG.md)
-for the full list.
+with identical speaker-turn output on both. The same release also gives
+the website, the installer, the companion `.exe`, and its system tray icon
+one consistent icon (a teal roundel with an over-the-head headphone band)
+in place of several unrelated ad hoc glyphs, fixes a false "update
+available" notification for component-only releases, closes a stray
+companion window left open by a manual duplicate launch, and stops the
+live transcript panel from resetting scroll position during an active
+capture. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
 
 ## User flow
 

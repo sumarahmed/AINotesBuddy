@@ -7,6 +7,8 @@ await mkdir(resolve(output, "client", "src"), { recursive: true });
 await mkdir(resolve(output, "server"), { recursive: true });
 await mkdir(resolve(output, ".openai"), { recursive: true });
 await cp(resolve("index.html"), resolve(output, "client", "index.html"));
+await cp(resolve("favicon.svg"), resolve(output, "client", "favicon.svg"));
+await cp(resolve("favicon.ico"), resolve(output, "client", "favicon.ico"));
 await cp(
   resolve("src", "runtime-config.js"),
   resolve(output, "client", "src", "runtime-config.js"),

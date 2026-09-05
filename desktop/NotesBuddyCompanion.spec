@@ -15,6 +15,10 @@ datas = [
         str(project_root / "desktop" / "component-manifest.json"),
         ".",
     ),
+    (
+        str(project_root / "desktop" / "assets" / "notesbuddy.png"),
+        ".",
+    ),
 ]
 binaries = []
 hiddenimports = collect_submodules("uvicorn") + ["soundfile"]
@@ -73,6 +77,7 @@ executable = EXE(
     upx=False,
     console=False,
     disable_windowed_traceback=False,
+    icon=str(project_root / "desktop" / "assets" / "notesbuddy.ico"),
 )
 collection = COLLECT(
     executable,

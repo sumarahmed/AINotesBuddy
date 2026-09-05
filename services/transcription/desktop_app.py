@@ -95,12 +95,36 @@ def fetch_latest_companion_release(
             asset_url = candidate
             break
     return {
-        "available": is_version_outdated(COMPANION_VERSION, latest_version),
+        # GitHub's "latest release" is whichever release published most
+        # recently, regardless of what it contains -- this repo also
+        # publishes component-only releases (e.g. speaker-diarization-cuda)
+        # under the same companion-v* tag convention, with no installer at
+        # all. Reported live (2026-09-05): the companion notified "Update
+        # 2026.09.11 is available" for a release that was only a GPU
+        # component pack, because this compared version strings alone
+        # without checking an installer actually existed to download.
+        # meeting-audio.js's parseLatestCompanionRelease already gets this
+        # right (returns null without an installer asset); mirror that here.
+        "available": bool(asset_url)
+        and is_version_outdated(COMPANION_VERSION, latest_version),
         "currentVersion": COMPANION_VERSION,
         "latestVersion": latest_version,
         "releaseUrl": release_url,
         "downloadUrl": asset_url or release_url,
     }
+
+
+def bundled_icon_path() -> Path:
+    """Same lookup pattern as components.py's bundled_manifest_path():
+    the packaged build resolves bundled data files relative to
+    sys._MEIPASS, a source-tree run resolves them relative to this
+    repo's desktop/assets directory instead.
+    """
+
+    bundle_root = getattr(sys, "_MEIPASS", "")
+    if bundle_root:
+        return Path(bundle_root) / "notesbuddy.png"
+    return Path(__file__).parents[2] / "desktop" / "assets" / "notesbuddy.png"
 
 
 def companion_endpoint(port: int) -> str:
@@ -467,7 +491,7 @@ class DesktopWindow:
 
     def _show_server_result(self, result: str) -> None:
         if result == "started":
-            self.status.set("Connected — Windows audio capture is available")
+            self.status.set("Connected, Windows audio capture is available")
             self.detail.set(
                 "Keep this companion running. The website will connect "
                 "automatically without asking users for a token."
@@ -477,10 +501,18 @@ class DesktopWindow:
             self.status.set("A NotesBuddy companion is already running")
             self.detail.set(
                 "The existing loopback service will continue handling website "
-                "requests. Close it first if you want to restart this version."
+                "requests. This window will close automatically."
             )
-            if self.background:
-                self.root.after(250, self._quit)
+            # Only one server ever actually starts (the port-bind check
+            # above already guarantees that), but this window used to stay
+            # open indefinitely for a manual double-click launch --
+            # self.background was only true for a silent autostart launch,
+            # so a second manual launch looked like two companions running
+            # even though just one was ever functional. Always close it,
+            # after a delay long enough to actually read the message this
+            # time (a background launch has nobody watching, so it can
+            # still close almost immediately).
+            self.root.after(250 if self.background else 2500, self._quit)
             return
         self.status.set("Local service could not start")
         self.detail.set(self.server.error or "An unknown startup error occurred.")
@@ -635,14 +667,19 @@ class DesktopWindow:
     def _start_tray(self) -> None:
         try:
             import pystray
-            from PIL import Image, ImageDraw
+            from PIL import Image
         except ImportError:
             return
 
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((4, 4, 60, 60), radius=16, fill="#176f67")
-        draw.polygon(((25, 18), (25, 46), (47, 32)), fill="white")
+        # Same headphone roundel used for the installer, the compiled
+        # .exe's own icon, and the website favicon -- one consistent icon
+        # everywhere, rather than this tray icon's previous unrelated
+        # teal-square-with-play-triangle glyph drawn ad hoc via PIL
+        # primitives.
+        try:
+            image = Image.open(bundled_icon_path()).convert("RGBA")
+        except OSError:
+            image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         menu = pystray.Menu(
             pystray.MenuItem("Show companion", self._tray_show, default=True),
             pystray.MenuItem("Open NotesBuddy", self._tray_open),

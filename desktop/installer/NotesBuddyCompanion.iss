@@ -22,6 +22,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=..\assets\notesbuddy.ico
 CloseApplications=yes
 
 [Tasks]

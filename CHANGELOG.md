@@ -8,7 +8,52 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Added
+
+- One consistent icon everywhere: a teal roundel with an over-the-head
+  headphone band, replacing what were previously several unrelated glyphs
+  (the tray icon drew an ad hoc teal-square-with-play-triangle via PIL
+  primitives; the website had no favicon at all; the installer and the
+  companion `.exe` used Inno Setup's/PyInstaller's own defaults). Now a
+  single design renders to every surface from one generator script: the
+  website favicon (`favicon.svg`/`favicon.ico`), the Windows installer's
+  own icon (`SetupIconFile`), the compiled `NotesBuddyCompanion.exe`'s icon
+  (propagates automatically to its Start Menu/desktop shortcuts and the
+  uninstaller, all of which already pointed at the exe's own icon), and the
+  system tray icon (loaded from a bundled PNG instead of drawn ad hoc).
+
 ### Fixed
+
+- Removed every remaining em dash from user-facing product text (the
+  website's UI copy, page title, and meta description; the companion's
+  status text), replacing each with whichever of a comma, semicolon, or
+  parentheses fit the sentence.
+- The desktop companion's own update-check (`desktop_app.py`) reported an
+  update was available based on comparing version-tag strings alone, with
+  no check that the release it found actually contained an installer.
+  Reported live: a real notification for `2026.09.11`, a release that only
+  ever contained the speaker-diarization-cuda component pack (this repo
+  publishes component-only releases under the same `companion-v*` tag
+  convention as real installer releases, and GitHub's "latest release" is
+  simply whichever published most recently, regardless of content). The
+  website's own equivalent check (`parseLatestCompanionRelease` in
+  `meeting-audio.js`) already required finding an installer asset; the
+  companion's Python version now does too.
+- A second manual launch of the companion correctly never started a second
+  server (the existing port-bind check already prevented that), but the
+  window itself only closed automatically when detected during a silent
+  autostart launch, not a manual double-click -- reported live as "I can
+  open two companions at once," when in fact only one was ever functional.
+  Both cases now close the window automatically, with a longer delay for
+  the manual case so there is time to actually read why.
+- The live transcript panel reset the reader's scroll position to the
+  bottom roughly twice a second during an active capture, reported live as
+  the page feeling like it was constantly reloading. The panel's entire
+  contents were being replaced and force-scrolled on every tick of the
+  500ms companion status poll, even on the (usual) tick where nothing new
+  had arrived -- partial captions actually only refresh on a ~5s
+  server-side interval. Now skips the update entirely when nothing changed,
+  and only auto-scrolls when the reader was already near the bottom.
 
 - Three real bugs caught during the live rollout of the GPU speaker
   recognition component below, none of them by local testing:

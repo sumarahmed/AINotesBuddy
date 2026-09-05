@@ -982,7 +982,7 @@ function liveTranscriptMarkup(capture) {
   return `${capture.segments.map(transcriptRow).join("")}
     ${capture.interimTranscript ? `<div class="interim-transcript">${avatar(interimSpeaker.initials, interimSpeaker.color)}<div><div class="interim-transcript__speaker"><strong>${interimSpeaker.name}</strong>${interimSpeaker.provisional ? "<span>draft</span>" : ""}</div><p>${escapeHtml(capture.interimTranscript)}</p></div></div>` : ""}
     ${waitingForGuestWords ? `<div class="guest-speaking-state">${icon("audio", 18)}<span><strong>Guest speaking</strong><small>Matching meeting audio with incoming words…</small></span></div>` : ""}
-    ${capture.segments.length || capture.interimTranscript || waitingForGuestWords ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "Listening for you and meeting guests…" : "Listening for your voice…" : "Recording audio — live speech text is unavailable in this browser."}</div>`}`;
+    ${capture.segments.length || capture.interimTranscript || waitingForGuestWords ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "Listening for you and meeting guests…" : "Listening for your voice…" : "Recording audio; live speech text is unavailable in this browser."}</div>`}`;
 }
 
 function updateCaptureRuntimeUI({ transcript = false } = {}) {
@@ -1472,7 +1472,7 @@ function companionOnboarding() {
         <h1 id="companion-setup-title">Update the desktop companion</h1>
         <p>Version ${escapeHtml(state.companion.metadata?.version || "unknown")} is installed. NotesBuddy Companion ${escapeHtml(latestCompanionVersion)} is available with the latest recording and security fixes.</p>
         <a class="button button--primary companion-setup__primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 16)}Download update ${escapeHtml(latestCompanionVersion)}</a>
-        <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-update">I've updated it — check again</button>
+        <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-update">I've updated it, check again</button>
         <button type="button" class="companion-setup__defer" data-action="complete-companion-setup">Continue with installed version</button>
         <small class="companion-setup__note">${icon("shield", 13)}Quit the old companion before running the update if Windows asks.</small>
       </section>
@@ -1559,14 +1559,14 @@ function companionOnboarding() {
       ${brand()}
       <span class="eyebrow">Private speaker transcription</span>
       <h1 id="companion-setup-title">Install the Windows companion</h1>
-      <p>The small desktop app runs speech-to-text and speaker detection on this computer. You install it once—no Python, Hugging Face account, or token is required.</p>
+      <p>The small desktop app runs speech-to-text and speaker detection on this computer. You install it once; no Python, Hugging Face account, or token is required.</p>
       <ol class="companion-setup__steps">
         <li><span>1</span><div><strong>Download</strong><small>Download the current Windows installer directly.</small></div></li>
         <li><span>2</span><div><strong>Install and start</strong><small>Run the installer, then leave NotesBuddy Companion running in the notification area.</small></div></li>
         <li><span>3</span><div><strong>Confirm</strong><small>Return here, check the connection, and choose Allow if your browser asks for Local network access.</small></div></li>
       </ol>
       <a class="button button--primary companion-setup__primary" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 16)}Download Windows installer</a>
-      <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-setup" ${checking ? "disabled" : ""}>${checking ? "Checking connection…" : "I've installed it — check connection"}</button>
+      <button type="button" class="button button--quiet companion-setup__check" data-action="check-companion-setup" ${checking ? "disabled" : ""}>${checking ? "Checking connection…" : "I've installed it, check connection"}</button>
       <div class="companion-setup__status companion-setup__status--${checking ? "checking" : "waiting"}" aria-live="polite"><i></i>${escapeHtml(statusMessage)}</div>
       ${runtimeHostedTranscriptionEndpoint ? `<button type="button" class="companion-setup__defer" data-action="defer-companion-setup">Use online transcription for now</button>` : ""}
       <small class="companion-setup__note">${icon("lock", 13)}Windows 10/11 · Per-user installation · No administrator access required</small>
@@ -1618,7 +1618,7 @@ async function installAnalysisGpuAcceleration() {
       "GPU acceleration ready",
       health.analysisGpuAvailable
         ? `Smart meeting summary now uses ${health.analysisAccelerator || "your GPU"}.`
-        : "Installed, but a compatible GPU was not detected — smart meeting summary will keep using the CPU.",
+        : "Installed, but a compatible GPU was not detected; smart meeting summary will keep using the CPU.",
     );
   });
 }
@@ -1629,7 +1629,7 @@ async function installSpeakerGpuAcceleration() {
       "GPU acceleration ready",
       health.diarizationGpuAvailable
         ? "Speaker recognition now uses your GPU."
-        : "Installed, but a compatible GPU was not detected — speaker recognition will keep using the CPU.",
+        : "Installed, but a compatible GPU was not detected; speaker recognition will keep using the CPU.",
     );
   });
 }
