@@ -132,7 +132,7 @@ MODELS = (
 COMPONENT_IDS = (
     tuple(item[0] for item in MODELS)
     + tuple(ANALYSIS_TIERS_BY_ID)
-    + ("nvidia-cuda12", "analysis-cuda")
+    + ("nvidia-cuda12", "analysis-cuda", "speaker-diarization-cuda")
 )
 
 
@@ -411,6 +411,50 @@ def _prepare_analysis_cuda_component(work: Path, output: Path, version: str) -> 
     )
 
 
+def _prepare_speaker_cuda_component(
+    output: Path, version: str, speaker_runtime_gpu: Path
+) -> tuple[str, dict]:
+    """CUDA-capable speaker worker, opt-in and separate from the CPU one.
+
+    Confirmed live (2026-09-05) on a real ~24 minute meeting recording:
+    diarization ran 11.8x faster on GPU than on CPU with the thread-tuning
+    fix, with identical speaker-turn output on both -- pyannote's clustering
+    stage does not stay CPU-bound the way it might have.
+
+    Ships no pyannote model of its own -- speaker_worker.py resolves
+    NOTESBUDDY_DIARIZATION_MODEL the same way regardless of which worker
+    binary runs, and that always points at the shared "speaker" destination
+    the base speaker-diarization component installs. Deliberately uses its
+    own destination ("speaker-gpu"), NOT that shared one: component
+    installation is a wholesale directory swap (components.py's
+    _install_one), and analysis-cuda already hit exactly this bug once by
+    sharing a destination with a component that has a model file of its own
+    to preserve. LocalDiarizationEngine prefers this separate worker, when
+    present, over the CPU-only one; the shared model directory is
+    untouched either way.
+
+    speaker_runtime_gpu is a pre-built PyInstaller dist directory (same
+    speaker_worker.py entry point as the CPU build, built from a venv with
+    a CUDA-enabled torch/torchaudio instead) -- this function only packages
+    it, the same way the CPU speaker-diarization component's runtime is
+    supplied pre-built via --speaker-runtime in main() below.
+    """
+
+    component_id = "speaker-diarization-cuda"
+    if not speaker_runtime_gpu.is_dir():
+        raise RuntimeError("The packaged GPU speaker worker runtime is missing.")
+    archive = output / f"NotesBuddy-{component_id}-{version}.zip"
+    _zip_directory(speaker_runtime_gpu, archive)
+    return _asset(
+        component_id,
+        "GPU acceleration for speaker recognition",
+        version,
+        "speaker-gpu",
+        "speaker",
+        archive,
+    )
+
+
 def _existing_components(manifest_path: Path) -> dict[str, dict]:
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -430,6 +474,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent / "components-release")
     parser.add_argument("--gpu-libs", type=Path, default=Path(__file__).resolve().parent / "gpu-libs")
     parser.add_argument("--speaker-runtime", type=Path, default=Path(__file__).resolve().parent / "out-speaker" / "dist" / "NotesBuddySpeakerWorker")
+    parser.add_argument("--speaker-runtime-gpu", type=Path, default=Path(__file__).resolve().parent / "out-speaker-gpu" / "dist" / "NotesBuddySpeakerWorkerGPU")
     parser.add_argument("--manifest", type=Path, default=Path(__file__).resolve().parent / "component-manifest.json")
     parser.add_argument(
         "--component",
@@ -509,6 +554,11 @@ def main() -> int:
         components[key] = value
     if "analysis-cuda" in selected:
         key, value = _prepare_analysis_cuda_component(work, output, arguments.version)
+        components[key] = value
+    if "speaker-diarization-cuda" in selected:
+        key, value = _prepare_speaker_cuda_component(
+            output, arguments.version, arguments.speaker_runtime_gpu
+        )
         components[key] = value
     manifest = {"schemaVersion": 1, "releaseVersion": arguments.version, "components": components}
     arguments.manifest.parent.mkdir(parents=True, exist_ok=True)

@@ -1369,6 +1369,25 @@ function settingsPanel() {
         }
       </section>`
       : "";
+  const speakerGpuInstalling =
+    state.componentJob &&
+    ["queued", "downloading", "installing"].includes(state.componentJob.status);
+  const speakerAccelerationSettings =
+    hybridConnected && state.companion.metadata?.systemAudioCapture
+      ? `<section class="settings-section">
+        <span class="eyebrow">Speaker recognition speed</span>
+        <p class="settings-help">Using ${state.companion.metadata?.diarizationGpuAvailable ? "your GPU" : "local CPU"} to identify speakers.${
+          state.companion.metadata?.gpuAvailable && !state.companion.metadata?.diarizationGpuAvailable
+            ? " A compatible GPU is already accelerating transcription; installing one more component lets it accelerate speaker recognition too."
+            : ""
+        }</p>
+        ${
+          state.companion.metadata?.gpuAvailable && !state.companion.metadata?.diarizationGpuAvailable
+            ? `<button type="button" class="button button--quiet" data-action="install-speaker-gpu" ${speakerGpuInstalling ? "disabled" : ""}>${icon("sparkles", 14)}Enable GPU acceleration</button>`
+            : ""
+        }
+      </section>`
+      : "";
   const autoTranscribeDescription = hosted
     ? "Send saved source tracks to the public transcription service after capture."
     : hybrid
@@ -1396,6 +1415,7 @@ function settingsPanel() {
         <p class="settings-help">System follows your device's own light/dark setting.</p>
       </section>
       ${transcriptionSettings}
+      ${speakerAccelerationSettings}
       ${analysisAccelerationSettings}
       <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After speaker transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
@@ -1564,7 +1584,9 @@ async function installCompanionComponents(preset) {
     preset === "base" ? "whisper-base" : "whisper-small",
     "speaker-diarization",
     state.settings.analysisModelTier || "analysis-standard",
-    ...(state.companion.metadata?.gpuAvailable ? ["nvidia-cuda12", "analysis-cuda"] : []),
+    ...(state.companion.metadata?.gpuAvailable
+      ? ["nvidia-cuda12", "analysis-cuda", "speaker-diarization-cuda"]
+      : []),
   ];
   await runComponentInstall(requested, (health) => {
     showToast("Local AI components ready", `${health.accelerator || "Local processing"} is ready for transcription and smart meeting analysis.`);
@@ -1578,6 +1600,17 @@ async function installAnalysisGpuAcceleration() {
       health.analysisGpuAvailable
         ? `Smart meeting summary now uses ${health.analysisAccelerator || "your GPU"}.`
         : "Installed, but a compatible GPU was not detected — smart meeting summary will keep using the CPU.",
+    );
+  });
+}
+
+async function installSpeakerGpuAcceleration() {
+  await runComponentInstall(["speaker-diarization-cuda"], (health) => {
+    showToast(
+      "GPU acceleration ready",
+      health.diarizationGpuAvailable
+        ? "Speaker recognition now uses your GPU."
+        : "Installed, but a compatible GPU was not detected — speaker recognition will keep using the CPU.",
     );
   });
 }
@@ -3751,6 +3784,9 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "install-analysis-gpu") {
     await installAnalysisGpuAcceleration();
+    return;
+  } else if (action === "install-speaker-gpu") {
+    await installSpeakerGpuAcceleration();
     return;
   } else if (action === "pause-components") {
     await pauseCompanionComponents();

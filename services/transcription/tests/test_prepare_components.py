@@ -189,6 +189,42 @@ class PrepareComponentsTests(unittest.TestCase):
                 provenance["cudaRuntimeRedistributable"]["extractedFile"], "cudart64_12.dll"
             )
 
+    def test_speaker_cuda_pack_zips_the_prebuilt_gpu_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            speaker_runtime_gpu = root / "NotesBuddySpeakerWorkerGPU"
+            speaker_runtime_gpu.mkdir()
+            (speaker_runtime_gpu / "NotesBuddySpeakerWorkerGPU.exe").write_bytes(b"exe")
+            (speaker_runtime_gpu / "torch_cuda.dll").write_bytes(b"cuda torch")
+            output = root / "output"
+            output.mkdir()
+
+            component_id, metadata = prepare_components._prepare_speaker_cuda_component(
+                output, "test-version", speaker_runtime_gpu
+            )
+
+            component_archive = output / "NotesBuddy-speaker-diarization-cuda-test-version.zip"
+            with zipfile.ZipFile(component_archive) as archive:
+                names = set(archive.namelist())
+
+            self.assertEqual(component_id, "speaker-diarization-cuda")
+            # Deliberately its own destination, not the base component's
+            # shared "speaker" one -- sharing it would let this runtime-only
+            # package's wholesale-replace install delete the pyannote model.
+            self.assertEqual(metadata["destination"], "speaker-gpu")
+            self.assertIn("NotesBuddySpeakerWorkerGPU.exe", names)
+            self.assertIn("torch_cuda.dll", names)
+
+    def test_speaker_cuda_pack_requires_the_runtime_directory_to_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "GPU speaker worker runtime is missing"):
+                prepare_components._prepare_speaker_cuda_component(
+                    output, "test-version", root / "missing"
+                )
+
     def test_nvidia_pack_folds_in_cudart_without_mutating_input_directory(self) -> None:
         cudart = io.BytesIO()
         with zipfile.ZipFile(cudart, "w") as archive:

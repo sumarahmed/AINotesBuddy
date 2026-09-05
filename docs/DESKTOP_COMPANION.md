@@ -115,7 +115,18 @@ ran on CPU (the bundled `llama.cpp` runtime had no CUDA backend compiled in
 at all), confirmed structural by downloading and inspecting llama.cpp's own
 official CUDA build for the same pinned release before adding it as a new
 component. Settings offers it once a compatible GPU is already accelerating
-transcription. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
+transcription. A later release adds the same kind of GPU option for speaker
+recognition: diarization was found to be entirely CPU-bound (a real ~1 hour
+meeting took roughly an hour, and both the main companion's and the
+isolated `NotesBuddySpeakerWorker.exe` subprocess's own bundled PyTorch
+builds have no CUDA support at all). The free half of that fix -- explicit
+CPU thread-pool configuration, previously left at PyTorch's own default --
+ships for everyone and roughly halved diarization time on a real recording
+in testing. The optional **GPU acceleration for speaker recognition**
+component (`speaker-diarization-cuda`) ships alongside it: confirmed live
+on a real ~24 minute meeting, 11.8x faster than tuned CPU (62s vs. 731s)
+with identical speaker-turn output on both. See [`CHANGELOG.md`](../CHANGELOG.md)
+for the full list.
 
 ## User flow
 
@@ -195,6 +206,13 @@ Public releases provide independent reusable assets for:
   Ships no model weights of its own; a quality tier must already be
   installed. Switching tiers afterward does not affect it, since the two
   live in separate directories.
+- `speaker-diarization-cuda`, an optional CUDA-enabled build of the same
+  speaker worker (`NotesBuddySpeakerWorkerGPU.exe`), installed into its own
+  `speaker-gpu` folder rather than the base component's shared `speaker`
+  one -- for the same wholesale-directory-swap reason as `analysis-cuda`
+  above. Ships no pyannote model of its own; the base `speaker-diarization`
+  component must already be installed for its model to be there. Moves the
+  pipeline to `cuda` automatically at runtime when available.
 
 The publisher—not each customer—accepts the gated model conditions and uses a
 read-only `HF_TOKEN` only when intentionally preparing a new component release.
@@ -238,6 +256,24 @@ The builder verifies the pinned model and runtime hashes, packages only
 and records provenance inside the component ZIP. Publish the generated ZIP to
 the matching `companion-v<version>` release before committing the generated
 manifest entry; the release workflow rejects missing or altered public assets.
+
+Run **Speaker worker components** from the Actions tab to build both the CPU
+(`NotesBuddySpeakerWorker`) and GPU (`NotesBuddySpeakerWorkerGPU`) speaker
+worker executables -- neither is built by the core installer workflow above.
+Download both artifacts, then package them:
+
+```powershell
+python desktop/prepare_components.py `
+  --version 2026.09.10 `
+  --component speaker-diarization `
+  --component speaker-diarization-cuda `
+  --speaker-runtime path\to\downloaded\NotesBuddySpeakerWorker `
+  --speaker-runtime-gpu path\to\downloaded\NotesBuddySpeakerWorkerGPU `
+  --accept-pyannote-terms
+```
+
+`speaker-diarization-cuda` ships no model of its own and needs no `HF_TOKEN`;
+it only zips the pre-built GPU worker directory as-is.
 
 ## Local developer build
 

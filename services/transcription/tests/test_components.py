@@ -57,6 +57,7 @@ class ComponentManagerTests(unittest.TestCase):
             "NOTESBUDDY_GPU_LIB_DIR",
             "NOTESBUDDY_DIARIZATION_MODEL",
             "NOTESBUDDY_SPEAKER_WORKER",
+            "NOTESBUDDY_SPEAKER_WORKER_GPU",
             "NOTESBUDDY_ANALYSIS_RUNTIME",
             "NOTESBUDDY_ANALYSIS_MODEL_PATH",
         )
@@ -287,6 +288,10 @@ class ComponentManagerTests(unittest.TestCase):
             self.assertEqual(
                 Path(os.environ["NOTESBUDDY_ANALYSIS_MODEL_PATH"]),
                 root / "analysis",
+            )
+            self.assertEqual(
+                Path(os.environ["NOTESBUDDY_SPEAKER_WORKER_GPU"]),
+                root / "speaker-gpu/NotesBuddySpeakerWorkerGPU.exe",
             )
             self.assertNotIn("Program Files", str(root))
 

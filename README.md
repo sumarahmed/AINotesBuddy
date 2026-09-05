@@ -271,6 +271,21 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
   users don't have a discrete NVIDIA GPU), installed into its own directory
   independent of whichever quality tier is selected, so switching tiers
   afterward does not affect it.
+- Speaker diarization runs on CPU by default; the bundled PyTorch build (both
+  in the main companion and the isolated `NotesBuddySpeakerWorker.exe`
+  subprocess) has no CUDA support, confirmed live via `nvidia-smi` showing
+  0% GPU utilization during a real long meeting's diarization. It now
+  explicitly configures PyTorch's CPU thread pool (previously left at
+  PyTorch's own default), which costs nothing and roughly halved diarization
+  time on a real recording in testing. An optional **GPU acceleration for
+  speaker recognition** component is available in Settings once a
+  compatible GPU is already accelerating transcription -- confirmed live on
+  a real ~24 minute meeting recording: 11.8x faster than tuned CPU (62s vs.
+  731s), with identical speaker-turn output on both. It's a separate opt-in
+  download (a CUDA-capable PyTorch build runs several GB, unlike the small
+  DLL packs used for the whisper/smart-summary GPU options), installed into
+  its own directory independent of the CPU worker and the shared pyannote
+  model.
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,

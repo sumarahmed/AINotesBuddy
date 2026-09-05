@@ -266,6 +266,67 @@ class BundledModelConfigurationTests(unittest.TestCase):
             self.assertTrue(status["ready"])
             self.assertEqual(status["source"], "bundled")
 
+    def test_prefers_the_separate_gpu_speaker_worker_when_installed(self) -> None:
+        # speaker-diarization-cuda installs into its own directory, never
+        # the shared "speaker" one the CPU worker and pyannote model share
+        # -- mirrors analysis-cuda's own separate-destination fix for the
+        # same reason: a wholesale directory-swap install would otherwise
+        # delete the shared model the moment the GPU worker is installed.
+        with tempfile.TemporaryDirectory() as directory:
+            cpu_worker = Path(directory) / "cpu" / "NotesBuddySpeakerWorker.exe"
+            gpu_worker = Path(directory) / "gpu" / "NotesBuddySpeakerWorkerGPU.exe"
+            cpu_worker.parent.mkdir()
+            gpu_worker.parent.mkdir()
+            cpu_worker.touch()
+            gpu_worker.touch()
+            with patch.dict("os.environ", {
+                "NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker),
+                "NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker),
+            }):
+                engine = LocalDiarizationEngine(device="cpu")
+            self.assertEqual(engine.speaker_worker, gpu_worker)
+
+    def test_falls_back_to_the_cpu_speaker_worker_without_a_gpu_install(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cpu_worker = Path(directory) / "cpu" / "NotesBuddySpeakerWorker.exe"
+            cpu_worker.parent.mkdir()
+            cpu_worker.touch()
+            with patch.dict("os.environ", {
+                "NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker),
+                "NOTESBUDDY_SPEAKER_WORKER_GPU": str(
+                    Path(directory) / "gpu" / "NotesBuddySpeakerWorkerGPU.exe"
+                ),
+            }):
+                engine = LocalDiarizationEngine(device="cpu")
+            self.assertEqual(engine.speaker_worker, cpu_worker)
+
+    def test_reports_gpu_diarization_device_when_gpu_worker_is_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gpu_worker = Path(directory) / "NotesBuddySpeakerWorkerGPU.exe"
+            gpu_worker.touch()
+            with patch.dict(
+                "os.environ", {"NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker)}
+            ):
+                engine = LocalDiarizationEngine(device="cpu")
+            status = engine.configuration_status()
+            self.assertEqual(status["diarizationDevice"], "cuda")
+
+    def test_reports_cpu_diarization_device_when_only_cpu_worker_is_configured(
+        self,
+    ) -> None:
+        # Whisper's own device (self.device) is a separate concern from the
+        # isolated speaker worker's -- a CPU-only worker must report "cpu"
+        # here even when whisper itself is running on a GPU.
+        with tempfile.TemporaryDirectory() as directory:
+            cpu_worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
+            cpu_worker.touch()
+            with patch.dict(
+                "os.environ", {"NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker)}
+            ):
+                engine = LocalDiarizationEngine(device="cuda")
+            status = engine.configuration_status()
+            self.assertEqual(status["diarizationDevice"], "cpu")
+
     def test_reusable_speaker_worker_returns_local_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
@@ -434,6 +495,75 @@ class LocalEngineAdapterTests(unittest.TestCase):
             [segment["speakerId"] for segment in result["segments"]],
             ["local-user"],
         )
+
+    def test_cpu_diarization_configures_torch_thread_counts(self) -> None:
+        self.engine.device = "cpu"
+        thread_calls: list[tuple[str, int]] = []
+        fake_soundfile = SimpleNamespace(
+            read=lambda path, **_options: (
+                SimpleNamespace(
+                    T=SimpleNamespace(
+                        copy=lambda: SimpleNamespace(source=Path(path).name)
+                    )
+                ),
+                16000,
+            )
+        )
+        fake_torch = SimpleNamespace(
+            from_numpy=lambda samples: {"source": samples.source},
+            set_num_threads=lambda n: thread_calls.append(("threads", n)),
+            set_num_interop_threads=lambda n: thread_calls.append(("interop", n)),
+        )
+        with patch.dict(
+            "sys.modules",
+            {"soundfile": fake_soundfile, "torch": fake_torch},
+        ), patch.dict(
+            "os.environ", {"NOTESBUDDY_DIARIZATION_CPU_THREADS": "6"}, clear=False
+        ):
+            self.engine.process(
+                microphone_path=None,
+                meeting_path=Path("meeting.webm"),
+                mixed_path=None,
+                metadata={},
+                cancel_event=threading.Event(),
+                progress=lambda _value, _stage: None,
+            )
+
+        self.assertEqual(thread_calls, [("threads", 6), ("interop", 1)])
+
+    def test_cuda_diarization_leaves_torch_thread_counts_alone(self) -> None:
+        self.engine.device = "cuda"
+
+        def _fail(*_args, **_kwargs):
+            raise AssertionError("CPU thread tuning must not run on a CUDA device")
+
+        fake_soundfile = SimpleNamespace(
+            read=lambda path, **_options: (
+                SimpleNamespace(
+                    T=SimpleNamespace(
+                        copy=lambda: SimpleNamespace(source=Path(path).name)
+                    )
+                ),
+                16000,
+            )
+        )
+        fake_torch = SimpleNamespace(
+            from_numpy=lambda samples: {"source": samples.source},
+            set_num_threads=_fail,
+            set_num_interop_threads=_fail,
+        )
+        with patch.dict(
+            "sys.modules",
+            {"soundfile": fake_soundfile, "torch": fake_torch},
+        ):
+            self.engine.process(
+                microphone_path=None,
+                meeting_path=Path("meeting.webm"),
+                mixed_path=None,
+                metadata={},
+                cancel_event=threading.Event(),
+                progress=lambda _value, _stage: None,
+            )
 
     def test_empty_pyannote_4_output_preserves_transcription(self) -> None:
         empty = FakeEmptyAnnotation()

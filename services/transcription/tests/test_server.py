@@ -214,6 +214,8 @@ class LocalApiTests(unittest.TestCase):
         self.assertTrue(response.json()["analysisAvailable"])
         self.assertEqual(response.json()["analysisModel"], "fake-analysis-model")
         self.assertTrue(response.json()["componentSetupAvailable"])
+        self.assertEqual(response.json()["diarizationDevice"], "cpu")
+        self.assertFalse(response.json()["diarizationGpuAvailable"])
 
     def test_component_install_routes_require_pairing_and_report_jobs(self) -> None:
         self.assertEqual(self.client.get("/v1/components").status_code, 401)

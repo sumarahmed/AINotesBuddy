@@ -55,6 +55,7 @@ streams. It applies to the next capture.
 | Local processing priority | All recording lengths | A connected companion prevents hybrid jobs from being routed online |
 | Analysis model | One of three installable local GGUF tiers (`analysis-tiny`/`analysis-standard`/`analysis-pro`), selected in the companion setup screen | Runs through `llama-cli.exe`; a hosted instruction model can replace it through `NOTESBUDDY_ANALYSIS_MODEL` |
 | Analysis GPU acceleration | Off by default, optional `analysis-cuda` component | Offloads all layers (`-ngl 999`) to a detected CUDA GPU only when the installed runtime actually has `ggml-cuda.dll`; retries once on CPU if a GPU-flagged run fails |
+| Speaker recognition GPU acceleration | Off by default, optional `speaker-diarization-cuda` component | A separate `NotesBuddySpeakerWorkerGPU.exe` built with a CUDA-enabled PyTorch; moves the pyannote pipeline to `cuda` automatically when detected, falling back to CPU otherwise. Confirmed live: 11.8x faster than tuned CPU on a real ~24 minute recording, identical speaker-turn output either way |
 | Analysis schema/prompt version | Schema `1`, prompt `2` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
 | Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |
 | Companion download URL | Versioned GitHub Release `.exe` asset | Direct public Windows installer download |
@@ -110,6 +111,8 @@ same NotesBuddy data.
 | `NOTESBUDDY_MODEL_DEVICE` | `auto` | Automatically choose mutually supported CUDA, or use explicit `cpu`/`cuda` |
 | `NOTESBUDDY_WHISPER_COMPUTE_TYPE` | Device-based | `float16` on CUDA and `int8` on CPU unless explicitly set |
 | `NOTESBUDDY_DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | pyannote model ID |
+| `NOTESBUDDY_DIARIZATION_CPU_THREADS` | Every logical core | Overrides the CPU thread count `torch.set_num_threads` uses for diarization (both the isolated speaker worker and the in-process fallback); set lower to leave headroom for other work sharing the machine |
+| `NOTESBUDDY_SPEAKER_WORKER_GPU` | `<component_root>/speaker-gpu/NotesBuddySpeakerWorkerGPU.exe` | Set automatically once the optional `speaker-diarization-cuda` component is installed; preferred over `NOTESBUDDY_SPEAKER_WORKER` when the file exists |
 | `NOTESBUDDY_MAX_WORKERS` | `1` (clamped 1–2) | Concurrent model jobs |
 | `NOTESBUDDY_MAX_JOBS` | `64` (clamped 4–256) | Maximum in-memory active/recent job records |
 | `NOTESBUDDY_JOB_RETENTION_SECONDS` | `3600` (clamped 60–86400) | Recent terminal result retention in process memory |

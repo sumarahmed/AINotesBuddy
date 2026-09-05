@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import SpeakerTurn, Word, build_transcript
+from .cpu_threads import configure_torch as _configure_torch_cpu_threads
 from .diagnostics import log_diagnostic
 
 
@@ -198,7 +199,15 @@ class LocalDiarizationEngine:
             "HF_TOKEN",
             "",
         )
-        self.speaker_worker = Path(os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip()) if os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip() else None
+        # The optional speaker-diarization-cuda component installs into its
+        # own directory (see components.py's configure_component_environment)
+        # so its install can never wholesale-replace the directory the
+        # shared pyannote model lives in. Prefer it when present.
+        gpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER_GPU", "").strip()
+        cpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip()
+        self._speaker_worker_is_gpu = bool(gpu_worker and Path(gpu_worker).is_file())
+        worker_path = gpu_worker if self._speaker_worker_is_gpu else cpu_worker
+        self.speaker_worker = Path(worker_path) if worker_path else None
         self._whisper = None
         self._diarization = None
         self._load_lock = threading.Lock()
@@ -265,8 +274,18 @@ class LocalDiarizationEngine:
             "computeType": self.compute_type,
             "accelerator": str(self.accelerator.get("name") or "CPU"),
             "gpuAvailable": bool(self.accelerator.get("available")),
+            # A real install always delegates diarization to the isolated
+            # speaker worker subprocess, whose own device is independent of
+            # self.device above (that's whisper's). Report the GPU worker
+            # when it's the one actually configured; only fall back to this
+            # process's own torch/device when no worker is configured at
+            # all (dev/test paths without NOTESBUDDY_SPEAKER_WORKER set).
             "diarizationDevice": "cuda"
-            if self.device.startswith("cuda") and self._torch_cuda_available()
+            if self._speaker_worker_is_gpu
+            else "cuda"
+            if self.speaker_worker is None
+            and self.device.startswith("cuda")
+            and self._torch_cuda_available()
             else "cpu",
             "status": (
                 "offline models ready"
@@ -600,6 +619,14 @@ class LocalDiarizationEngine:
                 "The local audio runtime is incomplete. Reinstall the latest "
                 "NotesBuddy Desktop Companion."
             ) from error
+        if not self.device.lower().startswith("cuda"):
+            # torch.set_num_threads() is runtime-settable (unlike the
+            # OMP_NUM_THREADS env var the isolated speaker worker uses,
+            # which must be set before torch's first import) -- safe to
+            # call here even though this path shares a process with
+            # whisper, which does its own CPU-thread accounting via
+            # ctranslate2 rather than torch.
+            _configure_torch_cpu_threads(torch)
         samples, sample_rate = soundfile.read(
             str(path),
             dtype="float32",

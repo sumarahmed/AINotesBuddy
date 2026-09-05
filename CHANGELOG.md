@@ -10,6 +10,77 @@ remain compatible with semantic-version tooling.
 
 ### Added
 
+- Optional **GPU acceleration for speaker recognition** component
+  (`speaker-diarization-cuda`), the GPU half of the diarization performance
+  investigation below. Sized before building anything: a CUDA-capable
+  PyTorch wheel runs ~2.4 GiB (confirmed live against
+  `download.pytorch.org`'s real wheel index for the exact torch version
+  `pyannote.audio` actually resolves to), a materially bigger download than
+  the small DLL packs used for the existing whisper/smart-summary GPU
+  options -- and neither the CPU nor a GPU build of the isolated speaker
+  worker had any CI automation at all before this (confirmed by checking
+  every workflow and `desktop/build.ps1` directly; the previously pinned
+  release asset was built by an undocumented manual process). Before
+  committing to that cost, ran a real-audio validation gate first: built a
+  throwaway CUDA-torch venv on a machine with a working NVIDIA GPU and
+  diarized a real ~24 minute meeting recording twice, once on tuned CPU and
+  once on GPU. Result: 62s on GPU vs. 731s on tuned CPU, an 11.8x speedup,
+  with identical speaker-turn output (741 turns) on both -- confirming real
+  speech fully exercises pyannote's clustering stage (an earlier synthetic
+  test found zero turns, leaving open whether clustering would stay
+  CPU-bound regardless of the neural-net stages moving to GPU; it does
+  not). Only after that real signal did the actual packaging begin: a
+  second executable, `NotesBuddySpeakerWorkerGPU.exe`, built from the exact
+  same `speaker_worker.py` entry point as the CPU worker but with a
+  CUDA-enabled torch/torchaudio in its build venv instead (new
+  `.github/workflows/speaker-worker.yml`, building both variants for the
+  first time); `speaker_worker.py` itself gained a `torch.cuda.is_available()`
+  check that moves the pipeline to `cuda` automatically when present,
+  falling back to CPU otherwise, so one script serves both builds.
+  Deliberately installed into its own `speaker-gpu` destination, never the
+  base component's shared `speaker` one -- `analysis-cuda` already hit
+  exactly this bug once (see the 2026.09.0x entry below) by sharing a
+  destination with a component that had a model file of its own to
+  preserve, and component installation is a wholesale directory swap, not a
+  file overlay. `LocalDiarizationEngine` prefers
+  `NOTESBUDDY_SPEAKER_WORKER_GPU` over `NOTESBUDDY_SPEAKER_WORKER` when
+  present; the shared pyannote model is untouched either way. One real trap
+  hit and fixed along the way, worth remembering for any future GPU
+  packaging work: `pyannote.audio`'s own dependency resolution silently
+  replaced an explicitly-installed CUDA torch with a CPU-only build from
+  default PyPI the moment it (re-)resolved its own torch pin -- fixed by
+  reinstalling torch last, with `--no-deps`, from the CUDA wheel index.
+
+- Diarization now explicitly configures PyTorch's CPU thread pool instead of
+  leaving it at whatever default PyTorch picks. Investigated after a real
+  ~1 hour meeting on the desktop companion took roughly an hour to diarize;
+  confirmed live via `nvidia-smi` (0% GPU utilization throughout) and by
+  reading the bundled `torch/version.py` in both the main companion
+  (`2.13.0+cpu`) and the separate `NotesBuddySpeakerWorker.exe` subprocess
+  it delegates to (also `2.13.0+cpu`) that neither bundled PyTorch build has
+  CUDA support at all -- `requirements-models.txt` pins `torch>=2.6` with no
+  CUDA index, so pip resolves PyPI's default CPU-only Windows wheel, and a
+  CPU-only torch build cannot use the GPU regardless of any `.to(cuda)` call
+  already present in `engine.py`. A genuine GPU build is a much larger,
+  separately-scoped change (a CUDA torch wheel runs several GB, unlike the
+  small DLL packs used for the existing whisper/smart-summary GPU options,
+  and the speaker worker currently has no CI build automation at all --
+  confirmed by checking every workflow and `desktop/build.ps1`). This change
+  is the free, zero-download half of that investigation: neither `engine.py`
+  nor `speaker_worker.py` set `torch.set_num_threads`/`OMP_NUM_THREADS`
+  anywhere before, so PyTorch's own thread-count default was left to guess.
+  New shared `notesbuddy_transcription/cpu_threads.py` resolves a thread
+  count (every logical core by default, overridable via
+  `NOTESBUDDY_DIARIZATION_CPU_THREADS`) and applies it: as an
+  `OMP_NUM_THREADS`/`MKL_NUM_THREADS` env default before the isolated
+  speaker worker's first `import torch` (env vars only take effect at
+  native thread-pool init, so this has to run before that import, not
+  after), and via a direct `torch.set_num_threads()`/
+  `set_num_interop_threads(1)` call for the in-process fallback path used
+  when no separate worker is configured. The GPU wheel swap remains a
+  separate, larger piece of work, sized and scoped on its own before any
+  implementation starts.
+
 - The website's companion-update check now also queries GitHub's real
   release API directly on page load (`GET /repos/.../releases/latest`,
   which allows unauthenticated cross-origin requests -- confirmed live, not

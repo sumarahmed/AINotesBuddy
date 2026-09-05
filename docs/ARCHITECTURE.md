@@ -315,6 +315,59 @@ once, records immutable model revisions, and never includes that secret in the
 artifact. `EmptyEngine` exists only for API/security smoke tests and returns an
 empty segment array. It never returns demonstration text.
 
+### Speaker diarization worker and GPU acceleration
+
+A real install always delegates diarization to an isolated
+`NotesBuddySpeakerWorker.exe` subprocess (`NOTESBUDDY_SPEAKER_WORKER`,
+wired by `components.py`'s `configure_component_environment`) rather than
+running pyannote in-process inside `LocalDiarizationEngine._diarize()` --
+that in-process path only exists for dev/test scenarios without a worker
+configured. `NotesBuddyCompanion.spec` explicitly excludes `torch`,
+`torchaudio`, and `pyannote`/`pyannote.audio` from the main companion
+build, confirming this is deliberate rather than incidental.
+
+CPU diarization was confirmed CPU-bound, not GPU-idle by mistake: a real
+~1 hour meeting took roughly an hour to diarize, `nvidia-smi` showed 0% GPU
+utilization throughout, and `torch/version.py` in both the main companion's
+bundle and the worker's own separate bundle read `+cpu` -- neither has any
+CUDA support at all, because `requirements-models.txt` pins `torch>=2.6`
+with no CUDA index, so pip resolves PyPI's default (CPU-only) Windows
+wheel. Two fixes followed from that root cause:
+
+1. **Free, always-on**: neither the worker nor the in-process path
+   configured PyTorch's CPU thread pool at all before this. Shared
+   `notesbuddy_transcription/cpu_threads.py` resolves a thread count (every
+   logical core by default, overridable via
+   `NOTESBUDDY_DIARIZATION_CPU_THREADS`) and applies it -- as
+   `OMP_NUM_THREADS`/`MKL_NUM_THREADS` env defaults before the worker's
+   first `import torch` (env vars only take effect at native thread-pool
+   init, so this must run before that import), and via a direct
+   `torch.set_num_threads()`/`set_num_interop_threads(1)` call for the
+   in-process fallback.
+2. **Opt-in GPU**: a second executable, `NotesBuddySpeakerWorkerGPU.exe`,
+   built from the exact same `speaker_worker.py` entry point but with a
+   CUDA-enabled torch/torchaudio installed in its build venv instead
+   (`.github/workflows/speaker-worker.yml` builds both variants).
+   `speaker_worker.py` detects `torch.cuda.is_available()` at runtime and
+   moves the pipeline to `cuda` when true, so the CPU-only build (whose
+   torch always reports no CUDA) naturally stays on CPU with no separate
+   code path. Packaged as the `speaker-diarization-cuda` component,
+   installed into its own `speaker-gpu` destination -- never the base
+   `speaker` one the CPU worker and the shared pyannote model live in,
+   since component installation is a wholesale directory swap
+   (`components.py`'s `_install_one`), and `analysis-cuda` already hit
+   exactly this bug once by sharing a destination with a component that had
+   a file of its own to preserve. `LocalDiarizationEngine.__init__` prefers
+   `NOTESBUDDY_SPEAKER_WORKER_GPU` over `NOTESBUDDY_SPEAKER_WORKER` when
+   present; the shared model directory is untouched either way.
+
+Confirmed live (2026-09-05) on a real ~24 minute meeting recording: 62s on
+GPU vs. 731s on tuned CPU (11.8x), with identical speaker-turn output on
+both -- real speech fully exercises pyannote's clustering stage, unlike an
+earlier synthetic-audio test that produced zero detected turns, so this
+result settles the open question of whether clustering would stay
+CPU-bound regardless of the neural-net stages moving to GPU. It does not.
+
 ### Local analysis (smart summary)
 
 `LocalAnalysisRouter` resolves the analysis component installed on the paired
