@@ -83,6 +83,7 @@ const ICONS = {
   menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
   headphones: '<path d="M4 14a8 8 0 0 1 16 0"/><path d="M18 19v-5h3v5a2 2 0 0 1-2 2h-1Z"/><path d="M6 19v-5H3v5a2 2 0 0 0 2 2h1Z"/>',
   radio: '<circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
 };
 
 function icon(name, size = 16, className = "") {
@@ -377,6 +378,8 @@ const state = {
   tab: "summary",
   search: "",
   settingsOpen: false,
+  analysisPromptEditorOpen: false,
+  analysisPromptDraft: "",
   mobileNavOpen: false,
   moreOpen: false,
   showAllMeetings: false,
@@ -1437,17 +1440,13 @@ function settingsPanel() {
     hybridConnected && state.companion.metadata?.analysisAvailable
       ? (() => {
           const hasCustomPrompt = Boolean(state.settings.analysisSystemPrompt);
-          const shownPrompt =
-            state.settings.analysisSystemPrompt || defaultAnalysisPromptText;
           return `<section class="settings-section">
           <span class="eyebrow">Analysis prompt (advanced)</span>
-          <p class="settings-help">${hasCustomPrompt ? "Using your edited prompt." : "Using the built-in default shown below."} Edit it, then use Refresh from transcript on a meeting's summary to re-run analysis with it.</p>
-          ${
-            defaultAnalysisPromptFetched || hasCustomPrompt
-              ? `<textarea data-setting="analysisSystemPrompt" rows="8" spellcheck="false" aria-label="Analysis system prompt">${escapeHtml(shownPrompt)}</textarea>`
-              : `<p class="settings-help">Loading the current default…</p>`
-          }
-          ${hasCustomPrompt ? `<button type="button" class="button button--quiet" data-action="reset-analysis-prompt">${icon("refresh", 14)}Reset to default</button>` : ""}
+          <p class="settings-help">${hasCustomPrompt ? "Using your edited prompt." : "Using the built-in default."} Edit it, then use Refresh from transcript on a meeting's summary to re-run analysis with it.</p>
+          <div class="companion-actions">
+            <button type="button" class="button button--quiet" data-action="open-analysis-prompt-editor">${icon("edit", 14)}Edit prompt</button>
+            ${hasCustomPrompt ? `<button type="button" class="button button--quiet" data-action="reset-analysis-prompt">${icon("refresh", 14)}Reset to default</button>` : ""}
+          </div>
         </section>`;
         })()
       : "";
@@ -1521,6 +1520,22 @@ function profileOnboarding() {
         <button type="submit" class="button button--primary">Create local workspace ${icon("chevronRight", 16)}</button>
       </form>
       <small>${icon("lock", 13)}No account is created. This profile and its meetings remain local to this browser.</small>
+    </section>
+  </div>`;
+}
+
+function analysisPromptEditor() {
+  return `<div class="companion-setup-backdrop" data-action="close-analysis-prompt-editor">
+    <section class="companion-setup-card analysis-prompt-editor" role="dialog" aria-modal="true" aria-labelledby="analysis-prompt-editor-title">
+      <span class="eyebrow">Analysis prompt (advanced)</span>
+      <h1 id="analysis-prompt-editor-title">Edit the analysis prompt</h1>
+      <p>Edit the instructions sent to the local model, then use Refresh from transcript on a meeting's summary to re-run analysis with it.</p>
+      <textarea class="analysis-prompt-editor__text" data-input="analysis-prompt-draft" spellcheck="false" aria-label="Analysis system prompt">${escapeHtml(state.analysisPromptDraft)}</textarea>
+      <div class="companion-actions">
+        <button type="button" class="button button--primary" data-action="save-analysis-prompt">${icon("check", 14)}Save</button>
+        <button type="button" class="button button--quiet" data-action="reset-analysis-prompt-draft">${icon("refresh", 14)}Reset to default</button>
+        <button type="button" class="button button--quiet" data-action="close-analysis-prompt-editor">${icon("x", 14)}Cancel</button>
+      </div>
     </section>
   </div>`;
 }
@@ -1803,6 +1818,7 @@ function render(focusTarget = "") {
     ${companionUpdateNotice()}
     <input class="visually-hidden" data-input="file" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac">
     ${state.settingsOpen ? settingsPanel() : ""}
+    ${state.analysisPromptEditorOpen ? analysisPromptEditor() : ""}
     ${state.profileOnboardingOpen ? profileOnboarding() : ""}
     ${state.companionSetupOpen && !state.profileOnboardingOpen ? companionOnboarding() : ""}
     ${toastRegion()}
@@ -3918,6 +3934,32 @@ app.addEventListener("click", async (event) => {
   } else if (action === "reset-analysis-prompt") {
     state.settings.analysisSystemPrompt = "";
     save();
+  } else if (action === "open-analysis-prompt-editor") {
+    state.analysisPromptDraft =
+      state.settings.analysisSystemPrompt || defaultAnalysisPromptText;
+    state.analysisPromptEditorOpen = true;
+  } else if (action === "close-analysis-prompt-editor") {
+    if (
+      event.target.closest(".analysis-prompt-editor") &&
+      !event.target.closest("button")
+    ) {
+      return;
+    }
+    state.analysisPromptEditorOpen = false;
+  } else if (action === "reset-analysis-prompt-draft") {
+    state.analysisPromptDraft = defaultAnalysisPromptText;
+  } else if (action === "save-analysis-prompt") {
+    const draft = String(
+      app.querySelector('[data-input="analysis-prompt-draft"]')?.value || "",
+    ).trim();
+    state.settings.analysisSystemPrompt =
+      draft === defaultAnalysisPromptText.trim() ? "" : draft;
+    state.analysisPromptEditorOpen = false;
+    save();
+    showToast(
+      "Analysis prompt saved",
+      "Use Refresh from transcript on a meeting's summary to re-run analysis with it.",
+    );
   } else if (action === "pause-components") {
     await pauseCompanionComponents();
     return;
