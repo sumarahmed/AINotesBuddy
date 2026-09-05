@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "releaseVersion": "2026.09.10",
+  "releaseVersion": "2026.09.11",
   "components": {
     "whisper-base": {
       "name": "Balanced speech model",
@@ -88,6 +88,15 @@
       "bytes": 256381264,
       "sha256": "bf6f297db362889d0584aa1ec004dc65010c748796d51c7cc159aaaffb5676cc",
       "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.09.10/NotesBuddy-analysis-cuda-2026.09.10.zip"
+    },
+    "speaker-diarization-cuda": {
+      "name": "GPU acceleration for speaker recognition",
+      "version": "2026.09.11",
+      "category": "speaker",
+      "destination": "speaker-gpu",
+      "bytes": 1781070553,
+      "sha256": "fe0ecc8552c9c5a4c6ca7611ef1a225a5219fbd7e0aa8f64e212914b65c1b2f2",
+      "url": "https://github.com/sumarahmed/AINotesBuddy/releases/download/companion-v2026.09.11/NotesBuddy-speaker-diarization-cuda-2026.09.11.zip"
     }
   }
 }

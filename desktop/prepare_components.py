@@ -438,13 +438,20 @@ def _prepare_speaker_cuda_component(
     a CUDA-enabled torch/torchaudio instead) -- this function only packages
     it, the same way the CPU speaker-diarization component's runtime is
     supplied pre-built via --speaker-runtime in main() below.
+
+    Uses ZIP_LZMA, not the default Deflate: a CUDA-enabled torch build's
+    DLLs compress poorly with Deflate, and the Deflate archive came out at
+    2.58 GiB -- over GitHub's real 2 GiB per-asset limit, confirmed live by
+    an actual failed upload attempt, not assumed from the limit alone.
+    ZIP_LZMA remains readable by Python's standard library, matching the
+    nvidia-cuda12 component's own precedent for the identical problem.
     """
 
     component_id = "speaker-diarization-cuda"
     if not speaker_runtime_gpu.is_dir():
         raise RuntimeError("The packaged GPU speaker worker runtime is missing.")
     archive = output / f"NotesBuddy-{component_id}-{version}.zip"
-    _zip_directory(speaker_runtime_gpu, archive)
+    _zip_directory(speaker_runtime_gpu, archive, compression=zipfile.ZIP_LZMA)
     return _asset(
         component_id,
         "GPU acceleration for speaker recognition",
