@@ -3702,6 +3702,12 @@ kbd {
   font-size: 12px;
 }
 
+.component-options__model {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--teal);
+}
+
 .component-options span,
 .component-progress small {
   font-size: 9px;

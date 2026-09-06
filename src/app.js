@@ -1486,8 +1486,9 @@ function settingsPanel() {
               const meta = available[tier.id] || {};
               const size = formatBytes(Number(meta.downloadBytes || 0));
               const description = meta.tierDescription || "";
+              const modelLabel = meta.modelLabel || "";
               const isCurrent = tier.id === currentTierId;
-              return `<button type="button" class="component-options__tier${isCurrent ? " component-options__tier--selected" : ""}" data-action="switch-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${analysisGpuInstalling || isCurrent ? "disabled" : ""} aria-pressed="${isCurrent}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong><span>${escapeHtml(description)}</span></button>`;
+              return `<button type="button" class="component-options__tier${isCurrent ? " component-options__tier--selected" : ""}" data-action="switch-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${analysisGpuInstalling || isCurrent ? "disabled" : ""} aria-pressed="${isCurrent}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong>${modelLabel ? `<small class="component-options__model">${escapeHtml(modelLabel)}</small>` : ""}<span>${escapeHtml(description)}</span></button>`;
             })
             .join("")}
         </div>
@@ -1661,8 +1662,9 @@ function companionOnboarding() {
                 const meta = available[tier.id] || {};
                 const size = formatBytes(Number(meta.downloadBytes || 0));
                 const description = meta.tierDescription || "";
+                const modelLabel = meta.modelLabel || "";
                 const isSelected = tier.id === selectedAnalysisTier;
-                return `<button type="button" class="component-options__tier${isSelected ? " component-options__tier--selected" : ""}" data-action="select-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${running ? "disabled" : ""} aria-pressed="${isSelected}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong><span>${escapeHtml(description)}</span></button>`;
+                return `<button type="button" class="component-options__tier${isSelected ? " component-options__tier--selected" : ""}" data-action="select-analysis-tier" data-tier="${escapeHtml(tier.id)}" ${running ? "disabled" : ""} aria-pressed="${isSelected}"><strong>${escapeHtml(tier.label)} · ${escapeHtml(size)}</strong>${modelLabel ? `<small class="component-options__model">${escapeHtml(modelLabel)}</small>` : ""}<span>${escapeHtml(description)}</span></button>`;
               })
               .join("")}
           </div>

@@ -28,6 +28,7 @@ ANALYSIS_TIERS = (
         "id": "analysis-tiny",
         "name": "Fast",
         "description": "Smallest download, quickest to install",
+        "model_label": "Qwen2.5 0.5B Instruct (Q4_K_M)",
         "model_repository": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
         "model_revision": "9217f5db79a29953eb74d5343926648285ec7e67",
         "model_filename": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
@@ -42,6 +43,7 @@ ANALYSIS_TIERS = (
         "id": "analysis-standard",
         "name": "Balanced",
         "description": "Recommended: noticeably better summaries and highlights",
+        "model_label": "Qwen3 1.7B (Q4_K_M)",
         "model_repository": "unsloth/Qwen3-1.7B-GGUF",
         "model_revision": "d7f544eead698dbd1f15126ef60b45a1e1933222",
         "model_filename": "Qwen3-1.7B-Q4_K_M.gguf",
@@ -57,6 +59,7 @@ ANALYSIS_TIERS = (
         "id": "analysis-pro",
         "name": "High quality",
         "description": "Largest download, most capable local summarisation",
+        "model_label": "Qwen3 4B Instruct 2507 (Q3_K_M)",
         "model_repository": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
         "model_revision": "a06e946bb6b655725eafa393f4a9745d460374c9",
         # Q4_K_M (2.50 GB) was verified first and is the highest-fidelity
@@ -320,6 +323,7 @@ def _prepare_analysis_component(work: Path, output: Path, version: str, tier: di
         archive,
     )
     value["tierDescription"] = tier["description"]
+    value["modelLabel"] = tier["model_label"]
     value["modelRevision"] = tier["model_revision"]
     value["runtimeRelease"] = LLAMA_CPP_RELEASE
     return key, value

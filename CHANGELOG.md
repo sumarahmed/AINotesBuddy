@@ -19,7 +19,14 @@ remain compatible with semantic-version tooling.
     way to change it afterward short of calling the component-install API
     directly, which is exactly what comparing tiers required. Both the
     dialog and the new switcher now share one `ANALYSIS_TIER_OPTIONS` list
-    rather than duplicating the id/label pairs.
+    rather than duplicating the id/label pairs. Each tier option now also
+    names the actual model behind it (e.g. "Qwen3 4B Instruct 2507
+    (Q3_K_M)" for High quality) instead of only a size and a marketing
+    label, requested after switching tiers with no idea which real model
+    a choice corresponded to. The label lives once in
+    `desktop/prepare_components.py`'s per-tier metadata (`model_label`),
+    flows through the existing component manifest, and needs no separate
+    frontend copy to keep in sync.
   - **An editable analysis prompt in Settings ("Analysis prompt
     (advanced)")**, with a new local-only `GET /v1/analyses/prompt` so the
     field shows the real current default rather than a second hardcoded
@@ -103,6 +110,17 @@ remain compatible with semantic-version tooling.
 
 ### Fixed
 
+- The Settings smart-summary tier switcher (above) reported live as the
+  screen flickering and refusing input while switching to High quality.
+  It polls for progress roughly every 600ms by calling a full page
+  re-render; since this app has no diffing and rebuilds the whole DOM
+  each time, the settings drawer's own slide-in entrance animation
+  replayed on every one of those re-renders for the whole length of a
+  real multi-gigabyte download. Suppresses the animation while a
+  component job is running and adds an actual progress bar with a live
+  percentage and a Pause button (reusing the same UI already built for
+  first-run setup), so switching tiers now shows real feedback instead
+  of disabled buttons and nothing else.
 - Removed every remaining em dash from user-facing product text (the
   website's UI copy, page title, and meta description; the companion's
   status text), replacing each with whichever of a comma, semicolon, or
