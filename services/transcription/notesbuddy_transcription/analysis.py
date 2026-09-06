@@ -272,6 +272,33 @@ OUTPUT_JSON_SCHEMA = {
 }
 
 
+QA_SYSTEM_PROMPT = """You are answering a question about one specific meeting transcript. Use only the transcript excerpt provided, and the prior conversation turns given for context.
+
+Requirements:
+1. answer: 1-4 full sentences, using only facts and wording supported by the transcript excerpt. Never invent names, dates, numbers, or outcomes not present in it.
+2. evidenceSegmentIds: the transcript segment IDs that directly support the answer. Empty only when found is false.
+3. found: true only when the transcript excerpt actually contains information that answers the question. If the excerpt does not cover the question at all, set found to false and write an answer explaining that the transcript does not appear to cover it -- do not guess or extrapolate.
+
+A prior conversation turn is context for what "it"/"that"/"they" refers to in a follow-up question, not evidence for the new answer -- still cite only transcript segment IDs, never a prior turn.
+
+Return valid JSON only. Do not use Markdown or commentary."""
+
+QA_OUTPUT_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["answer", "evidenceSegmentIds", "found"],
+    "properties": {
+        "answer": {"type": "string"},
+        "evidenceSegmentIds": {"type": "array", "items": {"type": "string"}},
+        "found": {"type": "boolean"},
+    },
+}
+
+QA_NOT_FOUND_FALLBACK = (
+    "I could not find a grounded answer to that in this transcript."
+)
+
+
 class MeetingAnalysisUnavailable(RuntimeError):
     """Raised when professional analysis is unavailable or invalid."""
 
@@ -522,6 +549,37 @@ def _validated_priority(
     if priority == "Low" and not LOW_URGENCY.search(transcript_text):
         return "Medium"
     return priority
+
+
+def _normalise_qa_answer(
+    raw_answer: object, prepared_segments: list[dict[str, Any]]
+) -> dict[str, Any]:
+    if not isinstance(raw_answer, dict):
+        raise MeetingAnalysisUnavailable("The Q&A model returned invalid JSON.")
+    by_id = {segment["id"]: segment for segment in prepared_segments}
+    valid_ids = set(by_id)
+    found = bool(raw_answer.get("found"))
+    answer = _clean_text(raw_answer.get("answer"), maximum=1500)
+    if not answer:
+        raise MeetingAnalysisUnavailable("The Q&A model returned an empty answer.")
+    evidence_ids = _evidence_ids(raw_answer.get("evidenceSegmentIds"), valid_ids)
+    if found:
+        # A "found" answer must actually cite evidence, and that evidence
+        # must actually support the answer's wording -- the same
+        # word-overlap check the meeting-analysis flow already relies on
+        # to reject fabricated content, reused as-is.
+        if not evidence_ids:
+            raise MeetingAnalysisUnavailable(
+                "The Q&A model marked the answer found without citing evidence."
+            )
+        if not _is_grounded_text(answer, _evidence_text(evidence_ids, by_id)):
+            raise MeetingAnalysisUnavailable(
+                "The Q&A model returned an answer unsupported by its cited evidence."
+            )
+    else:
+        # A "not found" answer explains an absence; it has nothing to cite.
+        evidence_ids = []
+    return {"answer": answer, "evidenceSegmentIds": evidence_ids, "found": found}
 
 
 def normalise_analysis(
@@ -780,6 +838,25 @@ def _repair_summary_from_grounded_items(
     repaired["shortSummary"] = _limit_words(" ".join(sentences), 299)
     repaired["summaryEvidenceSegmentIds"] = evidence
     return repaired
+
+
+def _public_qa_answer(
+    result: dict[str, Any],
+    prepared_segments: list[dict[str, Any]],
+    *,
+    model_name: str,
+) -> dict[str, Any]:
+    source_ids = {segment["id"]: segment["sourceId"] for segment in prepared_segments}
+    return {
+        "schemaVersion": ANALYSIS_SCHEMA_VERSION,
+        "promptVersion": ANALYSIS_PROMPT_VERSION,
+        "model": model_name,
+        "answer": result["answer"],
+        "found": result["found"],
+        "evidenceSegmentIds": [
+            source_ids[item] for item in result["evidenceSegmentIds"] if item in source_ids
+        ],
+    }
 
 
 def _public_analysis(
@@ -1298,6 +1375,17 @@ class LlamaCppMeetingAnalyzer:
             if self.model_path.name
             else "notesbuddy-smart-summary"
         )
+        # Mirrors desktop/prepare_components.py's ANALYSIS_TIERS_BY_ID model
+        # filenames -- duplicated rather than imported, since that module is
+        # a build-time packaging script outside this runtime package. Keep in
+        # sync if a pinned tier's model file ever changes. Empty string when
+        # the installed file matches none of them (should not normally
+        # happen, but must never be mistaken for a known tier).
+        self.tier = {
+            "qwen2.5-0.5b-instruct-q4_k_m": "analysis-tiny",
+            "qwen3-1.7b-q4_k_m": "analysis-standard",
+            "qwen3-4b-instruct-2507-q3_k_m": "analysis-pro",
+        }.get(self.model_path.stem.lower(), "")
         self.context_tokens = max(8_192, context_tokens)
         self.output_tokens = min(max(900, output_tokens), 4_096)
         # A 0.5B model was observed to lose coherence and fall into
@@ -1344,6 +1432,7 @@ class LlamaCppMeetingAnalyzer:
         return {
             "ready": ready,
             "model": self.name if ready else "",
+            "tier": self.tier if ready else "",
             "status": (
                 "smart local meeting analysis ready"
                 if ready
@@ -1374,12 +1463,132 @@ class LlamaCppMeetingAnalyzer:
             chunks.append(current)
         return chunks
 
+    def _select_relevant_segments(
+        self, prepared: list[dict[str, Any]], question: str
+    ) -> list[dict[str, Any]]:
+        """Select enough segments to answer a question without exceeding
+        maximum_chunk_characters, for a transcript too long to send whole.
+
+        Ranks every segment by word overlap with the question -- the same
+        stemmed/stopword-filtered _content_tokens() the grounding check
+        already uses, so this needs no new dependency (no embeddings model
+        or vector index anywhere in this codebase, and this keeps that
+        consistent) -- then keeps the highest-scoring segments up to the
+        character budget. Returned in original transcript order, not score
+        order, so the model still reads a coherent back-and-forth rather
+        than disconnected fragments.
+        """
+        total_size = sum(len(_transcript_line(segment)) + 1 for segment in prepared)
+        if total_size <= self.maximum_chunk_characters:
+            return prepared
+
+        question_tokens = _content_tokens(question)
+        scored = sorted(
+            enumerate(prepared),
+            key=lambda item: len(question_tokens & _content_tokens(item[1]["text"])),
+            reverse=True,
+        )
+        selected_indexes: set[int] = set()
+        used = 0
+        for index, segment in scored:
+            size = len(_transcript_line(segment)) + 1
+            if used + size > self.maximum_chunk_characters and selected_indexes:
+                continue
+            selected_indexes.add(index)
+            used += size
+        return [prepared[index] for index in sorted(selected_indexes)]
+
+    def _qa_history_text(self, history: object) -> str:
+        if not isinstance(history, list):
+            return ""
+        text = ""
+        # Bounded to the last 2 exchanges -- enough for a "what about..."
+        # follow-up to resolve, without diluting a 1.7B/4B model's limited
+        # context with the full conversation. The same reasoning
+        # maximum_chunk_characters is itself capped well under this
+        # model's real context window (see its own docstring above).
+        for turn in history[-2:]:
+            if not isinstance(turn, dict):
+                continue
+            turn_question = _clean_text(turn.get("question"), maximum=500)
+            turn_answer = _clean_text(turn.get("answer"), maximum=1000)
+            if turn_question and turn_answer:
+                text += (
+                    f"Previous question: {turn_question}\n"
+                    f"Previous answer: {turn_answer}\n\n"
+                )
+        return text
+
+    def answer_question(
+        self,
+        *,
+        segments: object,
+        question: object,
+        meeting_title: object = "",
+        history: object = None,
+    ) -> dict[str, Any]:
+        prepared = prepare_transcript_segments(segments)
+        if not prepared:
+            raise MeetingAnalysisUnavailable(
+                "A completed transcript is required to answer questions."
+            )
+        clean_question = _clean_text(question, maximum=2000)
+        if not clean_question:
+            raise MeetingAnalysisUnavailable("A question is required.")
+
+        selected = self._select_relevant_segments(prepared, clean_question)
+        prompt = (
+            f"Meeting title: {_clean_text(meeting_title, maximum=200) or NOT_SPECIFIED}\n"
+            f"{self._qa_history_text(history)}"
+            "Transcript excerpt follows. Use only these segment IDs as evidence.\n\n"
+            f"{self._transcript_text(selected)}\n\n"
+            f"Question: {clean_question}\n\nReturn the required JSON object."
+        )
+        try:
+            raw = self._generate(
+                prompt,
+                system_prompt=QA_SYSTEM_PROMPT,
+                json_schema=QA_OUTPUT_JSON_SCHEMA,
+            )
+            result = _normalise_qa_answer(raw, prepared)
+        except MeetingAnalysisUnavailable:
+            try:
+                retry_raw = self._generate(
+                    prompt
+                    + "\n\nYour previous answer used wording not found in the "
+                    "transcript excerpt above, or cited nothing. Answer using "
+                    "only wording from that excerpt, and cite the exact "
+                    "segment IDs that support it. If the excerpt truly does "
+                    "not cover the question, set found to false instead.",
+                    system_prompt=QA_SYSTEM_PROMPT,
+                    json_schema=QA_OUTPUT_JSON_SCHEMA,
+                )
+                result = _normalise_qa_answer(retry_raw, prepared)
+            except MeetingAnalysisUnavailable:
+                _log_diagnostic(
+                    "[notesbuddy-analysis] qa_answer_fallback "
+                    f"question={ascii(clean_question)[:200]}"
+                )
+                result = {
+                    "answer": QA_NOT_FOUND_FALLBACK,
+                    "evidenceSegmentIds": [],
+                    "found": False,
+                }
+        _log_diagnostic(
+            "[notesbuddy-analysis] qa_answer_accepted "
+            f"found={result['found']} "
+            f"evidence_count={len(result['evidenceSegmentIds'])} "
+            f"question={ascii(clean_question)[:200]}"
+        )
+        return _public_qa_answer(result, prepared, model_name=self.name)
+
     def _generate(
         self,
         prompt: str,
         *,
         output_tokens: int | None = None,
         system_prompt: str | None = None,
+        json_schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not self.runtime_path.is_file() or not self.model_path.is_file():
             raise MeetingAnalysisUnavailable(
@@ -1396,7 +1605,8 @@ class LlamaCppMeetingAnalyzer:
             schema_path = root / "schema.json"
             prompt_path.write_text(prompt, encoding="utf-8")
             schema_path.write_text(
-                json.dumps(OUTPUT_JSON_SCHEMA, ensure_ascii=False), encoding="utf-8"
+                json.dumps(json_schema or OUTPUT_JSON_SCHEMA, ensure_ascii=False),
+                encoding="utf-8",
             )
             gpu_layers = self._gpu_layers()
             base_command = [
@@ -1829,6 +2039,21 @@ class LocalAnalysisRouter:
             meeting_title=meeting_title,
             progress=progress,
             system_prompt=system_prompt,
+        )
+
+    def answer_question(
+        self,
+        *,
+        segments: object,
+        question: object,
+        meeting_title: object = "",
+        history: object = None,
+    ) -> dict[str, Any]:
+        return self._analyzer().answer_question(
+            segments=segments,
+            question=question,
+            meeting_title=meeting_title,
+            history=history,
         )
 
 

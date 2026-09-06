@@ -700,6 +700,7 @@ def create_app(
             "diarizationGpuAvailable": model_status.get("diarizationDevice") == "cuda",
             "analysisAvailable": bool(analysis_status.get("ready")),
             "analysisModel": analysis_status.get("model"),
+            "analysisTier": str(analysis_status.get("tier") or ""),
             "analysisDevice": str(analysis_status.get("device") or "unknown"),
             "analysisAccelerator": str(analysis_status.get("accelerator") or "CPU"),
             "analysisGpuAvailable": bool(analysis_status.get("gpuAvailable")),
@@ -762,6 +763,7 @@ def create_app(
             "diarizationGpuAvailable": model_status.get("diarizationDevice") == "cuda",
             "analysisAvailable": bool(analysis_status.get("ready")),
             "analysisModel": analysis_status.get("model"),
+            "analysisTier": str(analysis_status.get("tier") or ""),
             "analysisDevice": str(analysis_status.get("device") or "unknown"),
             "analysisAccelerator": str(analysis_status.get("accelerator") or "CPU"),
             "analysisGpuAvailable": bool(analysis_status.get("gpuAvailable")),
@@ -1048,6 +1050,72 @@ def create_app(
                 sessions.release_job(owner_digest)
             if progress_token:
                 analysis_progress.finish(progress_token)
+        response.headers["Cache-Control"] = "no-store"
+        return dict(result)
+
+    @app.post("/v1/qa")
+    def answer_meeting_question(
+        response: Response,
+        payload: Annotated[dict[str, Any], Body()],
+        _owner_digest: str | None = Depends(require_access),
+    ) -> dict[str, Any]:
+        # Local-only: the hosted MeetingAnalyzer is a completely different
+        # (transformer/device-based) backend with no Q&A implementation of
+        # its own, and the hosted service is a rate-limited prototype
+        # safeguard, not something worth building a second Q&A path for.
+        if hosted:
+            raise HTTPException(status_code=404, detail="Route was not found.")
+        if active_analyzer is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Professional meeting analysis is not configured on this service.",
+            )
+        # Answering a free-form question asks more of the model than the
+        # structured analysis does (which only has to summarise what's
+        # already there) -- Fast/Balanced were shown to miss things even on
+        # that easier task, so Q&A is restricted to the High quality tier.
+        # Enforced here, not just hidden in the UI, since the tier a
+        # browser last requested is a client-side preference that can be
+        # stale relative to what is actually installed.
+        if analysis_configuration().get("tier") != "analysis-pro":
+            raise HTTPException(
+                status_code=409,
+                detail="Answering questions requires the High quality smart summary model. Switch to it in Settings.",
+            )
+        segments = payload.get("segments")
+        if not isinstance(segments, list) or not segments:
+            raise HTTPException(
+                status_code=400,
+                detail="A completed transcript is required to answer questions.",
+            )
+        question = str(payload.get("question") or "").strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="A question is required.")
+        transcript_characters = sum(
+            len(str(segment.get("text") or ""))
+            for segment in segments
+            if isinstance(segment, dict)
+        )
+        if transcript_characters > maximum_analysis_characters:
+            raise HTTPException(
+                status_code=413,
+                detail="The transcript exceeds the configured analysis limit.",
+            )
+        history = payload.get("history")
+        try:
+            result = active_analyzer.answer_question(
+                segments=segments,
+                question=question,
+                meeting_title=payload.get("meetingTitle"),
+                history=history if isinstance(history, list) else None,
+            )
+        except MeetingAnalysisUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except Exception as error:  # noqa: BLE001 - return a safe service error
+            raise HTTPException(
+                status_code=503,
+                detail="Answering that question failed. Try again shortly.",
+            ) from error
         response.headers["Cache-Control"] = "no-store"
         return dict(result)
 

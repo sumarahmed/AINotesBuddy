@@ -3306,6 +3306,104 @@ kbd {
   border-radius: 8px;
 }
 
+.ask-view {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 780px;
+  height: 100%;
+  padding: 42px clamp(25px, 5vw, 64px) 24px;
+  margin: 0 auto;
+}
+
+.ask-thread {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding-bottom: 18px;
+}
+
+.ask-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ask-bubble {
+  max-width: 85%;
+  padding: 11px 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  border-radius: 14px;
+}
+
+.ask-bubble--question {
+  align-self: flex-end;
+  color: #fff;
+  background: var(--teal);
+  border-bottom-right-radius: 4px;
+}
+
+.ask-bubble--answer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: flex-start;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-bottom-left-radius: 4px;
+}
+
+.ask-bubble--answer small {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+
+.ask-bubble--unanswered {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.ask-bubble--pending {
+  display: inline-flex;
+  flex-direction: row;
+  gap: 7px;
+  align-items: center;
+  align-self: flex-start;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-bottom-left-radius: 4px;
+}
+
+.ask-composer {
+  display: flex;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.ask-composer input {
+  flex: 1 1 auto;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.ask-composer input:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+}
+
 .profile-setup-backdrop {
   position: fixed;
   inset: 0;
@@ -3745,6 +3843,15 @@ kbd {
   from {
     transform: translateX(100%);
   }
+}
+
+/* Settings re-renders every ~600ms while a component job (e.g. switching
+   the smart-summary quality tier) is in flight to show live progress. The
+   whole panel is a fresh DOM node each render (no diffing in this app), so
+   without this the entrance animation above replays every tick for the
+   whole download -- visible as the screen flickering and refusing input. */
+.settings-drawer--no-anim {
+  animation: none;
 }
 
 .settings-drawer > header {

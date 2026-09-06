@@ -51,6 +51,34 @@ remain compatible with semantic-version tooling.
   short, terse transcripts, not something the prompt alone fixes -- which
   is exactly why the tier switcher above matters for anyone who hits it.
 
+- **A conversational "Ask" tab for asking free-form questions about a
+  meeting** ("what did we decide about pricing?"), alongside Summary,
+  Transcript, and My notes. Local-only, same as the prompt editor and tier
+  switcher above: reuses the same `llama-cli` analyzer process and
+  evidence-grounding discipline as the structured analysis rather than a
+  second system. A new local-only `POST /v1/qa` answers one question per
+  call, citing the transcript segments that support it; when a transcript
+  is too long to fit in one context window, segments are selected by
+  word-overlap with the question (the same stemmed/stopword-filtered
+  scoring the grounding check already used elsewhere), keeping the
+  original transcript order rather than a separate embeddings/vector-DB
+  dependency this codebase has never needed. An answer that fails
+  grounding gets one retry, then an explicit "I could not find a grounded
+  answer to that in this transcript" rather than a fabricated one. Each
+  meeting's conversation (question, answer, and cited segments) is saved
+  with the meeting like everything else. Deliberately not available on
+  the hosted service, for the same reason the prompt override is not.
+  **Restricted to the High quality tier.** Free-form question answering
+  asks more of the model than the structured analysis does (which only
+  has to summarize what is already there), and the tier investigation
+  above already showed Fast/Balanced missing things even on that easier
+  task -- so the Ask tab only appears, and `POST /v1/qa` only accepts
+  requests, when the installed smart-summary model is High quality. The
+  new `analysisTier` field on `GET /v1/health` and `GET /v1/companion`
+  reports which tier is actually installed (matched against the known
+  model filename, not a client-side preference that could be stale), so
+  this is enforced server-side, not only hidden in the UI.
+
 - Applying the unified icon (above) turned out to need two more follow-up
   spots, each reported live from a screenshot after the first round shipped:
   the companion window's own title bar (Tk defaults to its own feather logo

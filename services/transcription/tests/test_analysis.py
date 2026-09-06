@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notesbuddy_transcription.analysis import (  # noqa: E402
+    QA_NOT_FOUND_FALLBACK,
     SYSTEM_PROMPT,
     ExtractiveMeetingAnalyzer,
     LlamaCppMeetingAnalyzer,
@@ -192,6 +193,171 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertEqual(command[command.index("-sys") + 1], SYSTEM_PROMPT)
 
+    def test_answer_question_returns_a_grounded_found_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            qa_result = {
+                "answer": "The team confirmed the launch date is Friday.",
+                "evidenceSegmentIds": ["S0001"],
+                "found": True,
+            }
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(qa_result), "stderr": ""},
+            )()
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                return_value=completed,
+            ):
+                result = analyzer.answer_question(
+                    segments=_MINIMAL_SEGMENTS,
+                    question="When is the launch date?",
+                    meeting_title="Test",
+                )
+            self.assertTrue(result["found"])
+            self.assertEqual(result["evidenceSegmentIds"], ["seg-1"])
+            self.assertEqual(
+                result["answer"], "The team confirmed the launch date is Friday."
+            )
+
+    def test_answer_question_passes_through_a_not_found_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            qa_result = {
+                "answer": "The transcript does not mention pricing.",
+                "evidenceSegmentIds": [],
+                "found": False,
+            }
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(qa_result), "stderr": ""},
+            )()
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                return_value=completed,
+            ) as run:
+                result = analyzer.answer_question(
+                    segments=_MINIMAL_SEGMENTS,
+                    question="What was the price?",
+                    meeting_title="Test",
+                )
+            self.assertEqual(run.call_count, 1)
+            self.assertFalse(result["found"])
+            self.assertEqual(result["evidenceSegmentIds"], [])
+            self.assertEqual(
+                result["answer"], "The transcript does not mention pricing."
+            )
+
+    def test_answer_question_retries_ungrounded_output_then_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+            # "found": true but the answer's wording shares nothing with the
+            # cited segment's real text -- fails _is_grounded_text on both
+            # the first attempt and the retry, so this must fall back to
+            # the explicit not-found response rather than surface either.
+            ungrounded = {
+                "answer": "Completely unrelated fabricated content here.",
+                "evidenceSegmentIds": ["S0001"],
+                "found": True,
+            }
+            completed = type(
+                "Completed",
+                (),
+                {"returncode": 0, "stdout": json.dumps(ungrounded), "stderr": ""},
+            )()
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                return_value=completed,
+            ) as run:
+                result = analyzer.answer_question(
+                    segments=_MINIMAL_SEGMENTS,
+                    question="When is the launch date?",
+                    meeting_title="Test",
+                )
+            self.assertEqual(run.call_count, 2)
+            self.assertFalse(result["found"])
+            self.assertEqual(result["evidenceSegmentIds"], [])
+            self.assertEqual(result["answer"], QA_NOT_FOUND_FALLBACK)
+
+    def test_answer_question_selects_only_relevant_segments_for_a_long_transcript(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            model = Path(directory) / "summary.gguf"
+            runtime.touch()
+            model.touch()
+            analyzer = LlamaCppMeetingAnalyzer(
+                runtime_path=runtime,
+                model_path=model,
+                maximum_chunk_characters=6_000,
+            )
+            filler = (
+                "We discussed general project logistics and upcoming quarterly "
+                "planning topics without any specific new commitments today."
+            )
+            segments = [
+                {"id": f"filler-{index}", "speaker": "Presenter", "text": filler}
+                for index in range(80)
+            ]
+            segments.append(
+                {
+                    "id": "budget-segment",
+                    "speaker": "Presenter",
+                    "text": "The marketing campaign budget was approved at fifteen "
+                    "thousand dollars.",
+                }
+            )
+            total_characters = sum(len(item["text"]) for item in segments)
+            self.assertGreater(total_characters, analyzer.maximum_chunk_characters)
+
+            captured: dict[str, str] = {}
+
+            def fake_run(command, **_kwargs):
+                prompt_path = Path(command[command.index("--file") + 1])
+                captured["prompt"] = prompt_path.read_text(encoding="utf-8")
+                qa_result = {
+                    "answer": "The marketing campaign budget was fifteen thousand dollars.",
+                    "evidenceSegmentIds": ["S0081"],
+                    "found": True,
+                }
+                return type(
+                    "Completed",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": json.dumps(qa_result),
+                        "stderr": "",
+                    },
+                )()
+
+            with patch(
+                "notesbuddy_transcription.analysis.subprocess.run",
+                side_effect=fake_run,
+            ):
+                result = analyzer.answer_question(
+                    segments=segments,
+                    question="What was the marketing campaign budget?",
+                )
+            self.assertIn("fifteen thousand dollars", captured["prompt"])
+            self.assertLess(len(captured["prompt"]), total_characters)
+            self.assertTrue(result["found"])
+            self.assertEqual(result["evidenceSegmentIds"], ["budget-segment"])
+
     def test_configuration_status_reports_device_and_accelerator(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory) / "llama-cli.exe"
@@ -213,6 +379,26 @@ class LlamaCppMeetingAnalyzerTests(unittest.TestCase):
             self.assertEqual(status["device"], "cuda")
             self.assertTrue(status["gpuAvailable"])
             self.assertEqual(status["accelerator"], "NVIDIA Test GPU")
+
+    def test_configuration_status_reports_the_installed_quality_tier(self) -> None:
+        # Mirrors desktop/prepare_components.py's ANALYSIS_TIERS_BY_ID model
+        # filenames -- if a pinned tier's model file is ever renamed there,
+        # this (and the matching table in analysis.py) needs updating too.
+        cases = [
+            ("qwen2.5-0.5b-instruct-q4_k_m.gguf", "analysis-tiny"),
+            ("Qwen3-1.7B-Q4_K_M.gguf", "analysis-standard"),
+            ("Qwen3-4B-Instruct-2507-Q3_K_M.gguf", "analysis-pro"),
+            ("some-other-model.gguf", ""),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-cli.exe"
+            runtime.touch()
+            for filename, expected_tier in cases:
+                model = Path(directory) / filename
+                model.touch()
+                analyzer = LlamaCppMeetingAnalyzer(runtime_path=runtime, model_path=model)
+                self.assertEqual(analyzer.configuration_status()["tier"], expected_tier)
+                model.unlink()
 
     def test_generates_synthesised_grounded_analysis_from_text_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

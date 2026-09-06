@@ -84,6 +84,7 @@ const ICONS = {
   headphones: '<path d="M4 14a8 8 0 0 1 16 0"/><path d="M18 19v-5h3v5a2 2 0 0 1-2 2h-1Z"/><path d="M6 19v-5H3v5a2 2 0 0 0 2 2h1Z"/>',
   radio: '<circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  messageCircle: '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/>',
 };
 
 function icon(name, size = 16, className = "") {
@@ -380,6 +381,7 @@ const state = {
   settingsOpen: false,
   analysisPromptEditorOpen: false,
   analysisPromptDraft: "",
+  askPending: false,
   mobileNavOpen: false,
   moreOpen: false,
   showAllMeetings: false,
@@ -1291,6 +1293,53 @@ function notesView(meeting) {
   </div></div>`;
 }
 
+function askView(meeting) {
+  const conversation = Array.isArray(meeting.qa) ? meeting.qa : [];
+  const turns = conversation
+    .map((turn) => {
+      const evidenceCount = Array.isArray(turn.evidenceSegmentIds)
+        ? turn.evidenceSegmentIds.length
+        : 0;
+      return `<div class="ask-turn">
+        <div class="ask-bubble ask-bubble--question"><span>${escapeHtml(turn.question)}</span></div>
+        <div class="ask-bubble ask-bubble--answer ${turn.found === false ? "ask-bubble--unanswered" : ""}">
+          <span>${escapeHtml(turn.answer)}</span>
+          ${turn.found !== false && evidenceCount ? `<small>${icon("file", 11)}Based on ${evidenceCount} transcript segment${evidenceCount === 1 ? "" : "s"}</small>` : ""}
+        </div>
+      </div>`;
+    })
+    .join("");
+  const asking = state.askPending;
+  return `<div class="ask-view">
+    <div class="ask-thread">${turns || `<div class="insight-empty">Ask a question about this meeting, for example "what did we decide about pricing?" Answers are grounded in the transcript, and this will say so plainly when the transcript does not cover something.</div>`}${asking ? `<div class="ask-turn"><div class="ask-bubble ask-bubble--answer ask-bubble--pending">${icon("refresh", 14, "spin")}Thinking…</div></div>` : ""}</div>
+    <form class="ask-composer" data-form="ask-question">
+      <input type="text" data-input="ask-question" placeholder="Ask about this meeting…" maxlength="500" ${asking ? "disabled" : ""} aria-label="Ask a question about this meeting" autocomplete="off">
+      <button type="submit" class="button button--primary" ${asking ? "disabled" : ""}>${icon("messageCircle", 15)}Ask</button>
+    </form>
+  </div>`;
+}
+
+function canAskQuestions(meeting) {
+  // Local-only, matching the systemPrompt/tier settings gating elsewhere:
+  // the hosted service has no Q&A implementation (see server.py). Also
+  // requires the High quality tier specifically -- Fast and Balanced were
+  // shown (see the tier-switcher investigation) to miss things on short,
+  // terse transcripts even for the structured analysis, which only has to
+  // summarise what's there; free-form question answering asks more of the
+  // model than that, so a lesser tier's answers would be less trustworthy,
+  // not just lower quality. analysisTier reflects the model file actually
+  // installed and loaded server-side (see analysis.py), not just a
+  // browser-local preference that could be stale.
+  return Boolean(
+    usesHybridTranscription() &&
+      !usesHostedTranscription() &&
+      state.companion.status === "connected" &&
+      state.companion.metadata?.analysisAvailable &&
+      state.companion.metadata?.analysisTier === "analysis-pro" &&
+      meeting.transcript?.length,
+  );
+}
+
 function meetingView(meeting) {
   const tabButton = (id, label, iconName) =>
     `<button type="button" data-action="tab" data-id="${id}" class="${state.tab === id ? "detail-tab--active" : ""}" role="tab" aria-selected="${state.tab === id}">${icon(iconName, 15)}${label}</button>`;
@@ -1339,9 +1388,9 @@ function meetingView(meeting) {
             </div>`
           : ""
       }
-      <div class="detail-tabs" role="tablist" aria-label="Meeting views">${tabButton("summary", "Summary", "sparkles")}${tabButton("transcript", "Transcript", "file")}${tabButton("notes", "My notes", "notebook")}</div>
+      <div class="detail-tabs" role="tablist" aria-label="Meeting views">${tabButton("summary", "Summary", "sparkles")}${tabButton("transcript", "Transcript", "file")}${tabButton("notes", "My notes", "notebook")}${canAskQuestions(meeting) ? tabButton("ask", "Ask", "messageCircle") : ""}</div>
     </header>
-    <div class="detail-content">${state.tab === "summary" ? summaryView(meeting) : state.tab === "transcript" ? transcriptView(meeting) : notesView(meeting)}</div>
+    <div class="detail-content">${state.tab === "summary" ? summaryView(meeting) : state.tab === "transcript" ? transcriptView(meeting) : state.tab === "ask" ? askView(meeting) : notesView(meeting)}</div>
   </main>`;
 }
 
@@ -1388,9 +1437,17 @@ function settingsPanel() {
         <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
         <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
       </section>`;
-  const analysisGpuInstalling =
+  // Single source for "a component job is actively running" -- reused below
+  // for disabling buttons, showing progress, and (critically) suppressing
+  // the settings drawer's own entrance animation, which otherwise replays
+  // on every ~600ms poll re-render for the whole length of a download and
+  // reads as the screen flickering and refusing input. Reported live while
+  // switching to the High quality tier (a ~2GB download, so minutes of it).
+  const componentJobRunning = Boolean(
     state.componentJob &&
-    ["queued", "downloading", "installing"].includes(state.componentJob.status);
+      ["queued", "downloading", "installing"].includes(state.componentJob.status),
+  );
+  const analysisGpuInstalling = componentJobRunning;
   const analysisAccelerationSettings =
     hybridConnected && state.companion.metadata?.analysisAvailable
       ? `<section class="settings-section">
@@ -1422,7 +1479,7 @@ function settingsPanel() {
     const currentTierId = tiers.find((tier) => available[tier.id]?.installed)?.id || "";
     return `<section class="settings-section">
         <span class="eyebrow">Smart meeting summary quality</span>
-        <p class="settings-help">Switching downloads the selected model and replaces the one currently installed.</p>
+        <p class="settings-help">Switching downloads the selected model and replaces the one currently installed. Asking questions about a meeting requires High quality.</p>
         <div class="component-options component-options--compact">
           ${tiers
             .map((tier) => {
@@ -1434,6 +1491,17 @@ function settingsPanel() {
             })
             .join("")}
         </div>
+        ${
+          componentJobRunning
+            ? (() => {
+                const job = state.componentJob;
+                const progress = Math.max(0, Math.min(100, Math.round((Number(job?.progress) || 0) * 100)));
+                return `<div class="component-progress" aria-live="polite"><div><span>${escapeHtml(job.stage || "Preparing components")}</span><b>${progress}%</b></div><i><span style="width:${progress}%"></span></i><small>You can leave Settings open. An interrupted download resumes from the saved partial file.</small><button type="button" class="button button--quiet" data-action="pause-components">Pause download</button></div>`;
+              })()
+            : state.componentJob?.status === "failed"
+              ? `<div class="companion-setup__status">${escapeHtml(state.componentJob.error || "Switching model quality failed. Please retry.")}</div>`
+              : ""
+        }
       </section>`;
   })();
   const analysisPromptSettings =
@@ -1450,9 +1518,7 @@ function settingsPanel() {
         </section>`;
         })()
       : "";
-  const speakerGpuInstalling =
-    state.componentJob &&
-    ["queued", "downloading", "installing"].includes(state.componentJob.status);
+  const speakerGpuInstalling = componentJobRunning;
   const speakerAccelerationSettings =
     hybridConnected && state.companion.metadata?.systemAudioCapture
       ? `<section class="settings-section">
@@ -1475,7 +1541,7 @@ function settingsPanel() {
       ? "Process saved tracks automatically on the connected companion, with online fallback only when it is unavailable."
       : "Send saved local tracks to the paired localhost companion after capture.";
   return `<div class="drawer-backdrop" data-action="close-settings">
-    <aside class="settings-drawer" data-panel="settings">
+    <aside class="settings-drawer${componentJobRunning ? " settings-drawer--no-anim" : ""}" data-panel="settings">
       <header><div><span class="eyebrow">Workspace</span><h2>Settings</h2></div>${iconButton("close-settings", "Close settings", "x")}</header>
       <section class="settings-privacy"><div class="settings-privacy__icon">${icon("shield", 22)}</div><div><strong>${hosted ? "Local recording · online transcription" : "Local recording · on-device transcription"}</strong><p>${privacyMessage}</p></div></section>
       <section class="settings-section">
@@ -3146,6 +3212,7 @@ async function finishCapture() {
       error: null,
     },
     notes: "",
+    qa: [],
   };
   MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
   state.meetings.unshift(meeting);
@@ -3386,6 +3453,21 @@ function createMeetingAnalysisClient() {
   return createTranscriptionClient();
 }
 
+function meetingAnalysisSegments(meeting) {
+  return meeting.transcript.map((segment) => ({
+    id: segment.id,
+    speaker: MeetingAudio.speakerLabel(
+      meeting,
+      segment.speakerId,
+      segment.speaker,
+    ),
+    timestamp: segment.timestamp,
+    startMs: segment.startMs,
+    endMs: segment.endMs,
+    text: segment.text,
+  }));
+}
+
 async function analyzeMeeting(meeting = selectedMeeting()) {
   if (!meeting?.transcript?.length) {
     showToast(
@@ -3413,18 +3495,7 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
       // server.py) -- safe to always pass whatever is saved without
       // knowing here which client createMeetingAnalysisClient() picked.
       systemPrompt: state.settings.analysisSystemPrompt || undefined,
-      segments: meeting.transcript.map((segment) => ({
-        id: segment.id,
-        speaker: MeetingAudio.speakerLabel(
-          meeting,
-          segment.speakerId,
-          segment.speaker,
-        ),
-        timestamp: segment.timestamp,
-        startMs: segment.startMs,
-        endMs: segment.endMs,
-        text: segment.text,
-      })),
+      segments: meetingAnalysisSegments(meeting),
     });
     if (!applyMeetingAnalysisToMeeting(meeting, result)) {
       throw new Error(
@@ -3456,6 +3527,47 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
       meeting.analysis.error,
     );
     return false;
+  }
+}
+
+async function askMeetingQuestion(meeting, question) {
+  const trimmed = String(question || "").trim();
+  if (!trimmed || !meeting?.transcript?.length || state.askPending) {
+    return false;
+  }
+  const history = (Array.isArray(meeting.qa) ? meeting.qa : [])
+    .slice(-2)
+    .map((turn) => ({ question: turn.question, answer: turn.answer }));
+  state.askPending = true;
+  render();
+  try {
+    const result = await createMeetingAnalysisClient().askQuestion({
+      meetingTitle: meeting.title,
+      segments: meetingAnalysisSegments(meeting),
+      question: trimmed,
+      history,
+    });
+    if (!Array.isArray(meeting.qa)) meeting.qa = [];
+    meeting.qa.push({
+      question: trimmed,
+      answer: result.answer,
+      found: result.found,
+      evidenceSegmentIds: Array.isArray(result.evidenceSegmentIds)
+        ? result.evidenceSegmentIds
+        : [],
+      askedAt: new Date().toISOString(),
+    });
+    save();
+    return true;
+  } catch (error) {
+    showToast(
+      "Couldn't answer that question",
+      error?.message || "Answering that question failed. Try again shortly.",
+    );
+    return false;
+  } finally {
+    state.askPending = false;
+    render();
   }
 }
 
@@ -3787,6 +3899,7 @@ async function importAudio(file) {
       error: null,
     },
     notes: "",
+    qa: [],
   };
   MeetingAudio.ensureMeetingSpeakers(meeting, state.profile);
   state.meetings.unshift(meeting);
@@ -3834,6 +3947,15 @@ function updateProfileName(rawName) {
 }
 
 app.addEventListener("submit", (event) => {
+  const askForm = event.target.closest("[data-form='ask-question']");
+  if (askForm) {
+    event.preventDefault();
+    const input = askForm.querySelector("[data-input='ask-question']");
+    const question = input.value;
+    input.value = "";
+    askMeetingQuestion(selectedMeeting(), question);
+    return;
+  }
   const form = event.target.closest("[data-form='profile-setup']");
   if (!form) return;
   event.preventDefault();

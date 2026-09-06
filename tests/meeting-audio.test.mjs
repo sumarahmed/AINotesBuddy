@@ -1001,6 +1001,80 @@ test("analysis client fetches the real default system prompt from the companion"
   assert.equal(result.promptVersion, 4);
 });
 
+test("qa client posts a question and includes history only when given", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          answer: "The launch date is Friday.",
+          found: true,
+          evidenceSegmentIds: ["segment-one"],
+        };
+      },
+    };
+  };
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    token: "pairing-secret",
+    fetchImpl,
+  });
+  const segments = [{ id: "segment-one", text: "The launch date is Friday." }];
+
+  const result = await client.askQuestion({
+    meetingTitle: "Scope review",
+    segments,
+    question: "When is the launch date?",
+  });
+
+  assert.equal(calls[0].url, "http://127.0.0.1:8765/v1/qa");
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    meetingTitle: "Scope review",
+    segments,
+    question: "When is the launch date?",
+  });
+  assert.equal(result.answer, "The launch date is Friday.");
+  assert.equal(result.found, true);
+
+  const history = [{ question: "Earlier question", answer: "Earlier answer" }];
+  await client.askQuestion({
+    meetingTitle: "Scope review",
+    segments,
+    question: "And the budget?",
+    history,
+  });
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    meetingTitle: "Scope review",
+    segments,
+    question: "And the budget?",
+    history,
+  });
+});
+
+test("qa client rejects an empty question or transcript before sending a request", async () => {
+  const client = new MeetingAudio.TranscriptionClient({
+    endpoint: "http://127.0.0.1:8765",
+    token: "pairing-secret",
+    fetchImpl: async () => {
+      throw new Error("must not be called");
+    },
+  });
+
+  assert.throws(() =>
+    client.askQuestion({ segments: [], question: "When is the launch date?" }),
+  );
+  assert.throws(() =>
+    client.askQuestion({
+      segments: [{ id: "segment-one", text: "The launch date is Friday." }],
+      question: "   ",
+    }),
+  );
+});
+
 test("analysis client polls a progress token concurrently and stops after completion", async () => {
   // POST /v1/analyses has no separate job to poll for a result, so this is
   // the only way a caller learns anything during a real chunked local

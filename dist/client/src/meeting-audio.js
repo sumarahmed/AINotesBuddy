@@ -1387,6 +1387,29 @@
       return this.request("/v1/analyses/prompt");
     }
 
+    // Local companion only (404 on the hosted service, see server.py) --
+    // the hosted MeetingAnalyzer is a different backend with no Q&A
+    // implementation, and the hosted service is a rate-limited prototype
+    // safeguard, not worth a second Q&A path. history is the caller's own
+    // { question, answer } pairs from earlier turns in this conversation;
+    // the server bounds how much of it is actually used.
+    askQuestion({ meetingTitle = "", segments = [], question = "", history = [] } = {}) {
+      if (!Array.isArray(segments) || !segments.length) {
+        throw new Error("A completed transcript is required to answer questions.");
+      }
+      if (!question.trim()) {
+        throw new Error("A question is required.");
+      }
+      const body = { meetingTitle, segments, question };
+      if (Array.isArray(history) && history.length) body.history = history;
+      return this.request("/v1/qa", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
     getJob(jobId) {
       return this.request(
         `/v1/transcriptions/${encodeURIComponent(jobId)}`,

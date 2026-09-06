@@ -481,6 +481,58 @@ show a real diff rather than a second hardcoded copy. Both are local-only
 arbitrary caller-supplied system prompts is a real abuse/cost vector a
 single local companion is not.
 
+### Conversational Q&A over a transcript
+
+The "Ask" tab (`askView()` in `src/app.js`) lets a user ask free-form
+questions about one meeting's completed transcript, answered by the same
+local `llama-cli` analyzer used for the structured analysis above, not a
+second system. `POST /v1/qa` (local-only, 404 on the hosted service, same
+reasoning as the prompt override) takes `{segments, question, history?,
+meetingTitle?}` and returns `{answer, found, evidenceSegmentIds, model,
+schemaVersion, promptVersion}`.
+
+If the whole transcript fits under `maximum_chunk_characters`, the full
+transcript is the context. Otherwise
+`LlamaCppMeetingAnalyzer._select_relevant_segments()` scores every segment
+by word overlap with the question (the same stemmed/stopword-filtered
+`_content_tokens()` used by the evidence-grounding check), keeps the
+highest-scoring segments up to the character budget, and returns them in
+original transcript order so the model still reads real conversational
+flow -- deliberately reusing this codebase's existing "plain word-overlap,
+no embeddings" retrieval philosophy rather than adding an embeddings model
+or vector index as a new dependency. `history` (the caller's last couple of
+question/answer pairs) is folded into the prompt text; each question is
+still its own single `llama-cli` invocation, matching how `analyze()` never
+keeps a long-lived chat session open either.
+
+The answer is validated with the same `_is_grounded_text()` check used for
+the structured analysis. `found: false` is a real, distinct outcome (the
+question isn't covered by the transcript), not a failure -- unlike the
+structured analysis, which always has *something* to summarize, a question
+can genuinely be about something never discussed. A `found: true` answer
+that fails grounding gets one retry with a short "answer using only wording
+from the transcript excerpt" nudge, then falls back to an explicit "I could
+not find a grounded answer to that in this transcript" rather than
+returning unvalidated text. Each meeting persists its own conversation
+(`meeting.qa: [{question, answer, found, evidenceSegmentIds, askedAt}]`)
+alongside its other saved fields.
+
+Restricted to the High quality tier (`analysis-pro`), both in the UI and on
+the server. Free-form question answering asks more of the model than the
+structured analysis does, which only has to summarize what is already
+there -- and Fast/Balanced were already shown (see the tier-switcher
+investigation above) to miss things even on that easier task.
+`LlamaCppMeetingAnalyzer.tier` resolves the installed quality tier from the
+loaded model file's own name (a small table in `analysis.py`, mirroring
+`desktop/prepare_components.py`'s `ANALYSIS_TIERS_BY_ID` model filenames,
+duplicated rather than imported since that module is a build-time
+packaging script outside this runtime package) and is reported as
+`analysisTier` on `GET /v1/health` and `GET /v1/companion`. `src/app.js`'s
+`canAskQuestions()` gates the Ask tab on it, and `POST /v1/qa` checks it
+again server-side (409 if not `analysis-pro`) rather than trusting only a
+browser-local tier preference, which could be stale relative to what is
+actually installed.
+
 ## Speaker model
 
 ```js

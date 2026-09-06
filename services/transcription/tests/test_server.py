@@ -52,12 +52,14 @@ class FakeAnalyzer:
 
     def __init__(self) -> None:
         self.received_system_prompts: list[str | None] = []
+        self.received_histories: list[object] = []
 
     @staticmethod
     def configuration_status() -> dict[str, object]:
         return {
             "ready": True,
             "model": "fake-analysis-model",
+            "tier": "analysis-pro",
             "status": "ready",
         }
 
@@ -80,6 +82,20 @@ class FakeAnalyzer:
             ],
             "decisions": [],
             "actionItems": [],
+        }
+
+    def answer_question(
+        self, *, segments, question, meeting_title="", history=None
+    ) -> dict:
+        self.received_histories.append(history)
+        source_id = str(segments[0]["id"])
+        return {
+            "schemaVersion": 1,
+            "promptVersion": 1,
+            "model": "fake-analysis-model",
+            "answer": f"Fake answer to: {question}",
+            "found": True,
+            "evidenceSegmentIds": [source_id],
         }
 
 
@@ -218,6 +234,7 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(response.json()["storage"], "temporary job files only")
         self.assertTrue(response.json()["analysisAvailable"])
         self.assertEqual(response.json()["analysisModel"], "fake-analysis-model")
+        self.assertEqual(response.json()["analysisTier"], "analysis-pro")
         self.assertTrue(response.json()["componentSetupAvailable"])
         self.assertEqual(response.json()["diarizationDevice"], "cpu")
         self.assertFalse(response.json()["diarizationGpuAvailable"])
@@ -309,6 +326,60 @@ class LocalApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["systemPrompt"], SYSTEM_PROMPT)
         self.assertEqual(response.json()["promptVersion"], ANALYSIS_PROMPT_VERSION)
+
+    def test_qa_requires_pairing_and_returns_a_grounded_answer(self) -> None:
+        payload = {
+            "meetingTitle": "Scope review",
+            "segments": [{"id": "segment-one", "text": "We agreed to use the revised scope."}],
+            "question": "What did we agree on?",
+        }
+        self.assertEqual(
+            self.client.post("/v1/qa", json=payload).status_code,
+            401,
+        )
+
+        response = self.client.post("/v1/qa", headers=self.headers, json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        self.assertTrue(response.json()["found"])
+        self.assertEqual(response.json()["evidenceSegmentIds"], ["segment-one"])
+        self.assertIn("What did we agree on?", response.json()["answer"])
+
+    def test_qa_requires_a_non_empty_question(self) -> None:
+        payload = {
+            "segments": [{"id": "segment-one", "text": "We agreed to use the revised scope."}],
+            "question": "   ",
+        }
+        response = self.client.post("/v1/qa", headers=self.headers, json=payload)
+        self.assertEqual(response.status_code, 400)
+
+    def test_qa_forwards_conversation_history(self) -> None:
+        self.analyzer.received_histories.clear()
+        history = [{"question": "Earlier question", "answer": "Earlier answer"}]
+        payload = {
+            "segments": [{"id": "segment-one", "text": "We agreed to use the revised scope."}],
+            "question": "And what about the timeline?",
+            "history": history,
+        }
+
+        response = self.client.post("/v1/qa", headers=self.headers, json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.analyzer.received_histories[-1], history)
+
+    def test_qa_rejects_a_tier_below_high_quality(self) -> None:
+        payload = {
+            "segments": [{"id": "segment-one", "text": "We agreed to use the revised scope."}],
+            "question": "What did we agree on?",
+        }
+        with mock.patch.object(
+            self.analyzer,
+            "configuration_status",
+            return_value={"ready": True, "model": "fake-analysis-model", "tier": "analysis-standard", "status": "ready"},
+        ):
+            response = self.client.post("/v1/qa", headers=self.headers, json=payload)
+        self.assertEqual(response.status_code, 409)
 
     def test_analysis_progress_is_pollable_while_in_flight_and_cleared_after(self) -> None:
         # POST /v1/analyses is a single request/response with no separate
@@ -713,6 +784,21 @@ class AnonymousHostedApiTests(unittest.TestCase):
     def test_hosted_service_does_not_expose_the_analysis_prompt_endpoint(self) -> None:
         self.assertEqual(
             self.client.get("/v1/analyses/prompt", headers=self._new_session()).status_code,
+            404,
+        )
+
+    def test_hosted_service_does_not_expose_the_qa_endpoint(self) -> None:
+        # No local precedent to reuse and a shared, rate-limited deployment
+        # is a real abuse/cost vector -- see analysis.py's answer_question
+        # and the plan this shipped from.
+        payload = {
+            "segments": [{"id": "segment-one", "text": "We agreed to use the revised scope."}],
+            "question": "What did we agree on?",
+        }
+        self.assertEqual(
+            self.client.post(
+                "/v1/qa", headers=self._new_session(), json=payload
+            ).status_code,
             404,
         )
 
