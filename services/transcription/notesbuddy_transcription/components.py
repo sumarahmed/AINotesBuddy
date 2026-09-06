@@ -174,6 +174,11 @@ class ComponentManager:
                 "downloadBytes": int(component.get("bytes") or 0),
                 "installed": self.is_installed(component_id),
                 "category": component.get("category", "optional"),
+                # Both optional, present only on the three analysis tiers --
+                # the Settings/first-run tier picker in app.js reads these to
+                # show why a tier matters and which real model it installs.
+                "tierDescription": component.get("tierDescription"),
+                "modelLabel": component.get("modelLabel"),
             }
         active = next(
             (job.public() for job in self._jobs.values() if job.status in {"queued", "downloading", "installing"}),

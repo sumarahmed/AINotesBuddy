@@ -130,6 +130,37 @@ class ComponentManagerTests(unittest.TestCase):
                 (manager.root / "analysis" / "qwen2.5-0.5b-instruct-q4_k_m.gguf").is_file()
             )
 
+    def test_status_reports_tier_description_and_model_label_for_analysis_tiers(self) -> None:
+        # Reported live: the Settings tier picker in app.js reads
+        # meta.tierDescription/meta.modelLabel, but status() silently
+        # dropped both -- every field not on its explicit whitelist -- so
+        # neither ever actually reached a real client despite being present
+        # in the manifest all along.
+        payload = archive_bytes({"model.bin": b"model"})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "components"
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(json.dumps({"schemaVersion": 1, "components": {
+                "analysis-pro": {
+                    "name": "Smart meeting summary (High quality)",
+                    "version": "1",
+                    "category": "analysis",
+                    "destination": "analysis",
+                    "bytes": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "url": "https://example.invalid/analysis-pro.zip",
+                    "tierDescription": "Largest download, most capable local summarisation",
+                    "modelLabel": "Qwen3 4B Instruct 2507 (Q3_K_M)",
+                },
+            }}), encoding="utf-8")
+            manager = ComponentManager(root=root, manifest_path=manifest, opener=lambda *_a, **_k: FakeResponse(payload))
+            status = manager.status()["components"]["analysis-pro"]
+            self.assertEqual(
+                status["tierDescription"],
+                "Largest download, most capable local summarisation",
+            )
+            self.assertEqual(status["modelLabel"], "Qwen3 4B Instruct 2507 (Q3_K_M)")
+
     def test_compatible_component_checksum_survives_core_app_upgrades(self) -> None:
         payload = archive_bytes({"model.bin": b"model"})
         with tempfile.TemporaryDirectory() as directory:
