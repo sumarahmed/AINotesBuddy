@@ -44,7 +44,12 @@ The JavaScript tests cover:
 - transcript-only professional-analysis request construction;
 - automatic replacement of hosted sessions lost during scale-to-zero;
 - analysis progress-token polling while a request is in flight, stopping
-  after completion.
+  after completion;
+- fetching the real current analysis system prompt from
+  `GET /v1/analyses/prompt` and threading an edited prompt through
+  `POST /v1/analyses`'s `systemPrompt` field;
+- constructing a `POST /v1/qa` request from a question, meeting transcript,
+  and conversation history.
 
 The test file runs directly rather than with Node's process-isolated test mode,
 which also works in restricted Windows environments that deny child-process
@@ -115,6 +120,13 @@ The Python suite covers:
   failed GPU-flagged run, and reports device/accelerator status;
 - server-side analysis progress store: pollable while a request is in
   flight, cleared after completion.
+- `GET /v1/analyses/prompt` returning the real built-in default, and
+  `POST /v1/analyses`'s optional `systemPrompt` reaching `llama-cli`'s `-sys`
+  argument; both local-only and 404 on the hosted service;
+- `POST /v1/qa`: a grounded answer citing real transcript segments, a
+  non-empty-question requirement, conversation history forwarded into the
+  prompt, rejection (409) below the High quality tier, and 404 on the hosted
+  service;
 - anonymous session opacity, expiry/error handling, issuance limits, active-job
   limits, and compute quotas;
 - hosted job ownership isolation and hosted CORS/session headers.

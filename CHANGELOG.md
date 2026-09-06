@@ -8,6 +8,8 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+## 2026.09.06 - 2026-09-06 -- Phase 1 complete
+
 ### Added
 
 - Two more findings from the diarization CPU-boundedness investigation

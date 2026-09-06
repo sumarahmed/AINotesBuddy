@@ -33,6 +33,7 @@ application's control.
 | Companion update response | Companion process memory | Until the next check or application exit |
 | Teams audio/microphone activity flags | Companion process memory | Current detection poll only; no audio content is read or stored |
 | Local smart-summary diagnostic log (may include short generated-summary excerpts) | `%LOCALAPPDATA%\NotesBuddy\logs\companion.log` | Until the user deletes the file |
+| Ask-tab question, answer, and cited evidence segment IDs | Browser `localStorage`, saved with the meeting record (`meeting.qa`) | Until meeting/site data is deleted |
 | Speech, diarization, and smart-summary models | Local or hosted model cache | Until the owner removes the cache |
 | Hugging Face model token | Source-development environment, host secret manager, or trusted release job | Owner controlled; never included in installer |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
@@ -255,6 +256,37 @@ server additionally removes unsupported items and normalizes unsupported
 owners, dates, priorities, context, and notes. These safeguards reduce model
 fabrication but do not make automated analysis infallible; users should verify
 high-impact conclusions against the transcript.
+
+An editable "Analysis prompt (advanced)" in Settings replaces the built-in
+system prompt sent with this request (`POST /v1/analyses`'s optional
+`systemPrompt`). It follows the exact same local-vs-hosted boundary as the
+rest of professional analysis, with one addition: the hosted analyzer never
+accepts a caller-supplied prompt at all (a shared, rate-limited deployment
+accepting arbitrary system prompts is a real abuse/cost vector a single local
+companion is not), so this feature is local-only regardless of which path a
+plain analysis request would otherwise use.
+
+## Conversational Q&A over a transcript
+
+The **Ask** tab sends the same data a professional analysis request already
+sends -- the meeting title plus timestamped speaker text and stable segment
+IDs, never microphone, meeting, or mixed recording Blobs -- to a new
+local-only `POST /v1/qa`, one request per question asked. It shares the exact
+same local-only boundary as the analysis prompt override above: it is never
+sent to the hosted analyzer and returns 404 there, so asking a question is
+unavailable unless a paired local companion is connected. Each meeting's own
+conversation (question, answer, whether a grounded answer was found, and
+cited segment IDs) is saved with the meeting record like the rest of its
+data, and is included in the meeting-deletion behavior described below.
+
+The Ask tab only appears, and the server only accepts requests, when the
+installed local smart-summary tier is High quality (`analysis-pro`) --
+reported as `analysisTier` on `GET /v1/health` and `GET /v1/companion` and
+resolved from the installed model file itself, not a client-side preference
+that could be stale. Asking about something the transcript never covers
+returns an explicit "not covered" answer rather than a fabricated one, the
+same evidence-grounding discipline used for the rest of professional
+analysis.
 
 ## Model access and caches
 

@@ -2,14 +2,24 @@
 
 ## Status
 
-Implemented through release `2026.08.1`: Windows-first local companion with a
-hybrid public-site rollout and WASAPI system-output capture.
+Shipped and substantially complete as of `2026.09.06` -- see
+[`CHANGELOG.md`](../CHANGELOG.md) for the full release history. Every goal
+below is implemented: the Windows-first local companion, hybrid public-site
+rollout, WASAPI system-output capture, automatic browser discovery/pairing,
+optional CUDA acceleration for both speech-to-text and speaker diarization,
+reusable component packs (speech, speaker, and three smart-summary quality
+tiers, each independently switchable from Settings), local model-free-turned-
+model-backed meeting analysis with evidence grounding, and live guest
+captions during recording. This file is retained as the original design and
+rollout record; treat any section that reads as a future plan (subscription
+migration, production release gates, a native shell replacing Tk) as still
+open, and the rest as historical context for decisions already made.
 
-The currently deployed hosted transcription service remains available while
-the companion is developed and adopted. Installing the companion changes the
-processing location and replaces unreliable Teams-window browser audio with
-direct default-output capture while preserving the transcript, playback, and
-export data contracts.
+The currently deployed hosted transcription service remains available as the
+documented fallback when no companion is connected. Installing the companion
+changes the processing location and replaces unreliable Teams-window browser
+audio with direct default-output capture while preserving the transcript,
+playback, and export data contracts.
 
 ## Product objective
 

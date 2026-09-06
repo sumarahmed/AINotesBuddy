@@ -132,7 +132,21 @@ in place of several unrelated ad hoc glyphs, fixes a false "update
 available" notification for component-only releases, closes a stray
 companion window left open by a manual duplicate launch, and stops the
 live transcript panel from resetting scroll position during an active
-capture. See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
+capture.
+
+The Phase 1 build (see `## 2026.09.06` in
+[`CHANGELOG.md`](../CHANGELOG.md)) adds a persistent smart-summary tier
+switcher in Settings (each tier card now names the real model behind it,
+e.g. "Qwen3 4B Instruct 2507 (Q3_K_M)" for High quality), an editable
+analysis prompt, and a conversational "Ask" tab for questioning a
+completed transcript -- restricted to the High quality tier both in the
+UI and by the companion itself, via a new `analysisTier` field on
+`GET /v1/health`/`GET /v1/companion`. The same build fixes a real
+reported bug (Settings flickering and refusing input for the length of a
+tier switch's download) and a component-status bug that had silently
+dropped the tier description and model-name fields ever since the tier
+switcher first shipped. See [`CHANGELOG.md`](../CHANGELOG.md) for the
+full list.
 
 ## User flow
 

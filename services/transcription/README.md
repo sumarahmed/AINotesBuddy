@@ -190,6 +190,8 @@ POST   /v1/transcriptions
 GET    /v1/transcriptions/{jobId}
 DELETE /v1/transcriptions/{jobId}
 POST   /v1/analyses
+GET    /v1/analyses/prompt
+POST   /v1/qa
 ```
 
 `GET /v1/companion` returns only non-secret discovery metadata. Packaged desktop
@@ -234,7 +236,17 @@ before returning it. Local companion builds use a private deterministic
 extractive analyzer by default, so analysis remains available without a cloud
 service or another model download. Setting `NOTESBUDDY_ANALYSIS_MODEL` replaces
 that default with the configured instruction model while retaining the same
-grounding validation.
+grounding validation. `POST /v1/analyses` also accepts an optional
+`systemPrompt`, threaded to the underlying `llama-cli` `-sys` argument in
+place of the built-in default; `GET /v1/analyses/prompt` returns that current
+default. Both are local-only and return `404` on the hosted service.
+
+`POST /v1/qa` answers one free-form question about a completed transcript per
+call (`{segments, question, history?, meetingTitle?}`), citing the transcript
+segments that support the answer, with one retry then an honest "not
+covered" response instead of a fabricated answer. It is local-only (`404` on
+the hosted service) and restricted to the High quality analysis tier
+(`analysis-pro`); a lower installed tier returns `409`.
 
 System-audio routes are local-companion-only and pairing protected. Only one
 capture can run at a time. The stop route returns a stereo 48 kHz WAV and

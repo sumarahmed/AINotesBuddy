@@ -12,7 +12,7 @@ for speech-to-text and speaker diarization.
 > independent project inspired by local-first meeting tools such as Meetily and
 > is not affiliated with Meetily.
 
-**Current version:** `2026.09.03` (`Year.Month.MinorRelease`)
+**Current version:** `2026.09.06` (`Year.Month.MinorRelease`)
 
 ## What works
 
@@ -27,11 +27,20 @@ for speech-to-text and speaker diarization.
   **Guest**, whether or not headphones are worn -- no inserted sample text
 - Local faster-whisper transcription and pyannote speaker diarization companion
 - Three selectable local smart-summary quality tiers (Fast, Balanced,
-  High quality), each an independently downloadable GGUF model; the
-  companion setup screen shows real download sizes before installing, and
-  Settings can switch or download a different tier at any time afterward
+  High quality), each an independently downloadable GGUF model and each
+  showing the real model behind it (e.g. "Qwen3 4B Instruct 2507
+  (Q3_K_M)" for High quality); the companion setup screen shows real
+  download sizes before installing, and a persistent Settings switcher
+  can switch or download a different tier at any time afterward, with a
+  live progress bar and Pause button while a component job runs
 - Live progress and an elapsed timer while professional analysis runs,
   instead of a static "Analyzing…" message
+- An editable analysis prompt in Settings ("Analysis prompt (advanced)"),
+  showing the real default system prompt and reapplying an edited one via
+  **Refresh from transcript**
+- A conversational **Ask** tab for asking free-form questions about a
+  completed meeting transcript, grounded in cited transcript segments and
+  restricted to the High quality tier (both in the UI and on the server)
 - Windows tray/control-panel app with automatic short-lived browser pairing
 - Existing-user website warnings (checked live against GitHub's real release
   API, cached for 12 hours, with a static deploy-time fallback) and daily

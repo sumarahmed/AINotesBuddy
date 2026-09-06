@@ -6,8 +6,11 @@ the user's name and initials, dates come from the browser, and runtime records
 use UUID identifiers.
 
 The published version uses `Year.Month.MinorRelease`. The current release is
-`2026.09.03`; `package.json` represents it as `2026.9.3` for semantic-version
-compatibility.
+`2026.09.06`; `package.json` represents it as `2026.9.6` for semantic-version
+compatibility. The website's own displayed `appVersion` in
+`src/runtime-config.js` is bumped and the static client rebuilt separately, so
+it can briefly lag one release behind this number between a CHANGELOG cut and
+the next site rebuild/deploy -- both are `2026.09.06` as of this release.
 
 ## Browser settings
 
@@ -19,6 +22,7 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | Browser live transcript draft | On | Use browser speech recognition for microphone draft text, always attributed to **You**; with a compatible companion connected, the meeting-audio recording is separately re-transcribed every few seconds and shown live as **Guest** |
 | Automatically identify speakers | Off | Start transcription after saving a recording, using the connected companion when available |
 | Create professional meeting analysis | On | After final speaker transcription, send the complete transcript to the configured analysis service and build a grounded summary, highlights, confirmed decisions, and structured actions |
+| Analysis prompt (advanced) | Built-in default shown from `GET /v1/analyses/prompt` | Editable local-only system prompt threaded to `llama-cli`'s `-sys` argument via `POST /v1/analyses`'s optional `systemPrompt`; re-apply with **Refresh from transcript**. Local-only, never honored by the hosted service |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
 | Transcription mode | From `src/runtime-config.js` | `hybrid`, `local`, or centrally managed `hosted` |
 | Companion URL | `http://127.0.0.1:8765` in local mode | Loopback-only local API |
@@ -45,7 +49,7 @@ streams. It applies to the next capture.
 | Area | Value | Reason / change location |
 | --- | --- | --- |
 | Product name | `NotesBuddy` | Branding in `index.html`, app templates, docs |
-| Product version | `2026.09.03` | Website/package `Year.Month.MinorRelease` in `src/runtime-config.js` and `package.json` |
+| Product version | `2026.09.06`, both `package.json` and `src/runtime-config.js` | Website/package `Year.Month.MinorRelease`; the two are bumped independently, so the site's own displayed version can briefly lag a CHANGELOG/package release until the next rebuild/deploy |
 | Latest companion version | `2026.09.10` static fallback in `src/runtime-config.js`; refreshed from GitHub's real release API on load | Used for existing-user update warnings; the live value (cached in `localStorage` for 12h) wins whenever the check succeeds, this is only the fallback |
 | Locale/language | `en-AU` | Date formatting and browser live speech in `src/app.js` |
 | Development address | `127.0.0.1:4173` | Predictable loopback server in `server.mjs` |
@@ -56,7 +60,8 @@ streams. It applies to the next capture.
 | Analysis model | One of three installable local GGUF tiers (`analysis-tiny`/`analysis-standard`/`analysis-pro`), selected in the companion setup screen | Runs through `llama-cli.exe`; a hosted instruction model can replace it through `NOTESBUDDY_ANALYSIS_MODEL` |
 | Analysis GPU acceleration | Off by default, optional `analysis-cuda` component | Offloads all layers (`-ngl 999`) to a detected CUDA GPU only when the installed runtime actually has `ggml-cuda.dll`; retries once on CPU if a GPU-flagged run fails |
 | Speaker recognition GPU acceleration | Off by default, optional `speaker-diarization-cuda` component | A separate `NotesBuddySpeakerWorkerGPU.exe` built with a CUDA-enabled PyTorch; moves the pyannote pipeline to `cuda` automatically when detected, falling back to CPU otherwise. Confirmed live: 11.8x faster than tuned CPU on a real ~24 minute recording, identical speaker-turn output either way |
-| Analysis schema/prompt version | Schema `1`, prompt `2` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
+| Analysis schema/prompt version | Schema `1`, prompt `4` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
+| Conversational Q&A | Local-only `POST /v1/qa`, restricted to the High quality tier (`analysis-pro`) | Enforced client-side (`canAskQuestions()` in `src/app.js`) and server-side (409 otherwise); the installed tier is reported as `analysisTier` on `GET /v1/health` and `GET /v1/companion`, resolved from the loaded model file's own name rather than a client-side preference |
 | Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |
 | Companion download URL | Versioned GitHub Release `.exe` asset | Direct public Windows installer download |
 | Storage keys | `notesbuddy-profile`, `notesbuddy-meetings`, `notesbuddy-settings`, `notesbuddy-audio` | Namespace isolation in `src/app.js` |
