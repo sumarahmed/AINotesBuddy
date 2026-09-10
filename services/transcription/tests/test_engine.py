@@ -19,6 +19,7 @@ from notesbuddy_transcription.engine import (
     LocalDiarizationEngine,
     activate_optional_gpu_runtime,
     local_accelerator,
+    read_diarization_audio,
 )
 
 # engine.process() logs to the real companion log file
@@ -442,6 +443,66 @@ class FakeDiarizationPipeline:
         return SimpleNamespace(
             exclusive_speaker_diarization=FakeAnnotation(),
         )
+
+
+class ReadDiarizationAudioTests(unittest.TestCase):
+    """Covers a real bug: diarization failing on browser-captured WebM
+    system audio ("share this tab, also share system audio", as opposed to
+    the companion's own WASAPI-loopback WAV capture) with libsndfile's
+    "Format not recognised" -- soundfile can only open the WAV/FLAC/OGG
+    family, never WebM/Opus, and this path had never been exercised with a
+    WebM meeting track before because only microphone tracks (never
+    diarized) were ever WebM previously."""
+
+    def test_reads_a_libsndfile_supported_file_directly(self) -> None:
+        class FakeLibsndfileError(Exception):
+            pass
+
+        fake_soundfile = SimpleNamespace(
+            LibsndfileError=FakeLibsndfileError,
+            read=lambda path, **_options: (
+                np.zeros((4, 2), dtype=np.float32),
+                48000,
+            ),
+        )
+        with patch.dict("sys.modules", {"soundfile": fake_soundfile}):
+            samples, sample_rate = read_diarization_audio(Path("meeting.wav"))
+        # (frames, channels) from soundfile is transposed to (channels, frames).
+        self.assertEqual(samples.shape, (2, 4))
+        self.assertEqual(sample_rate, 48000)
+
+    def test_falls_back_to_faster_whisper_decode_when_libsndfile_cannot_open_it(
+        self,
+    ) -> None:
+        class FakeLibsndfileError(Exception):
+            pass
+
+        def _raise_format_not_recognised(path, **_options):
+            raise FakeLibsndfileError(f"Error opening '{path}': Format not recognised.")
+
+        fake_soundfile = SimpleNamespace(
+            LibsndfileError=FakeLibsndfileError,
+            read=_raise_format_not_recognised,
+        )
+        decode_calls: list[tuple[str, int]] = []
+
+        def fake_decode_audio(path, sampling_rate=16000):
+            decode_calls.append((path, sampling_rate))
+            return np.ones(8, dtype=np.float32)
+
+        fake_faster_whisper_audio = SimpleNamespace(decode_audio=fake_decode_audio)
+        with patch.dict(
+            "sys.modules",
+            {
+                "soundfile": fake_soundfile,
+                "faster_whisper.audio": fake_faster_whisper_audio,
+            },
+        ):
+            samples, sample_rate = read_diarization_audio(Path("meeting.webm"))
+        self.assertEqual(decode_calls, [("meeting.webm", 16000)])
+        # Mono faster-whisper output reshaped to a single-channel [1, N] array.
+        self.assertEqual(samples.shape, (1, 8))
+        self.assertEqual(sample_rate, 16000)
 
 
 class LocalEngineAdapterTests(unittest.TestCase):

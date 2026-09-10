@@ -8,6 +8,22 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Fixed
+
+- Speaker diarization failed outright with "Format not recognised" whenever
+  a meeting's system-audio track came from the browser-capture fallback
+  (screen-share plus "also share system audio", a `MediaRecorder` WebM
+  output) instead of the companion's own WASAPI-loopback capture (always
+  WAV). `soundfile` (libsndfile) can only open the WAV/FLAC/OGG family, not
+  WebM/Opus -- this had never surfaced before because only microphone
+  tracks (never diarized) were ever WebM previously. Reported live: a real
+  meeting's transcription and downstream analysis both failing outright.
+  `read_diarization_audio()` (new, in `engine.py`, shared by the in-process
+  path and the isolated `NotesBuddySpeakerWorker` executable) now falls
+  back to faster-whisper's own bundled decoder, already a hard dependency
+  and already proven to read WebM, whenever libsndfile can't open the file
+  at all -- the common WAV case is unaffected and just as fast as before.
+
 ## 2026.09.06 - 2026-09-06 -- Phase 1 complete
 
 ### Added

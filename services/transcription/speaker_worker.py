@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from notesbuddy_transcription import cpu_threads
+from notesbuddy_transcription.engine import read_diarization_audio
 
 # OMP_NUM_THREADS/MKL_NUM_THREADS are read once when the native OpenMP/MKL
 # thread pool inside torch initializes on first import -- setting them after
@@ -42,8 +43,8 @@ def diarize(audio_path: Path, model_path: Path) -> list[dict[str, object]]:
         except (RuntimeError, AssertionError):
             # Falls back to whatever device the pipeline is already on.
             cpu_threads.configure_torch(torch)
-    samples, sample_rate = soundfile.read(str(audio_path), always_2d=True, dtype="float32")
-    waveform = torch.from_numpy(samples.T.copy())
+    samples, sample_rate = read_diarization_audio(audio_path)
+    waveform = torch.from_numpy(samples)
     result = pipeline({"waveform": waveform, "sample_rate": sample_rate})
     annotation = getattr(result, "exclusive_speaker_diarization", None)
     if annotation is None:

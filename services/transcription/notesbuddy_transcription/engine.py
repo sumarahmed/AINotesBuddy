@@ -122,6 +122,38 @@ def module_available(name: str) -> bool:
         return False
 
 
+def read_diarization_audio(path: Path) -> tuple[Any, int]:
+    """Load one isolated recording as a ``[channels, samples]`` float32 array.
+
+    ``soundfile`` (libsndfile) only opens the WAV/FLAC/OGG family -- not
+    WebM/Opus, which is exactly what the browser-capture fallback for
+    meeting audio produces (screen-share plus "also share system audio",
+    a `MediaRecorder` output) as opposed to the companion's own WASAPI
+    loopback capture (always WAV). Reported live: diarization failing with
+    "Format not recognised" the first time a real meeting used that
+    fallback for its system-audio track -- soundfile had never seen a
+    WebM file before because only microphone tracks (never diarized) were
+    ever webm previously. Falls back to faster-whisper's own bundled
+    decoder (already a hard dependency of this package, already proven to
+    read WebM) whenever libsndfile can't open the file at all.
+    """
+    import soundfile
+
+    try:
+        samples, sample_rate = soundfile.read(
+            str(path),
+            dtype="float32",
+            always_2d=True,
+        )
+        return samples.T.copy(), int(sample_rate)
+    except soundfile.LibsndfileError:
+        from faster_whisper.audio import decode_audio
+
+        sample_rate = 16000
+        samples = decode_audio(str(path), sampling_rate=sample_rate)
+        return samples.reshape(1, -1), sample_rate
+
+
 class EmptyEngine:
     """Dependency-light API test engine that never invents transcript text."""
 
@@ -653,12 +685,8 @@ class LocalDiarizationEngine:
             # whisper, which does its own CPU-thread accounting via
             # ctranslate2 rather than torch.
             _configure_torch_cpu_threads(torch)
-        samples, sample_rate = soundfile.read(
-            str(path),
-            dtype="float32",
-            always_2d=True,
-        )
-        waveform = torch.from_numpy(samples.T.copy())
+        samples, sample_rate = read_diarization_audio(path)
+        waveform = torch.from_numpy(samples)
         output = pipeline(
             {
                 "waveform": waveform,
