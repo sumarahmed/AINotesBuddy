@@ -27,11 +27,18 @@ remain compatible with semantic-version tooling.
   binary actually doing the work. The real fix is `engine.py`'s
   `ensure_diarization_readable()`, called once in `process()` before either
   diarization path (in-process or the external worker) ever receives the
-  file path at all -- a cheap `soundfile.info()` header probe is a no-op
-  for the common WAV case, and only transcodes to a normalized WAV (via
-  the same faster-whisper decoder) when libsndfile genuinely can't open
-  it. Verified against the real WebM file that reproduced the original
-  failure end to end through the actual companion process, not mocks.
+  file path at all. It deliberately does not import `soundfile` itself for
+  the check (a second real bug caught live: `NotesBuddyCompanion.spec`
+  does not bundle `soundfile` in the main companion process at all, since
+  diarization normally happens entirely in the separate worker process --
+  requiring it here broke the far more common GPU-worker path outright
+  with "No module named 'soundfile'"). The stdlib `wave` module reads a
+  standard WAV header with no extra dependency at all as a no-op for the
+  common already-WAV case, and `faster_whisper` (an unconditional
+  dependency of this process regardless of the diarization backend)
+  supplies the decoder for anything else. Verified against the real WebM
+  file that reproduced the original failure, end to end through the
+  actual reinstalled companion process, not mocks.
 
 ## 2026.09.06 - 2026-09-06 -- Phase 1 complete
 

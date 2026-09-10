@@ -511,53 +511,63 @@ class EnsureDiarizationReadableTests(unittest.TestCase):
     `LocalDiarizationEngine.process()`, before either diarization path (the
     in-process one or the isolated `NotesBuddySpeakerWorker` executable --
     a separately built and released binary this package's own fix cannot
-    reach) ever sees it."""
+    reach) ever sees it.
 
-    def test_an_already_readable_file_is_returned_unchanged(self) -> None:
-        info_calls: list[str] = []
-        fake_soundfile = SimpleNamespace(
-            LibsndfileError=Exception,
-            info=lambda path: info_calls.append(path),
-        )
-        with patch.dict("sys.modules", {"soundfile": fake_soundfile}):
-            result = ensure_diarization_readable(Path("meeting.wav"))
-        self.assertEqual(result, Path("meeting.wav"))
-        self.assertEqual(info_calls, ["meeting.wav"])
+    Deliberately exercises the real stdlib `wave` module rather than
+    mocking it (unlike `ReadDiarizationAudioTests` above, which mocks
+    `soundfile`): this function must not import `soundfile` at all, since
+    `NotesBuddyCompanion.spec` does not bundle it in the main companion
+    process -- diarization normally happens entirely in the separate
+    worker process instead. Reported live: "No module named 'soundfile'"
+    the first version of this function assumed otherwise.
+    """
 
-    def test_an_unreadable_file_is_transcoded_to_a_normalized_wav(self) -> None:
-        class FakeLibsndfileError(Exception):
-            pass
+    def test_an_already_readable_wav_file_is_returned_unchanged(self) -> None:
+        import wave
 
-        write_calls: list[tuple[str, int]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            wav_path = Path(directory) / "meeting.wav"
+            with wave.open(str(wav_path), "wb") as writer:
+                writer.setnchannels(1)
+                writer.setsampwidth(2)
+                writer.setframerate(16000)
+                writer.writeframes(b"\x00\x00" * 100)
 
-        def _raise_format_not_recognised(path):
-            raise FakeLibsndfileError(f"Error opening '{path}': Format not recognised.")
+            result = ensure_diarization_readable(wav_path)
 
-        fake_soundfile = SimpleNamespace(
-            LibsndfileError=FakeLibsndfileError,
-            info=_raise_format_not_recognised,
-            write=lambda path, samples, sample_rate: write_calls.append(
-                (path, sample_rate)
-            ),
-        )
+        self.assertEqual(result, wav_path)
+
+    def test_a_non_wav_file_is_transcoded_to_a_normalized_wav(self) -> None:
         decode_calls: list[tuple[str, int]] = []
 
         def fake_decode_audio(path, sampling_rate=16000):
             decode_calls.append((path, sampling_rate))
-            return np.ones(8, dtype=np.float32)
+            return np.array([0.0, 0.5, -0.5, 1.0], dtype=np.float32)
 
         fake_faster_whisper_audio = SimpleNamespace(decode_audio=fake_decode_audio)
-        with patch.dict(
-            "sys.modules",
-            {
-                "soundfile": fake_soundfile,
-                "faster_whisper.audio": fake_faster_whisper_audio,
-            },
-        ):
-            result = ensure_diarization_readable(Path("meeting.webm"))
-        self.assertEqual(result, Path("meeting.normalized.wav"))
-        self.assertEqual(decode_calls, [("meeting.webm", 16000)])
-        self.assertEqual(write_calls, [("meeting.normalized.wav", 16000)])
+        with tempfile.TemporaryDirectory() as directory:
+            webm_path = Path(directory) / "meeting.webm"
+            # Not a real WebM container -- ensure_diarization_readable only
+            # needs to see that `wave.open` rejects it; decode_audio itself
+            # is faked above rather than actually invoked on this content.
+            webm_path.write_bytes(b"not a real webm file")
+
+            with patch.dict(
+                "sys.modules", {"faster_whisper.audio": fake_faster_whisper_audio}
+            ):
+                result = ensure_diarization_readable(webm_path)
+
+            self.assertEqual(result, Path(directory) / "meeting.normalized.wav")
+            self.assertEqual(decode_calls, [(str(webm_path), 16000)])
+            self.assertTrue(result.is_file())
+
+            import wave
+
+            with wave.open(str(result), "rb") as reader:
+                self.assertEqual(reader.getnchannels(), 1)
+                self.assertEqual(reader.getframerate(), 16000)
+                self.assertEqual(reader.getsampwidth(), 2)
+                self.assertEqual(reader.getnframes(), 4)
 
 
 class LocalEngineAdapterTests(unittest.TestCase):
@@ -570,8 +580,6 @@ class LocalEngineAdapterTests(unittest.TestCase):
 
     def _process(self, **kwargs):
         fake_soundfile = SimpleNamespace(
-            LibsndfileError=Exception,
-            info=lambda path: None,
             read=lambda path, **_options: (
                 SimpleNamespace(
                     T=SimpleNamespace(
@@ -659,8 +667,6 @@ class LocalEngineAdapterTests(unittest.TestCase):
         self.engine.device = "cpu"
         thread_calls: list[tuple[str, int]] = []
         fake_soundfile = SimpleNamespace(
-            LibsndfileError=Exception,
-            info=lambda path: None,
             read=lambda path, **_options: (
                 SimpleNamespace(
                     T=SimpleNamespace(
@@ -699,8 +705,6 @@ class LocalEngineAdapterTests(unittest.TestCase):
             raise AssertionError("CPU thread tuning must not run on a CUDA device")
 
         fake_soundfile = SimpleNamespace(
-            LibsndfileError=Exception,
-            info=lambda path: None,
             read=lambda path, **_options: (
                 SimpleNamespace(
                     T=SimpleNamespace(

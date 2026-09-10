@@ -136,23 +136,46 @@ def ensure_diarization_readable(path: Path) -> Path:
     call site -- the isolated worker ships as its own prebuilt executable,
     not something this package's own fix can reach without a separate
     release -- normalize the file itself here, once, before either path
-    ever sees it. A cheap header probe (`soundfile.info`) skips the
-    decode/re-encode round trip entirely for the common already-WAV case.
+    ever sees it.
+
+    Deliberately does not import `soundfile` itself: this runs in
+    `process()` unconditionally, before it's known whether diarization
+    will even use `soundfile` at all (the external worker bundles its own
+    copy; this process's own `NotesBuddyCompanion.spec` does not, since
+    diarization normally happens entirely in that separate worker process
+    -- confirmed live, "No module named 'soundfile'" the first time this
+    function assumed otherwise). The stdlib `wave` module reads a standard
+    RIFF/WAV header with no extra dependency at all, cheaply enough to skip
+    the decode/re-encode round trip entirely for the common already-WAV
+    case; `faster_whisper` (an unconditional dependency of this process
+    regardless of the diarization backend, since it does the actual
+    speech-to-text) supplies the decoder for anything else.
     """
 
-    import soundfile
+    import wave
 
     try:
-        soundfile.info(str(path))
+        with wave.open(str(path), "rb"):
+            return path
+    except FileNotFoundError:
+        # Not this function's job to arbitrate -- pass through unchanged
+        # so the real transcribe/diarize call raises its own clear error.
         return path
-    except soundfile.LibsndfileError:
+    except (wave.Error, EOFError):
         pass
+
+    import numpy as np
     from faster_whisper.audio import decode_audio
 
     sample_rate = 16000
     samples = decode_audio(str(path), sampling_rate=sample_rate)
+    pcm16 = (np.clip(samples, -1.0, 1.0) * 32767.0).astype(np.int16)
     normalized_path = path.with_name(f"{path.stem}.normalized.wav")
-    soundfile.write(str(normalized_path), samples, sample_rate)
+    with wave.open(str(normalized_path), "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(sample_rate)
+        writer.writeframes(pcm16.tobytes())
     return normalized_path
 
 
