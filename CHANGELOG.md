@@ -10,6 +10,21 @@ remain compatible with semantic-version tooling.
 
 ### Fixed
 
+- The recording player showed a bare "0:00" with no total time at all for
+  some meetings, reported live. Chromium reports `duration: Infinity` for
+  some `MediaRecorder`-produced WebM/Opus blobs (no duration written into
+  the container at record time) until the player is forced to seek near
+  the real end of the stream -- and this codebase already worked around it
+  for its own custom playback scrubber, but the meeting detail view's
+  audio player is the browser's native `<audio controls>` widget, which
+  never went through that code path at all. `resolveUnknownDuration()`
+  (new, in `app.js`) seeks to a huge out-of-range time once metadata
+  loads, which triggers Chromium to discover and report the real
+  duration, then seeks back -- applied generically to any hydrated player
+  regardless of whether a custom scrubber exists, and needs no autoplay
+  permission since it seeks rather than plays. Verified against a real
+  affected recording: `duration` went from `Infinity` to the correct
+  ~25.8 minutes.
 - Speaker diarization failed outright with "Format not recognised" whenever
   a meeting's system-audio track came from the browser-capture fallback
   (screen-share plus "also share system audio", a `MediaRecorder` WebM

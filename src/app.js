@@ -2020,6 +2020,37 @@ function connectPlaybackEvents(player) {
   });
 }
 
+async function resolveUnknownDuration(player) {
+  // Chromium reports `duration: Infinity` for some MediaRecorder-produced
+  // WebM/Opus blobs (no duration written into the container at record
+  // time) until the browser is forced to seek near the real end of the
+  // stream -- reported live as the native <audio> control showing a bare
+  // "0:00" with no total at all. Seeking (not playing) triggers this, so
+  // it works even without a prior user gesture and needs no autoplay
+  // permission, unlike the play()-then-pause() trick already used for the
+  // custom scrubber in seekRecording() below.
+  if (Number.isFinite(player.duration) && player.duration > 0) return;
+  const priorTime = player.currentTime;
+  try {
+    player.currentTime = 1e101;
+    await new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        player.removeEventListener("durationchange", finish);
+        resolve();
+      };
+      player.addEventListener("durationchange", finish, { once: true });
+      window.setTimeout(finish, 1500);
+    });
+  } catch {
+    // Some browsers throw synchronously for a seek this far out of range.
+  } finally {
+    player.currentTime = Number.isFinite(priorTime) ? priorTime : 0;
+  }
+}
+
 async function hydrateMeetingAudio() {
   const player = app.querySelector("audio[data-audio-id]");
   if (!player) return null;
@@ -2041,6 +2072,13 @@ async function hydrateMeetingAudio() {
         `[data-audio-download="${CSS.escape(player.dataset.audioId)}"]`,
       );
       if (download) download.href = activeAudioUrl;
+      if (player.readyState < 1) {
+        await new Promise((resolve) => {
+          player.addEventListener("loadedmetadata", resolve, { once: true });
+          window.setTimeout(resolve, 1500);
+        });
+      }
+      await resolveUnknownDuration(player);
       syncPlaybackUI(player);
       return player;
     } catch {
@@ -2087,14 +2125,7 @@ async function seekRecording(control, event) {
     );
     return;
   }
-  if (!Number.isFinite(player.duration) || player.duration <= 0) {
-    try {
-      await player.play();
-      player.pause();
-    } catch {
-      // Some recorded WebM files expose duration only after playback begins.
-    }
-  }
+  await resolveUnknownDuration(player);
   if (!Number.isFinite(player.duration) || player.duration <= 0) return;
   const bounds = control.getBoundingClientRect();
   const ratio = Math.min(
