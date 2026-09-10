@@ -122,6 +122,40 @@ def module_available(name: str) -> bool:
         return False
 
 
+def ensure_diarization_readable(path: Path) -> Path:
+    """Return a path libsndfile can open, transcoding to WAV if it can't.
+
+    Meeting/system audio is normally a WAV from the companion's own WASAPI
+    loopback capture, but the browser-capture fallback ("share this tab,
+    also share system audio") produces a WebM `MediaRecorder` file instead
+    -- and BOTH diarization paths (`LocalDiarizationEngine._diarize` in
+    this process, and the isolated `NotesBuddySpeakerWorker` executable,
+    built and released completely separately from this package) call
+    `soundfile.read()` directly on the raw file path, which can only open
+    the WAV/FLAC/OGG family. Rather than fix this once per diarization
+    call site -- the isolated worker ships as its own prebuilt executable,
+    not something this package's own fix can reach without a separate
+    release -- normalize the file itself here, once, before either path
+    ever sees it. A cheap header probe (`soundfile.info`) skips the
+    decode/re-encode round trip entirely for the common already-WAV case.
+    """
+
+    import soundfile
+
+    try:
+        soundfile.info(str(path))
+        return path
+    except soundfile.LibsndfileError:
+        pass
+    from faster_whisper.audio import decode_audio
+
+    sample_rate = 16000
+    samples = decode_audio(str(path), sampling_rate=sample_rate)
+    normalized_path = path.with_name(f"{path.stem}.normalized.wav")
+    soundfile.write(str(normalized_path), samples, sample_rate)
+    return normalized_path
+
+
 def read_diarization_audio(path: Path) -> tuple[Any, int]:
     """Load one isolated recording as a ``[channels, samples]`` float32 array.
 
@@ -849,6 +883,12 @@ class LocalDiarizationEngine:
             mixed_path if not microphone_path and not meeting_path else None
         )
         if remote_path:
+            # The diarization step below (in-process or the isolated
+            # NotesBuddySpeakerWorker executable, whichever is active)
+            # needs a libsndfile-readable file -- normalize once, up front,
+            # rather than duplicating this per diarization call site. See
+            # ensure_diarization_readable's own docstring for why.
+            remote_path = ensure_diarization_readable(remote_path)
             progress(0.38, "transcribing meeting audio")
             meeting_words, language = self._transcribe(
                 remote_path,

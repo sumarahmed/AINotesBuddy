@@ -18,11 +18,20 @@ remain compatible with semantic-version tooling.
   WebM/Opus -- this had never surfaced before because only microphone
   tracks (never diarized) were ever WebM previously. Reported live: a real
   meeting's transcription and downstream analysis both failing outright.
-  `read_diarization_audio()` (new, in `engine.py`, shared by the in-process
-  path and the isolated `NotesBuddySpeakerWorker` executable) now falls
-  back to faster-whisper's own bundled decoder, already a hard dependency
-  and already proven to read WebM, whenever libsndfile can't open the file
-  at all -- the common WAV case is unaffected and just as fast as before.
+  A first attempt (`read_diarization_audio()`, falling back to
+  faster-whisper's own bundled decoder inside the read call itself) turned
+  out to be insufficient on its own: this machine's diarization actually
+  runs through the isolated `NotesBuddySpeakerWorker` executable, built and
+  released completely separately from this package (`speaker-worker.yml`),
+  so a fix to this package's own copy of that read call never reached the
+  binary actually doing the work. The real fix is `engine.py`'s
+  `ensure_diarization_readable()`, called once in `process()` before either
+  diarization path (in-process or the external worker) ever receives the
+  file path at all -- a cheap `soundfile.info()` header probe is a no-op
+  for the common WAV case, and only transcodes to a normalized WAV (via
+  the same faster-whisper decoder) when libsndfile genuinely can't open
+  it. Verified against the real WebM file that reproduced the original
+  failure end to end through the actual companion process, not mocks.
 
 ## 2026.09.06 - 2026-09-06 -- Phase 1 complete
 

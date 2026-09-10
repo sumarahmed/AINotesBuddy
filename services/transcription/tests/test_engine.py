@@ -18,6 +18,7 @@ from notesbuddy_transcription import engine as engine_module
 from notesbuddy_transcription.engine import (
     LocalDiarizationEngine,
     activate_optional_gpu_runtime,
+    ensure_diarization_readable,
     local_accelerator,
     read_diarization_audio,
 )
@@ -505,6 +506,60 @@ class ReadDiarizationAudioTests(unittest.TestCase):
         self.assertEqual(sample_rate, 16000)
 
 
+class EnsureDiarizationReadableTests(unittest.TestCase):
+    """`ensure_diarization_readable` normalizes a file up front, in
+    `LocalDiarizationEngine.process()`, before either diarization path (the
+    in-process one or the isolated `NotesBuddySpeakerWorker` executable --
+    a separately built and released binary this package's own fix cannot
+    reach) ever sees it."""
+
+    def test_an_already_readable_file_is_returned_unchanged(self) -> None:
+        info_calls: list[str] = []
+        fake_soundfile = SimpleNamespace(
+            LibsndfileError=Exception,
+            info=lambda path: info_calls.append(path),
+        )
+        with patch.dict("sys.modules", {"soundfile": fake_soundfile}):
+            result = ensure_diarization_readable(Path("meeting.wav"))
+        self.assertEqual(result, Path("meeting.wav"))
+        self.assertEqual(info_calls, ["meeting.wav"])
+
+    def test_an_unreadable_file_is_transcoded_to_a_normalized_wav(self) -> None:
+        class FakeLibsndfileError(Exception):
+            pass
+
+        write_calls: list[tuple[str, int]] = []
+
+        def _raise_format_not_recognised(path):
+            raise FakeLibsndfileError(f"Error opening '{path}': Format not recognised.")
+
+        fake_soundfile = SimpleNamespace(
+            LibsndfileError=FakeLibsndfileError,
+            info=_raise_format_not_recognised,
+            write=lambda path, samples, sample_rate: write_calls.append(
+                (path, sample_rate)
+            ),
+        )
+        decode_calls: list[tuple[str, int]] = []
+
+        def fake_decode_audio(path, sampling_rate=16000):
+            decode_calls.append((path, sampling_rate))
+            return np.ones(8, dtype=np.float32)
+
+        fake_faster_whisper_audio = SimpleNamespace(decode_audio=fake_decode_audio)
+        with patch.dict(
+            "sys.modules",
+            {
+                "soundfile": fake_soundfile,
+                "faster_whisper.audio": fake_faster_whisper_audio,
+            },
+        ):
+            result = ensure_diarization_readable(Path("meeting.webm"))
+        self.assertEqual(result, Path("meeting.normalized.wav"))
+        self.assertEqual(decode_calls, [("meeting.webm", 16000)])
+        self.assertEqual(write_calls, [("meeting.normalized.wav", 16000)])
+
+
 class LocalEngineAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.whisper = FakeWhisper()
@@ -515,6 +570,8 @@ class LocalEngineAdapterTests(unittest.TestCase):
 
     def _process(self, **kwargs):
         fake_soundfile = SimpleNamespace(
+            LibsndfileError=Exception,
+            info=lambda path: None,
             read=lambda path, **_options: (
                 SimpleNamespace(
                     T=SimpleNamespace(
@@ -602,6 +659,8 @@ class LocalEngineAdapterTests(unittest.TestCase):
         self.engine.device = "cpu"
         thread_calls: list[tuple[str, int]] = []
         fake_soundfile = SimpleNamespace(
+            LibsndfileError=Exception,
+            info=lambda path: None,
             read=lambda path, **_options: (
                 SimpleNamespace(
                     T=SimpleNamespace(
@@ -640,6 +699,8 @@ class LocalEngineAdapterTests(unittest.TestCase):
             raise AssertionError("CPU thread tuning must not run on a CUDA device")
 
         fake_soundfile = SimpleNamespace(
+            LibsndfileError=Exception,
+            info=lambda path: None,
             read=lambda path, **_options: (
                 SimpleNamespace(
                     T=SimpleNamespace(
