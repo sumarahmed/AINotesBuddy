@@ -10,6 +10,17 @@ remain compatible with semantic-version tooling.
 
 ### Fixed
 
+- The in-app warning shown when the companion's Windows meeting-audio
+  capture detects no signal told users to switch to the same output
+  device as Windows' default -- but the companion resolves which device
+  to listen to once, when recording starts, and never re-checks, so
+  switching outputs on an already-running capture does nothing. Reported
+  live: a user correctly followed this advice after starting on
+  headphones with no meeting audio detected, switched to speakers, and
+  meeting audio still transcribed 0 words for the entire recording,
+  because the capture stayed bound to the dead headphone endpoint the
+  whole time. The message now says what actually works: stop and restart
+  the recording after switching outputs.
 - The recording player showed a bare "0:00" with no total time at all for
   some meetings, reported live. Chromium reports `duration: Infinity` for
   some `MediaRecorder`-produced WebM/Opus blobs (no duration written into

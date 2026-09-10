@@ -2310,7 +2310,14 @@ function meetingAudioTrackHelp(surface) {
 
 function meetingAudioSilenceHelp(surface) {
   if (surface === "windows-loopback") {
-    return "No Windows output has been detected. In Teams device settings, choose the same speaker as the Windows default output and ask another participant to speak.";
+    // Switching the Windows output device (e.g. headphones to speakers)
+    // mid-recording does not help an already-running capture -- the
+    // companion resolves which device to listen to once, when recording
+    // starts, and never re-checks. Reported live: a user correctly
+    // switched outputs after seeing this warning, but the capture (already
+    // bound to the dead headphone endpoint) stayed silent for the rest of
+    // the meeting anyway. Restarting is the only fix that actually works.
+    return "No Windows output has been detected. If you changed audio output devices (for example headphones to speakers) after starting this recording, switching back will not fix it -- stop and restart the recording. Otherwise, in Teams device settings choose the same speaker as the Windows default output and ask another participant to speak.";
   }
   if (surface === "browser") {
     return "No sound is arriving from the Teams tab. Check that Also share tab audio is on and ask another participant to speak.";
