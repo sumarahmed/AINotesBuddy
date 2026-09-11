@@ -63,6 +63,17 @@ analysis = Analysis(
         "transformers",
         "lightning",
         "torchmetrics",
+        # Not imported anywhere in this app's own source -- a transitive,
+        # optional dependency of huggingface_hub's newer local-inference
+        # code path, which this app never calls (it uses faster-whisper/
+        # ctranslate2 and llama-cli, not ONNX). Excluded because PyInstaller's
+        # own static import-analysis of it crashes the build outright on
+        # GitHub's Windows runners with a native access violation (exit code
+        # 3221225477 / 0xC0000005) as of whatever onnxruntime release is
+        # currently on PyPI -- confirmed live: this broke a completely
+        # unmodified build of this same spec file, unrelated to any local
+        # change, so this is a real, currently-live problem, not a guess.
+        "onnxruntime",
     ],
     noarchive=False,
     optimize=1,
