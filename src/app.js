@@ -1178,7 +1178,7 @@ function transcriptionWorkspace(meeting) {
     </div>
     <div class="transcription-workspace__actions">
       ${isRunning ? `<button type="button" class="button button--quiet" data-action="cancel-transcription">Cancel</button>` : ""}
-      <button type="button" class="button button--primary" data-action="transcribe-meeting" ${hasRecording && !isRunning ? "" : "disabled"}>${isRunning ? `${icon("refresh", 15, "spin")}Processing…` : `${icon("users", 15)}${buttonLabel}`}</button>
+      <button type="button" class="button button--primary" data-action="transcribe-meeting" ${hasRecording && !isRunning ? "" : "disabled"}>${isRunning ? `${icon("refresh", 15, "spin")}Processing…` : `${icon("file", 15)}${buttonLabel}`}</button>
     </div>
   </section>`;
 }
