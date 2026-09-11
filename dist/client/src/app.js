@@ -408,7 +408,6 @@ const state = {
     elapsed: 0,
     segments: [],
     interimTranscript: "",
-    interimSpeakerId: null,
     transcriptionStatus: "idle",
     microphoneOn: true,
     systemAudioOn: true,
@@ -962,7 +961,7 @@ function captureView() {
                 ${capture.meetingAudioEnded ? `<div class="capture-source-warning" data-meeting-audio-warning="ended">${icon("headphones", 14)}Meeting audio sharing stopped. Microphone recording is continuing.</div>` : capture.meetingAudioWarning ? `<div class="capture-source-warning" data-meeting-audio-warning="signal">${icon("headphones", 14)}${escapeHtml(capture.meetingAudioWarning)}</div>` : ""}
               </div>
               <div class="live-transcript">
-                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span><b data-transcription-label>${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "You + Guest draft" : "Browser speech" : "Audio recording"}</b></span></div>
+                <div class="live-transcript__heading"><div><span class="eyebrow">Live transcript</span><h2>Conversation</h2></div><span class="confidence-pill"><span></span><b data-transcription-label>${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "Live draft" : "Browser speech" : "Audio recording"}</b></span></div>
                 <div class="live-transcript__scroll" data-live-transcript>${liveTranscriptMarkup(capture)}</div>
               </div>
             </div>`
@@ -985,25 +984,10 @@ function captureView() {
   </main>`;
 }
 
-function liveDraftSpeaker(speakerId) {
-  return speakerId === "remote-guest"
-    ? { name: "Guest", initials: "G", color: "violet", provisional: true }
-    : {
-        name: "You",
-        initials: currentUserInitials(),
-        color: "teal",
-        provisional: false,
-      };
-}
-
 function liveTranscriptMarkup(capture) {
-  const interimSpeaker = liveDraftSpeaker(capture.interimSpeakerId);
-  const waitingForGuestWords =
-    capture.meetingAudioCurrentlyActive && !capture.interimTranscript;
-  return `${capture.segments.map(transcriptRow).join("")}
-    ${capture.interimTranscript ? `<div class="interim-transcript">${avatar(interimSpeaker.initials, interimSpeaker.color)}<div><div class="interim-transcript__speaker"><strong>${interimSpeaker.name}</strong>${interimSpeaker.provisional ? "<span>draft</span>" : ""}</div><p>${escapeHtml(capture.interimTranscript)}</p></div></div>` : ""}
-    ${waitingForGuestWords ? `<div class="guest-speaking-state">${icon("audio", 18)}<span><strong>Guest speaking</strong><small>Matching meeting audio with incoming words…</small></span></div>` : ""}
-    ${capture.segments.length || capture.interimTranscript || waitingForGuestWords ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "Listening for you and meeting guests…" : "Listening for your voice…" : "Recording audio; live speech text is unavailable in this browser."}</div>`}`;
+  return `${capture.segments.map((segment) => transcriptRow(segment)).join("")}
+    ${capture.interimTranscript ? `<div class="interim-transcript"><p>${escapeHtml(capture.interimTranscript)}</p></div>` : ""}
+    ${capture.segments.length || capture.interimTranscript ? "" : `<div class="listening-state">${icon("audio", 20)}${capture.transcriptionStatus === "listening" ? capture.systemAudioOn ? "Listening for the conversation…" : "Listening for your voice…" : "Recording audio; live speech text is unavailable in this browser."}</div>`}`;
 }
 
 function updateCaptureRuntimeUI({ transcript = false } = {}) {
@@ -1016,7 +1000,7 @@ function updateCaptureRuntimeUI({ transcript = false } = {}) {
     transcriptionLabel.textContent =
       state.capture.transcriptionStatus === "listening"
         ? state.capture.systemAudioOn
-          ? "You + Guest draft"
+          ? "Live draft"
           : "Browser speech"
         : "Audio recording";
   }
@@ -1054,6 +1038,21 @@ function transcriptRow(
   meeting = null,
 ) {
   const timestamp = escapeHtml(segment.timestamp);
+  const timestampControl =
+    documentMode && hasRecording
+      ? `<button type="button" data-action="seek-recording-time" data-time="${timestamp}" aria-label="Seek recording to ${timestamp}">${timestamp}</button>`
+      : `<span>${timestamp}</span>`;
+  const provisionalLabel = segment.provisional
+    ? '<span class="provisional-speaker-badge">draft</span>'
+    : "";
+  // A segment with no speakerId is the new flat, speaker-agnostic shape --
+  // skip the avatar/speaker-name UI entirely for it rather than rendering an
+  // empty avatar or a fabricated "Unknown speaker" label.
+  if (!segment.speakerId) {
+    return `<div class="transcript-row transcript-row--unattributed ${documentMode ? "transcript-row--document" : ""}">
+      <div><div class="transcript-row__meta">${provisionalLabel}${timestampControl}</div><p>${escapeHtml(segment.text)}</p></div>
+    </div>`;
+  }
   const speakerName = meeting
     ? MeetingAudio.speakerLabel(
         meeting,
@@ -1061,21 +1060,11 @@ function transcriptRow(
         segment.speaker || "Unknown speaker",
       )
     : segment.speaker || "Unknown speaker";
-  const timestampControl =
-    documentMode && hasRecording
-      ? `<button type="button" data-action="seek-recording-time" data-time="${timestamp}" aria-label="Seek recording to ${timestamp}">${timestamp}</button>`
-      : `<span>${timestamp}</span>`;
   const canRenameFromLabel =
-    documentMode &&
-    meeting &&
-    segment.speakerId &&
-    segment.speakerId !== "local-user";
+    documentMode && meeting && segment.speakerId !== "local-user";
   const speakerControl = canRenameFromLabel
     ? `<button type="button" class="transcript-speaker-button" data-action="focus-speaker" data-id="${escapeHtml(segment.speakerId)}" data-speaker-label-id="${escapeHtml(segment.speakerId)}" aria-label="Rename ${escapeHtml(speakerName)}">${escapeHtml(speakerName)}</button>`
     : `<strong data-speaker-label-id="${escapeHtml(segment.speakerId || "")}">${escapeHtml(speakerName)}</strong>`;
-  const provisionalLabel = segment.provisional
-    ? '<span class="provisional-speaker-badge">draft</span>'
-    : "";
   return `<div class="transcript-row ${documentMode ? "transcript-row--document" : ""}">
     ${avatar(segment.initials, segment.color)}
     <div><div class="transcript-row__meta">${speakerControl}${provisionalLabel}${timestampControl}</div><p>${escapeHtml(segment.text)}</p></div>
@@ -1107,7 +1096,7 @@ function summaryView(meeting) {
     : analysisStatus === "failed"
       ? `<div class="analysis-notice analysis-notice--error">${icon("x", 15)}<span><strong>Professional analysis could not be completed</strong><small>${escapeHtml(meeting.analysis?.error || "Try refreshing from the transcript again.")}</small></span></div>`
       : analysisStatus === "completed" && meeting.analysis?.usedSavedDraft
-        ? `<div class="analysis-notice">${icon("file", 15)}<span><strong>Generated from the saved browser transcript</strong><small>Speaker processing did not complete, so this analysis may contain provisional speaker labels.</small></span></div>`
+        ? `<div class="analysis-notice">${icon("file", 15)}<span><strong>Generated from the saved browser transcript</strong><small>Transcription did not complete, so this analysis may be based on an incomplete draft.</small></span></div>`
       : analysisStatus === "outdated"
         ? `<div class="analysis-notice">${icon("refresh", 15)}<span><strong>This meeting uses the previous summary format</strong><small>Refresh it to create the new evidence-grounded analysis.</small></span></div>`
         : "";
@@ -1148,8 +1137,8 @@ function transcriptionWorkspace(meeting) {
     "not-requested": "Not transcribed",
     draft: "Browser draft only",
     queued: "Queued",
-    processing: "Identifying speakers",
-    completed: "Speaker transcript ready",
+    processing: "Transcribing",
+    completed: "Transcript ready",
     failed: "Transcription failed",
     cancelled: "Transcription cancelled",
   }[status] || status;
@@ -1157,10 +1146,10 @@ function transcriptionWorkspace(meeting) {
   const hasRecording = Boolean(MeetingAudio.recordingAsset(meeting));
   const buttonLabel =
     status === "completed"
-      ? "Re-transcribe speakers"
+      ? "Re-transcribe"
       : status === "failed"
-        ? "Retry speaker transcription"
-        : "Transcribe and identify speakers";
+        ? "Retry transcription"
+        : "Transcribe";
   const route = isRunning
     ? meeting.transcription?.route || state.settings.transcriptionMode
     : transcriptionRouteForMeeting(meeting);
@@ -1178,12 +1167,14 @@ function transcriptionWorkspace(meeting) {
     ? Math.max(0, Math.round((Date.now() - Date.parse(meeting.transcription.requestedAt)) / 1000))
     : 0;
   const runningDescription = `${escapeHtml(meeting.transcription?.stage || statusLabel)} · ${progress}% · ${escapeHtml(durationLabel(elapsedSeconds))} elapsed · ${route === "hosted" ? "online GPU" : localAcceleratorLabel()}`;
+  const speakerCount = (meeting.speakers || []).length;
+  const completedDescription = `${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"}${speakerCount ? ` · ${speakerCount} speaker${speakerCount === 1 ? "" : "s"}` : ""}`;
   return `<section class="transcription-workspace transcription-workspace--${escapeHtml(status)}">
     <div>
-      <span class="eyebrow">Speaker transcription</span>
+      <span class="eyebrow">Transcription</span>
       <h3>${escapeHtml(statusLabel)}</h3>
-      <p>${status === "completed" ? `${meeting.transcript.length} timestamped segment${meeting.transcript.length === 1 ? "" : "s"} · ${(meeting.speakers || []).length} speaker${(meeting.speakers || []).length === 1 ? "" : "s"}` : status === "failed" ? escapeHtml(meeting.transcription?.error || failureDescription) : isRunning ? runningDescription : serviceDescription}</p>
-      ${isRunning ? `<div class="transcription-progress" role="progressbar" aria-label="Speaker transcription progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><i style="width:${progress}%"></i></div>` : ""}
+      <p>${status === "completed" ? completedDescription : status === "failed" ? escapeHtml(meeting.transcription?.error || failureDescription) : isRunning ? runningDescription : serviceDescription}</p>
+      ${isRunning ? `<div class="transcription-progress" role="progressbar" aria-label="Transcription progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><i style="width:${progress}%"></i></div>` : ""}
     </div>
     <div class="transcription-workspace__actions">
       ${isRunning ? `<button type="button" class="button button--quiet" data-action="cancel-transcription">Cancel</button>` : ""}
@@ -1246,15 +1237,12 @@ function transcriptResultsMarkup(meeting, query = "") {
   const filtered = meeting.transcript.filter(
     (segment) =>
       segment.text.toLowerCase().includes(normalizedQuery) ||
-      MeetingAudio.speakerLabel(
-        meeting,
-        segment.speakerId,
-        segment.speaker,
-      )
-        .toLowerCase()
-        .includes(normalizedQuery) ||
-      (segment.speakerId === "local-user" &&
-        currentUserName().toLowerCase().includes(normalizedQuery)),
+      (segment.speakerId &&
+        (MeetingAudio.speakerLabel(meeting, segment.speakerId, segment.speaker)
+          .toLowerCase()
+          .includes(normalizedQuery) ||
+          (segment.speakerId === "local-user" &&
+            currentUserName().toLowerCase().includes(normalizedQuery)))),
   );
   return `${filtered
     .map((segment) =>
@@ -1411,7 +1399,7 @@ function settingsPanel() {
         unavailable: "unavailable",
       }[state.transcriptionServiceStatus] || state.transcriptionServiceStatus);
   const privacyMessage = hybrid
-    ? "When the companion is connected, speaker transcription stays on this computer for recordings of every length and uses a compatible local NVIDIA GPU automatically. The online service is used only when the companion is unavailable. Professional analysis sends only the completed transcript online."
+    ? "When the companion is connected, transcription stays on this computer for recordings of every length and uses a compatible local NVIDIA GPU automatically. The online service is used only when the companion is unavailable. Professional analysis sends only the completed transcript online."
     : hosted
       ? "Recordings stay in this browser until transcription is requested. Selected audio is sent to the public service and removed from its temporary storage after processing; professional analysis sends the completed transcript."
     : runtimeHostedTranscriptionEndpoint
@@ -1419,23 +1407,23 @@ function settingsPanel() {
       : "Audio, transcripts, and meeting data stay on this device. Browser speech recognition may use your browser provider’s service.";
   const transcriptionSettings = hybrid
     ? `<section class="settings-section">
-        <span class="eyebrow">${hybridConnected ? "Desktop speaker transcription" : "Speaker transcription"}</span>
+        <span class="eyebrow">${hybridConnected ? "Desktop transcription" : "Transcription"}</span>
         <div class="service-check"><span class="service-check__status service-check__status--${updateRequired ? "update" : escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="${hybridConnected ? "test-transcription-service" : "connect-companion"}">${hybridConnected ? "Test local service" : "Look for companion"}</button></div>
         <p class="settings-help">${updateRequired ? `Companion ${escapeHtml(state.companion.metadata?.version || "")} is installed. Update to ${escapeHtml(latestCompanionVersion)} for automatic local GPU acceleration.` : hybridConnected ? `${escapeHtml(BRAND.name)} ${escapeHtml(state.companion.metadata?.version || "")} is using ${escapeHtml(localAcceleratorLabel())}. All recording lengths are processed locally while it remains connected.` : "The online fallback is active. Install or start the desktop companion to process recordings privately on this computer."}</p>
         <div class="companion-actions"><button type="button" class="button button--quiet" data-action="show-companion-setup">Setup guide</button><a class="button button--quiet" href="${escapeHtml(companionDownloadUrl)}" target="_blank" rel="noopener noreferrer">${icon("download", 14)}${updateRequired ? "Download update" : "Windows downloads"}</a></div>
       </section>`
     : hosted
       ? `<section class="settings-section">
-        <span class="eyebrow">Online speaker transcription</span>
+        <span class="eyebrow">Online transcription</span>
         <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test service</button></div>
         <p class="settings-help">No installation or token is required. Anonymous sessions are temporary and public usage limits apply.</p>
       </section>`
       : `<section class="settings-section">
-        <span class="eyebrow">Local speaker transcription</span>
+        <span class="eyebrow">Local transcription</span>
         <label><span>Companion URL</span><input data-setting="transcriptionEndpoint" value="${escapeHtml(state.settings.transcriptionEndpoint)}" inputmode="url" spellcheck="false" aria-label="Transcription companion URL"></label>
         <label><span>Pairing token</span><input data-setting="transcriptionToken" value="${escapeHtml(state.settings.transcriptionToken)}" type="password" autocomplete="off" spellcheck="false" aria-label="Transcription pairing token"></label>
         <div class="service-check"><span class="service-check__status service-check__status--${escapeHtml(state.transcriptionServiceStatus)}"><i></i>${escapeHtml(statusText)}</span><button type="button" class="button button--quiet" data-action="test-transcription-service">Test connection</button></div>
-        <p class="settings-help">The companion runs speech-to-text and speaker diarization on this computer. The pairing token stays in this browser profile.</p>
+        <p class="settings-help">The companion runs speech-to-text on this computer. The pairing token stays in this browser profile.</p>
       </section>`;
   // Single source for "a component job is actively running" -- reused below
   // for disabling buttons, showing progress, and (critically) suppressing
@@ -1519,23 +1507,6 @@ function settingsPanel() {
         </section>`;
         })()
       : "";
-  const speakerGpuInstalling = componentJobRunning;
-  const speakerAccelerationSettings =
-    hybridConnected && state.companion.metadata?.systemAudioCapture
-      ? `<section class="settings-section">
-        <span class="eyebrow">Speaker recognition speed</span>
-        <p class="settings-help">Using ${state.companion.metadata?.diarizationGpuAvailable ? "your GPU" : "local CPU"} to identify speakers.${
-          state.companion.metadata?.gpuAvailable && !state.companion.metadata?.diarizationGpuAvailable
-            ? " A compatible GPU is already accelerating transcription; installing one more component lets it accelerate speaker recognition too."
-            : ""
-        }</p>
-        ${
-          state.companion.metadata?.gpuAvailable && !state.companion.metadata?.diarizationGpuAvailable
-            ? `<button type="button" class="button button--quiet" data-action="install-speaker-gpu" ${speakerGpuInstalling ? "disabled" : ""}>${icon("sparkles", 14)}Enable GPU acceleration</button>`
-            : ""
-        }
-      </section>`
-      : "";
   const autoTranscribeDescription = hosted
     ? "Send saved source tracks to the public transcription service after capture."
     : hybrid
@@ -1563,11 +1534,10 @@ function settingsPanel() {
         <p class="settings-help">System follows your device's own light/dark setting.</p>
       </section>
       ${transcriptionSettings}
-      ${speakerAccelerationSettings}
       ${analysisAccelerationSettings}
       ${analysisTierSettings}
       ${analysisPromptSettings}
-      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft and use meeting-output timing to mark likely Guest speech; never inject sample text.")}${toggle("autoTranscribe", "Automatically identify speakers", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After speaker transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
+      <section class="settings-section"><span class="eyebrow">Capture defaults</span>${toggle("systemAudio", "Meeting audio", "Record Windows output through the companion, or use browser sharing as a fallback.")}${toggle("browserTranscription", "Browser live transcript draft", "Show recognised words as a draft while recording; never inject sample text.")}${toggle("autoTranscribe", "Automatically transcribe", autoTranscribeDescription)}${toggle("autoSummarize", "Create professional meeting analysis", "After transcription, analyze the complete transcript for a grounded summary, highlights, confirmed decisions, and specific action items.")}${toggle("keepAudio", "Keep original source recordings", "Retain microphone, meeting, and mixed audio in this browser.")}</section>
       <div class="settings-footer"><span>${icon("checkCircle", 15)}Version ${escapeHtml(APP_VERSION)} · Changes save automatically</span><button type="button" class="button button--primary" data-action="close-settings">Done</button></div>
     </aside>
   </div>`;
@@ -1644,8 +1614,7 @@ function companionOnboarding() {
       analysisTiers[1]?.id ||
       analysisTiers[0]?.id ||
       "analysis-tiny";
-    const sharedBytes = Number(available["speaker-diarization"]?.downloadBytes || 0) +
-      Number(available[selectedAnalysisTier]?.downloadBytes || 0) +
+    const sharedBytes = Number(available[selectedAnalysisTier]?.downloadBytes || 0) +
       (state.companion.metadata?.gpuAvailable ? Number(available["nvidia-cuda12"]?.downloadBytes || 0) : 0);
     const baseSize = formatBytes(sharedBytes + Number(available["whisper-base"]?.downloadBytes || 0));
     const smallSize = formatBytes(sharedBytes + Number(available["whisper-small"]?.downloadBytes || 0));
@@ -1653,7 +1622,7 @@ function companionOnboarding() {
       <section class="companion-setup-card" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
         <span class="eyebrow">One-time local setup</span>
         <h1 id="companion-setup-title">Choose local AI quality</h1>
-        <p>The app is installed. Download reusable speech, speaker, and smart-summary components once; future companion updates keep them in place.${escapeHtml(gpuExtra)}</p>
+        <p>The app is installed. Download reusable speech and smart-summary components once; future companion updates keep them in place.${escapeHtml(gpuExtra)}</p>
         ${analysisTiers.length > 1 ? `<div class="component-subsection">
           <span class="component-subsection__label">Smart meeting summary model</span>
           <div class="component-options component-options--compact">
@@ -1701,9 +1670,9 @@ function companionOnboarding() {
   return `<div class="companion-setup-backdrop">
     <section class="companion-setup-card" role="dialog" aria-modal="true" aria-labelledby="companion-setup-title">
       ${brand()}
-      <span class="eyebrow">Private speaker transcription</span>
+      <span class="eyebrow">Private transcription</span>
       <h1 id="companion-setup-title">Install the Windows companion</h1>
-      <p>The small desktop app runs speech-to-text and speaker detection on this computer. You install it once; no Python, Hugging Face account, or token is required.</p>
+      <p>The small desktop app runs speech-to-text on this computer. You install it once; no Python, Hugging Face account, or token is required.</p>
       <ol class="companion-setup__steps">
         <li><span>1</span><div><strong>Download</strong><small>Download the current Windows installer directly.</small></div></li>
         <li><span>2</span><div><strong>Install and start</strong><small>Run the installer, then leave NotesBuddy Companion running in the notification area.</small></div></li>
@@ -1745,10 +1714,9 @@ async function runComponentInstall(requested, onReady) {
 async function installCompanionComponents(preset) {
   const requested = [
     preset === "base" ? "whisper-base" : "whisper-small",
-    "speaker-diarization",
     state.settings.analysisModelTier || "analysis-standard",
     ...(state.companion.metadata?.gpuAvailable
-      ? ["nvidia-cuda12", "analysis-cuda", "speaker-diarization-cuda"]
+      ? ["nvidia-cuda12", "analysis-cuda"]
       : []),
   ];
   await runComponentInstall(requested, (health) => {
@@ -1763,17 +1731,6 @@ async function installAnalysisGpuAcceleration() {
       health.analysisGpuAvailable
         ? `Smart meeting summary now uses ${health.analysisAccelerator || "your GPU"}.`
         : "Installed, but a compatible GPU was not detected; smart meeting summary will keep using the CPU.",
-    );
-  });
-}
-
-async function installSpeakerGpuAcceleration() {
-  await runComponentInstall(["speaker-diarization-cuda"], (health) => {
-    showToast(
-      "GPU acceleration ready",
-      health.diarizationGpuAvailable
-        ? "Speaker recognition now uses your GPU."
-        : "Installed, but a compatible GPU was not detected; speaker recognition will keep using the CPU.",
     );
   });
 }
@@ -2190,7 +2147,6 @@ function resetCapture({ launchSource = null } = {}) {
     elapsed: 0,
     segments: [],
     interimTranscript: "",
-    interimSpeakerId: null,
     transcriptionStatus: "idle",
     microphoneOn: true,
     systemAudioOn: state.settings.systemAudio,
@@ -2379,20 +2335,6 @@ function clearCurrentMeetingAudioActivity() {
   setMeetingAudioCurrentlyActive(false);
 }
 
-// Wholesale-replaces the live provisional-guest rows on every poll, rather
-// than incrementally appending, mirroring how the final diarized transcript
-// wholesale-replaces every provisional row once processing completes
-// (MeetingAudio.applyTranscriptionResult) -- no cursor/dedup state to keep
-// in sync, at the cost of the last word or two occasionally revising on the
-// next tick.
-function applyPartialGuestWords(words) {
-  state.capture.segments = MeetingAudio.applyPartialGuestSegments(
-    state.capture.segments,
-    words,
-  );
-  updateCaptureRuntimeUI({ transcript: true });
-}
-
 function stopMeetingAudioSignalMonitor() {
   if (captureRuntime.meetingSignalMonitor) {
     window.clearInterval(captureRuntime.meetingSignalMonitor);
@@ -2499,18 +2441,6 @@ function startCompanionMeetingAudioStatusMonitor() {
         setCaptureSourceStatus("meeting", "silent");
         replaceMeetingAudioWarning(message);
         showToast("No Windows meeting sound detected", message);
-      }
-      // Best-effort and independent of the status poll above: an older
-      // companion without this route, or a transient failure here, must
-      // not be treated as "capture stopped" the way a status-poll failure
-      // is below.
-      try {
-        const partial = await client.getSystemAudioPartialTranscript(captureId);
-        if (captureRuntime.companionCaptureId === captureId) {
-          applyPartialGuestWords(partial?.words);
-        }
-      } catch {
-        // Live captions are a bonus on top of the recording, not required.
       }
     } catch (error) {
       stopMeetingAudioSignalMonitor();
@@ -2744,7 +2674,6 @@ function startSpeechRecognition() {
   };
   recognition.onresult = (event) => {
     let interim = "";
-    let interimSpeakerId = null;
     for (let index = event.resultIndex; index < event.results.length; index += 1) {
       const result = event.results[index];
       const text = result[0]?.transcript?.trim();
@@ -2756,36 +2685,26 @@ function startSpeechRecognition() {
           Math.max(800, text.split(/\s+/).length * 420),
         );
         const startMs = Math.max(0, endMs - estimatedDurationMs);
-        // Microphone speech is always the local user now -- live guest text
-        // comes from actually transcribing the meeting-audio recording
-        // (applyPartialGuestWords), not from guessing at mic audio that
-        // happened to leak the other side's voice in acoustically.
+        // No speaker distinction on live browser-recognised draft rows --
+        // matches the flat, speaker-agnostic shape the backend now returns
+        // for the completed transcript.
         state.capture.segments.push({
           id: createId("speech"),
-          speakerId: "local-user",
-          speaker: "You",
-          initials: currentUserInitials(),
-          color: "teal",
           timestamp: formatTimer(state.capture.elapsed),
           startMs,
           endMs,
-          source: "microphone",
           text,
           isDraft: true,
-          provisional: false,
         });
       } else {
         interim = `${interim} ${text}`.trim();
-        interimSpeakerId = "local-user";
       }
     }
     state.capture.interimTranscript = interim;
-    state.capture.interimSpeakerId = interim ? interimSpeakerId : null;
     updateCaptureRuntimeUI({ transcript: true });
   };
   recognition.onerror = (event) => {
     state.capture.interimTranscript = "";
-    state.capture.interimSpeakerId = null;
     if (event.error === "no-speech" || event.error === "aborted") return;
     state.capture.transcriptionStatus = "unavailable";
     updateCaptureRuntimeUI({ transcript: true });
@@ -2845,7 +2764,6 @@ async function startCapture() {
   }
 
   captureRuntime = createEmptyCaptureRuntime();
-  state.capture.interimSpeakerId = null;
   state.capture.meetingAudioEnded = false;
   state.capture.meetingAudioSignalDetected = false;
   state.capture.meetingAudioCurrentlyActive = false;
@@ -3144,7 +3062,6 @@ async function finishCapture() {
   stopSpeechRecognition();
   state.capture.status = "processing";
   state.capture.interimTranscript = "";
-  state.capture.interimSpeakerId = null;
   state.capture.meetingAudioCurrentlyActive = false;
   const title = state.capture.title.trim() || "Untitled meeting";
   const elapsed = state.capture.elapsed;
@@ -3193,15 +3110,11 @@ async function finishCapture() {
   const audioSaved = Boolean(primaryAsset);
 
   const transcriptText = segments.map((segment) => segment.text).join(" ");
-  const participants = recordingAssets.microphone
-    ? [
-        {
-          name: currentUserName(),
-          initials: currentUserInitials(),
-          color: "teal",
-        },
-      ]
-    : [];
+  // No participants/speakers are pre-populated here -- the transcript is
+  // speaker-agnostic by default now, and ensureMeetingSpeakers below is the
+  // single source of truth for deriving real speaker identity when (and
+  // only when) the transcript actually carries it.
+  const participants = [];
   const meeting = {
     id,
     audioId: primaryAsset?.id || null,
@@ -3216,25 +3129,15 @@ async function finishCapture() {
     durationSeconds: elapsed,
     source: `${recordingAssets.microphone ? "Microphone" : ""}${recordingAssets.microphone && recordingAssets.meeting ? " + " : ""}${recordingAssets.meeting ? "meeting audio" : ""}${audioSaved ? " · audio saved" : ""}`,
     participants,
-    speakers: recordingAssets.microphone
-      ? [
-          {
-            id: "local-user",
-            displayName: currentUserName(),
-            source: "microphone",
-            color: "teal",
-            isLocalUser: true,
-          },
-        ]
-      : [],
+    speakers: [],
     tags: [
       "Recorded",
       "Local audio",
       ...(recordingAssets.meeting ? ["Meeting audio"] : []),
     ],
     overview: transcriptText
-      ? `This meeting contains synchronized local audio and ${segments.length} draft browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Run speaker transcription before generating the professional analysis.`
-      : `This meeting contains locally stored audio. Speaker transcription has not run, and ${BRAND.name} did not generate sample transcript text.`,
+      ? `This meeting contains synchronized local audio and ${segments.length} draft browser-recognised speech segment${segments.length === 1 ? "" : "s"}. Run transcription before generating the professional analysis.`
+      : `This meeting contains locally stored audio. Transcription has not run, and ${BRAND.name} did not generate sample transcript text.`,
     highlights: [],
     decisions: [],
     actions: [],
@@ -3289,10 +3192,12 @@ function meetingMarkdown(meeting) {
     })
     .join("\n");
   const transcript = meeting.transcript
-    .map(
-      (segment) =>
-        `**${MeetingAudio.speakerLabel(meeting, segment.speakerId, segment.speaker)} · ${segment.timestamp}**\n${segment.text}`,
-    )
+    .map((segment) => {
+      const label = segment.speakerId
+        ? MeetingAudio.speakerLabel(meeting, segment.speakerId, segment.speaker)
+        : "";
+      return `${label ? `**${label} · ${segment.timestamp}**` : `**${segment.timestamp}**`}\n${segment.text}`;
+    })
     .join("\n\n");
   const speakers = (meeting.speakers || [])
     .map(
@@ -3300,7 +3205,8 @@ function meetingMarkdown(meeting) {
         `- ${speaker.id === "local-user" ? `You (${currentUserName()})` : speaker.displayName}`,
     )
     .join("\n");
-  return `# ${meeting.title}\n\n${longDate(meeting.dateISO)} · ${meeting.duration}\n\n## 1. Short Summary\n\n${meeting.overview}\n\n## 2. Key Highlights\n\n${highlights || "No key highlights were identified."}\n\n## 3. Decisions\n\n${decisions || "No confirmed decisions were recorded."}\n\n## 4. Action Items\n\n${actionItems || "No action items were recorded."}\n\n## Speakers\n\n${speakers || "No speakers identified."}\n\n## Transcript\n\n${transcript || "No transcript available."}\n\n## My notes\n\n${meeting.notes || "No personal notes."}\n`;
+  const speakersSection = speakers ? `## Speakers\n\n${speakers}\n\n` : "";
+  return `# ${meeting.title}\n\n${longDate(meeting.dateISO)} · ${meeting.duration}\n\n## 1. Short Summary\n\n${meeting.overview}\n\n## 2. Key Highlights\n\n${highlights || "No key highlights were identified."}\n\n## 3. Decisions\n\n${decisions || "No confirmed decisions were recorded."}\n\n## 4. Action Items\n\n${actionItems || "No action items were recorded."}\n\n${speakersSection}## Transcript\n\n${transcript || "No transcript available."}\n\n## My notes\n\n${meeting.notes || "No personal notes."}\n`;
 }
 
 function selectedMeeting() {
@@ -3496,11 +3402,6 @@ function createMeetingAnalysisClient() {
 function meetingAnalysisSegments(meeting) {
   return meeting.transcript.map((segment) => ({
     id: segment.id,
-    speaker: MeetingAudio.speakerLabel(
-      meeting,
-      segment.speakerId,
-      segment.speaker,
-    ),
     timestamp: segment.timestamp,
     startMs: segment.startMs,
     endMs: segment.endMs,
@@ -3512,7 +3413,7 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
   if (!meeting?.transcript?.length) {
     showToast(
       "No completed transcript",
-      "Run speaker transcription before generating the meeting analysis.",
+      "Run transcription before generating the meeting analysis.",
     );
     return false;
   }
@@ -3548,7 +3449,7 @@ async function analyzeMeeting(meeting = selectedMeeting()) {
     showToast(
       "Professional analysis ready",
       usedSavedDraft
-        ? "Summary, highlights, decisions, and action items were rebuilt from the saved browser transcript. Speaker labels may remain provisional."
+        ? "Summary, highlights, decisions, and action items were rebuilt from the saved browser transcript."
         : "Summary, highlights, decisions, and action items were rebuilt from the complete transcript.",
     );
     return true;
@@ -3689,7 +3590,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
   if (!MeetingAudio.recordingAsset(meeting)) {
     showToast(
       "No recording is available",
-      "Speaker transcription requires a saved audio source.",
+      "Transcription requires a saved audio source.",
     );
     return;
   }
@@ -3798,8 +3699,8 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
     render();
     if (meeting.transcript.length) {
       showToast(
-        "Speaker transcript ready",
-        `${meeting.speakers.length} speaker${meeting.speakers.length === 1 ? "" : "s"} identified ${jobMode === "hosted" ? "by the online GPU" : "locally"}.`,
+        "Transcript ready",
+        `Transcribed ${jobMode === "hosted" ? "by the online GPU" : "locally"}.`,
       );
     } else {
       showToast(
@@ -3824,7 +3725,7 @@ async function startMeetingTranscription(meeting = selectedMeeting()) {
     render();
     if (!cancelled) {
       showToast(
-        "Speaker transcription failed",
+        "Transcription failed",
         meeting.transcription.error,
       );
     }
@@ -3852,7 +3753,7 @@ async function cancelMeetingTranscription(meeting = selectedMeeting()) {
   save();
   render();
   showToast(
-    "Speaker transcription cancelled",
+    "Transcription cancelled",
     "Your browser recordings were not removed.",
   );
 }
@@ -3908,16 +3809,11 @@ async function importAudio(file) {
     dateISO: new Date().toISOString(),
     duration: "Imported",
     source: `${file.type || "Audio file"} · ${(file.size / 1024 / 1024).toFixed(1)} MB`,
-    participants: [{ name: "Speaker 1", initials: "S1", color: "violet" }],
-    speakers: [
-      {
-        id: "remote-1",
-        displayName: "Speaker 1",
-        source: "meeting",
-        color: "violet",
-        isLocalUser: false,
-      },
-    ],
+    // No transcript exists for an imported file yet, so there is no basis
+    // for a speaker roster -- ensureMeetingSpeakers below leaves this at
+    // an empty, speaker-agnostic state rather than inventing one.
+    participants: [],
+    speakers: [],
     tags: ["Imported", "Needs review"],
     overview: audioSaved
       ? "The original audio file was imported and stored locally for playback. No transcript text was invented."
@@ -4086,9 +3982,6 @@ app.addEventListener("click", async (event) => {
     return;
   } else if (action === "install-analysis-gpu") {
     await installAnalysisGpuAcceleration();
-    return;
-  } else if (action === "install-speaker-gpu") {
-    await installSpeakerGpuAcceleration();
     return;
   } else if (action === "switch-analysis-tier") {
     await switchAnalysisTier(button.dataset.tier);

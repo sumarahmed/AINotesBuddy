@@ -16,7 +16,6 @@ $specPath = Join-Path $desktopRoot "NotesBuddyCompanion.spec"
 if ($RequireModels) {
     $requiredModels = @(
         (Join-Path $modelRoot "faster-whisper-small"),
-        (Join-Path $modelRoot "speaker-diarization-community-1"),
         (Join-Path $modelRoot "MODEL_MANIFEST.json")
     )
     foreach ($requiredModel in $requiredModels) {

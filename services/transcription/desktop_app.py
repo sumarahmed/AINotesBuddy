@@ -97,7 +97,7 @@ def fetch_latest_companion_release(
     return {
         # GitHub's "latest release" is whichever release published most
         # recently, regardless of what it contains -- this repo also
-        # publishes component-only releases (e.g. speaker-diarization-cuda)
+        # publishes component-only releases (e.g. analysis-cuda)
         # under the same companion-v* tag convention, with no installer at
         # all. Reported live (2026-09-05): the companion notified "Update
         # 2026.09.11 is available" for a release that was only a GPU
@@ -797,7 +797,7 @@ def self_test(
         finally:
             companion_server.stop()
 
-    from notesbuddy_transcription.engine import EmptyEngine, LocalDiarizationEngine
+    from notesbuddy_transcription.engine import EmptyEngine, LocalTranscriptionEngine
     from notesbuddy_transcription.server import create_app
 
     app = create_app(
@@ -843,13 +843,10 @@ def self_test(
     if require_models:
         for package in (
             "faster_whisper",
-            "pyannote.audio",
             "soundcard",
-            "soundfile",
-            "torch",
         ):
             importlib.import_module(package)
-        model_status = LocalDiarizationEngine().configuration_status()
+        model_status = LocalTranscriptionEngine().configuration_status()
         if not model_status["ready"] or model_status["source"] != "bundled":
             raise RuntimeError(
                 "The packaged runtime or offline model directories are incomplete."

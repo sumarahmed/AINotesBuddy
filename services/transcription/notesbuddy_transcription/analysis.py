@@ -179,20 +179,14 @@ Requirements:
 
 Look specifically for decisions and action items even when they are mentioned briefly in passing, not only when a speaker announces them formally -- a short sentence agreeing to something, or one person saying they will handle something, still counts. A meeting almost always contains at least one of each if people discussed next steps at all.
 
+The transcript is a single combined stream with no speaker labels -- do not invent or assume who said what. Only assign an owner when a person's name appears directly in the cited evidence together with their own commitment (e.g. "Priya will send...", "Mark is going to finish..."). Otherwise use "Not specified".
+
 Example of an exchange and its correct extraction:
-[S0012 | 00:14 | Jordan Lee] We agreed to move the launch date to March 10th since QA needs more time.
-[S0013 | 00:19 | Priya Shah] Okay, I will send the updated budget spreadsheet to the team by Friday.
+[S0012 | 00:14] We agreed to move the launch date to March 10th since QA needs more time.
+[S0013 | 00:19] Priya will send the updated budget spreadsheet to the team by Friday.
 ->
 "decisions": [{"decision": "Move the launch date to March 10th.", "context": "QA needs more time.", "owner": "Not specified", "evidenceSegmentIds": ["S0012"]}]
-"actionItems": [{"task": "Send the updated budget spreadsheet to the team.", "owner": "Priya Shah", "dueDate": "Friday", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0013"]}]
-
-A task is just as often assigned as a request or question directed at someone by name, not only as that person's own first-person statement. Treat the request itself as the action item once it is acknowledged or left unchallenged, even with no formal "I will" from the person taking it on:
-[S0020 | 00:05 | Alex Kim] Mark, can you finish the client documentation this week?
-[S0021 | 00:07 | Mark Diaz] Sure, I'll take care of it.
-[S0022 | 00:09 | Alex Kim] And Priya, can you send the contract over to legal?
-[S0023 | 00:10 | Priya Shah] Yep.
-->
-"actionItems": [{"task": "Finish the client documentation.", "owner": "Mark Diaz", "dueDate": "This week", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0020", "S0021"]}, {"task": "Send the contract to legal.", "owner": "Priya Shah", "dueDate": "Not specified", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0022", "S0023"]}]
+"actionItems": [{"task": "Send the updated budget spreadsheet to the team.", "owner": "Priya", "dueDate": "Friday", "priority": "Medium", "notes": "Not specified", "evidenceSegmentIds": ["S0013"]}]
 
 Every summary and list item must cite one or more transcript segment IDs that directly support it. If no confirmed decisions exist, return an empty decisions array. If no action items exist, return an empty actionItems array.
 
@@ -346,22 +340,10 @@ def prepare_transcript_segments(raw_segments: object) -> list[dict[str, Any]]:
         if source_id in seen_source_ids:
             source_id = f"{source_id}-{index + 1}"
         seen_source_ids.add(source_id)
-        speaker = _clean_text(
-            raw.get("speaker") or raw.get("speakerLabel"), maximum=100
-        )
-        if not speaker:
-            speaker_id = _normalise(raw.get("speakerId"))
-            if speaker_id == "local user":
-                speaker = "You"
-            else:
-                remote_match = re.fullmatch(r"remote (\d+)", speaker_id)
-                if remote_match:
-                    speaker = f"Speaker {remote_match.group(1)}"
         prepared.append(
             {
                 "id": f"S{len(prepared) + 1:04d}",
                 "sourceId": source_id,
-                "speaker": speaker or "Unknown speaker",
                 "timestamp": _clean_text(raw.get("timestamp"), maximum=20),
                 "text": text,
             }
@@ -470,9 +452,16 @@ def _validated_owner(
     value: object,
     evidence: list[str],
     by_id: dict[str, dict[str, Any]],
-    *,
-    allow_first_person_speaker: bool = False,
 ) -> str:
+    """Accept a proposed owner only when the evidence explicitly assigns them.
+
+    The transcript is a single mixed-audio stream with no per-speaker
+    attribution, so there is no way to confirm that a name the model proposes
+    actually matches whoever is speaking. The only signal available is the
+    text itself: the owner's name must appear next to their own commitment
+    (or an explicit "assigned to <name>" phrase) in the cited evidence.
+    """
+
     owner = _clean_text(value, maximum=100) or NOT_SPECIFIED
     if owner.lower() == NOT_SPECIFIED.lower():
         return NOT_SPECIFIED
@@ -480,40 +469,15 @@ def _validated_owner(
     evidence_text = _evidence_text(evidence, by_id)
     if len(normalised_owner) < 2:
         return NOT_SPECIFIED
-    aliases = [owner]
-    evidence_speakers = {
-        _normalise(by_id[item]["speaker"])
-        for item in evidence
-        if item in by_id
-    }
-    first_name = owner.split()[0] if owner.split() else ""
-    if normalised_owner in evidence_speakers and len(first_name) >= 3:
-        aliases.append(first_name)
-    for alias in aliases:
-        owner_pattern = re.escape(alias).replace(r"\ ", r"\s+")
-        explicitly_assigned = re.search(
-            rf"\b{owner_pattern}\b[^.!?]{{0,40}}\b(?:will|must|needs?\s+to|"
-            r"has\s+to|is\s+responsible|owns?|is\s+assigned)\b|"
-            rf"\b(?:assigned|owned)\s+(?:to|by)\s+{owner_pattern}\b",
-            evidence_text,
-            re.IGNORECASE,
-        )
-        if explicitly_assigned:
-            return owner
-    if allow_first_person_speaker and len(evidence) == 1:
-        segment = by_id.get(evidence[0])
-        if (
-            segment
-            and _normalise(segment["speaker"]) == normalised_owner
-            and re.search(
-                r"\b(?:i\s+(?:will|must|need\s+to|have\s+to|am\s+going\s+to)|"
-                r"i['’]ll)\b",
-                segment["text"],
-                re.IGNORECASE,
-            )
-        ):
-            return owner
-    return NOT_SPECIFIED
+    owner_pattern = re.escape(owner).replace(r"\ ", r"\s+")
+    explicitly_assigned = re.search(
+        rf"\b{owner_pattern}\b[^.!?]{{0,40}}\b(?:will|must|needs?\s+to|"
+        r"has\s+to|is\s+responsible|owns?|is\s+assigned)\b|"
+        rf"\b(?:assigned|owned)\s+(?:to|by)\s+{owner_pattern}\b",
+        evidence_text,
+        re.IGNORECASE,
+    )
+    return owner if explicitly_assigned else NOT_SPECIFIED
 
 
 def _validated_due_date(
@@ -724,7 +688,6 @@ def normalise_analysis(
                     item.get("owner"),
                     evidence,
                     by_id,
-                    allow_first_person_speaker=True,
                 ),
                 "dueDate": _validated_due_date(
                     item.get("dueDate"), evidence, by_id
@@ -927,10 +890,7 @@ def _extract_json(value: str) -> dict[str, Any]:
 
 
 def _transcript_line(segment: dict[str, Any]) -> str:
-    return (
-        f"[{segment['id']} | {segment['timestamp'] or 'time unavailable'} | "
-        f"{segment['speaker']}] {segment['text']}"
-    )
+    return f"[{segment['id']} | {segment['timestamp'] or 'time unavailable'}] {segment['text']}"
 
 
 def _token_count(tokenizer: Any, text: str) -> int:
@@ -1002,7 +962,6 @@ def _sentence_records(
             records.append(
                 {
                     "id": segment["id"],
-                    "speaker": segment["speaker"],
                     "text": sentence,
                     "segmentIndex": segment_index,
                 }
@@ -1021,11 +980,19 @@ def _sentence_case(value: str) -> str:
     return cleaned[0].upper() + cleaned[1:] + "."
 
 
-def _owner_from_commitment(owner: str, speaker: str) -> str:
+def _owner_from_commitment(owner: str) -> str:
+    """Resolve an owner named in the commitment's own text.
+
+    The transcript carries no per-speaker attribution, so a first- or
+    second-person pronoun ("I", "we", "you", "they", "he", "she") can never
+    be resolved to an actual name here -- it falls back to "Not specified",
+    the same default used everywhere else a confident owner cannot be
+    determined. Only an explicit name or "the team" captured by the
+    ACTION_LEAD/ACTION_CONTRACTION patterns is kept.
+    """
+
     normalized = _normalise(owner)
-    if normalized == "i":
-        return speaker if _normalise(speaker) not in {"", "unknown speaker"} else NOT_SPECIFIED
-    if normalized in {"we", "you", "they", "he", "she"}:
+    if normalized in {"i", "we", "you", "they", "he", "she"}:
         return NOT_SPECIFIED
     if normalized in {"the team", "team"}:
         return "The team"
@@ -1037,7 +1004,7 @@ def _action_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
     match = ACTION_LEAD.match(text) or ACTION_CONTRACTION.match(text)
     if match:
         task_text = match.group("task")
-        owner = _owner_from_commitment(match.group("owner"), record["speaker"])
+        owner = _owner_from_commitment(match.group("owner"))
     else:
         please = re.match(
             r"^(?:action item|next step|follow[- ]?up)\s*[:\-]?\s*(?P<task>.+)$|"
@@ -1410,7 +1377,7 @@ class LlamaCppMeetingAnalyzer:
         Only offloads when the installed runtime actually ships the CUDA
         backend (a CPU-only install must never claim GPU use even if a GPU
         happens to be present) and a CUDA-capable GPU is actually usable --
-        reusing the exact same detection ``LocalDiarizationEngine`` already
+        reusing the exact same detection ``LocalTranscriptionEngine`` already
         relies on for speech-to-text, rather than probing twice.
         """
 

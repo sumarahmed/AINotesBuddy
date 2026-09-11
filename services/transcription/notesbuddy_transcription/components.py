@@ -33,19 +33,6 @@ def configure_component_environment(root: Path | None = None) -> Path:
     os.environ["NOTESBUDDY_COMPONENT_DIR"] = str(target)
     os.environ["NOTESBUDDY_MODEL_DIR"] = str(target / "models")
     os.environ["NOTESBUDDY_GPU_LIB_DIR"] = str(target / "gpu")
-    os.environ["NOTESBUDDY_DIARIZATION_MODEL"] = str(target / "speaker" / "model")
-    os.environ["NOTESBUDDY_SPEAKER_WORKER"] = str(target / "speaker" / "NotesBuddySpeakerWorker.exe")
-    # The optional speaker-diarization-cuda component deliberately has its
-    # own destination, separate from "speaker" -- component installation is
-    # a wholesale directory swap (see _install_one below), not a file
-    # overlay, so a GPU-runtime-only package sharing the CPU worker's
-    # directory would silently delete the bundled pyannote model sitting
-    # alongside it. LocalDiarizationEngine prefers this worker, when
-    # present, over the CPU one above; NOTESBUDDY_DIARIZATION_MODEL always
-    # still resolves to the shared model regardless of which worker runs.
-    os.environ["NOTESBUDDY_SPEAKER_WORKER_GPU"] = str(
-        target / "speaker-gpu" / "NotesBuddySpeakerWorkerGPU.exe"
-    )
     os.environ["NOTESBUDDY_ANALYSIS_RUNTIME"] = str(target / "analysis" / "llama-cli.exe")
     # Three quality tiers (analysis-tiny/standard/pro) share this one
     # directory -- installing a tier replaces whichever was there before.
@@ -191,10 +178,7 @@ class ComponentManager:
         return {
             "root": str(self.root),
             "components": public,
-            "ready": speech_ready and bool(
-                "speaker-diarization" in components
-                and self.is_installed("speaker-diarization")
-            ),
+            "ready": speech_ready,
             "activeJob": active,
         }
 

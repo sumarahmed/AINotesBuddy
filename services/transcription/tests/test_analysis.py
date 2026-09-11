@@ -982,7 +982,7 @@ class MeetingAnalysisValidationTests(unittest.TestCase):
                 "actionItems": [
                     {
                         "task": "Send the revised proposal.",
-                        "owner": "Jordan Lee",
+                        "owner": "Jordan",
                         "dueDate": "Friday",
                         "priority": "High",
                         "notes": "Finance must confirm the total first.",
@@ -1031,7 +1031,11 @@ class MeetingAnalysisValidationTests(unittest.TestCase):
         self.assertEqual(result["decisions"][0]["owner"], "Not specified")
         self.assertEqual(len(result["actionItems"]), 2)
         action = result["actionItems"][0]
-        self.assertEqual(action["owner"], "Jordan Lee")
+        # Owner attribution now depends only on the name appearing directly
+        # in the cited evidence text next to its own commitment -- the
+        # evidence text says "Jordan will...", not "Jordan Lee will...", so
+        # only the shorter name form actually validates.
+        self.assertEqual(action["owner"], "Jordan")
         self.assertEqual(action["dueDate"], "Friday")
         self.assertEqual(action["priority"], "High")
         self.assertEqual(result["actionItems"][1]["owner"], "Not specified")
@@ -1131,16 +1135,36 @@ class ExtractiveMeetingAnalyzerTests(unittest.TestCase):
             ["remote-proposal", "remote-agreement"],
         )
 
-        actions = {item["owner"]: item for item in result["actionItems"]}
-        self.assertEqual(actions["Syed Ahmed"]["dueDate"], "Friday")
-        self.assertEqual(actions["Alex"]["dueDate"], "Thursday")
-        self.assertEqual(actions["Jordan"]["dueDate"], "Friday")
-        self.assertEqual(actions["Not specified"]["dueDate"], "Before Thursday")
+        # Owner attribution no longer has any speaker data to fall back on:
+        # a first-person commitment ("I will...") can never resolve to a
+        # name, so both the local-action and remote-need items land on
+        # "Not specified" -- only a literal name captured directly in the
+        # sentence itself ("Alex will...", "Jordan will...") still resolves.
+        self.assertEqual(
+            [
+                (item["owner"], item["dueDate"])
+                for item in result["actionItems"]
+            ],
+            [
+                ("Not specified", "Friday"),
+                ("Not specified", "Before Thursday"),
+                ("Alex", "Thursday"),
+                ("Jordan", "Friday"),
+            ],
+        )
+        self.assertIn("checklist", result["actionItems"][0]["task"])
+        self.assertIn("ingestion channel", result["actionItems"][1]["task"])
         self.assertTrue(
             all(item["sourceSegmentIds"] for item in result["actionItems"])
         )
 
-    def test_maps_companion_speaker_ids_when_labels_are_not_supplied(self) -> None:
+    def test_ignores_speaker_fields_on_raw_segments(self) -> None:
+        # The transcript is a single mixed-audio stream with no speaker
+        # attribution now -- a raw segment carrying an old-format `speaker`
+        # or `speakerId` field (e.g. from a meeting saved before this
+        # change) must not influence extraction at all. "I will..." can no
+        # longer resolve to a name, since there is no speaker data to
+        # resolve it against.
         result = self.analyzer.analyze(
             segments=[
                 {
@@ -1162,7 +1186,7 @@ class ExtractiveMeetingAnalyzerTests(unittest.TestCase):
             meeting_title="Project review",
         )
 
-        self.assertEqual(result["actionItems"][0]["owner"], "You")
+        self.assertEqual(result["actionItems"][0]["owner"], "Not specified")
         self.assertEqual(
             result["decisions"][0]["decision"],
             "Assign the configuration work to Alex.",
@@ -1218,8 +1242,7 @@ class MeetingAnalysisChunkingTests(unittest.TestCase):
         )
         for chunk in chunks:
             rendered = "\n".join(
-                f"[{item['id']} | {item['timestamp']} | {item['speaker']}] "
-                f"{item['text']}"
+                f"[{item['id']} | {item['timestamp']}] {item['text']}"
                 for item in chunk
             )
             self.assertLessEqual(len(tokenizer.encode(rendered)), 70)

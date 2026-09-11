@@ -86,7 +86,7 @@ class DesktopUtilityTests(unittest.TestCase):
         self,
     ) -> None:
         # This repo publishes component-only releases (e.g.
-        # speaker-diarization-cuda) under the same companion-v* tag
+        # analysis-cuda) under the same companion-v* tag
         # convention as real installer releases -- GitHub's "latest
         # release" is whichever published most recently, regardless of
         # content. Reported live (2026-09-05): the companion notified
@@ -98,10 +98,10 @@ class DesktopUtilityTests(unittest.TestCase):
             "html_url": f"{RELEASES_URL}/tag/companion-v{future_tag}",
             "assets": [
                 {
-                    "name": f"NotesBuddy-speaker-diarization-cuda-{future_tag}.zip",
+                    "name": f"NotesBuddy-analysis-cuda-{future_tag}.zip",
                     "browser_download_url": (
                         f"{RELEASES_URL}/download/companion-v{future_tag}/"
-                        f"NotesBuddy-speaker-diarization-cuda-{future_tag}.zip"
+                        f"NotesBuddy-analysis-cuda-{future_tag}.zip"
                     ),
                 }
             ],

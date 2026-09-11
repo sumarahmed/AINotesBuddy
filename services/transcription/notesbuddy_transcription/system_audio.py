@@ -239,7 +239,7 @@ class SystemAudioCaptureManager:
         # Optional: live-caption transcription of each capture's trailing
         # audio window while it's still recording. None (the default) keeps
         # this module free of any dependency on the ML engine -- injected by
-        # server.py from the already-constructed LocalDiarizationEngine.
+        # server.py from the already-constructed LocalTranscriptionEngine.
         self._chunk_transcriber = chunk_transcriber
 
     @property

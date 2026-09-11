@@ -3,8 +3,7 @@
 NotesBuddy consists of a dependency-free static browser client and a Python
 service that can run as a paired Windows companion or a hosted anonymous API.
 The client owns microphone/browser-fallback capture, browser storage, playback,
-and UI. The companion owns Windows-output capture plus local speech-to-text and
-speaker diarization.
+and UI. The companion owns Windows-output capture plus local speech-to-text.
 
 ## Brand icon surfaces
 
@@ -70,13 +69,11 @@ flowchart LR
     Client --> Discovery["Companion discovery + exact-origin pairing"]
     Discovery -->|"Available: memory-only token"| Companion["127.0.0.1 desktop companion"]
     Discovery -->|"Unavailable: disclosed fallback"| Hosted["Hosted API (optional)"]
-    Companion --> Whisper["faster-whisper words"]
-    Hosted --> Whisper
-    Companion --> Pyannote["pyannote remote turns"]
-    Hosted --> Pyannote
-    Whisper --> Alignment["Timestamp alignment + echo de-duplication"]
-    Pyannote --> Alignment
-    Alignment --> Client
+    Companion --> SourceMix["Mix every provided source (only when more than one)"]
+    Hosted --> SourceMix
+    SourceMix --> Whisper["faster-whisper, single pass"]
+    Whisper --> FlatTranscript["Flat transcript, no speaker field"]
+    FlatTranscript --> Client
     Client -->|"completed transcript only"| AnalysisRouter["Prefer local companion, else hosted"]
     AnalysisRouter --> LocalAnalyzer["Companion: llama.cpp + one installed GGUF tier"]
     AnalysisRouter --> Analyzer["Hosted meeting analyst"]
@@ -106,10 +103,10 @@ Credentials must never be placed in this file.
 Framework-independent browser module containing:
 
 - recording-asset migration and source selection;
-- speaker normalization and labels;
-- transcript result normalization;
-- cross-source echo de-duplication;
-- speaker rename propagation;
+- transcript result normalization (a flat, speaker-agnostic transcript for
+  new transcriptions; speaker normalization, labels, and rename propagation
+  are retained only for meetings transcribed before diarization was
+  removed, so their saved per-speaker records keep rendering as before);
 - structured analysis-response validation;
 - companion discovery, automatic pairing, and health verification;
 - local-pairing and hosted anonymous-session API client.
@@ -134,7 +131,8 @@ Owns:
 - audio hydration, playback, seeking, source download;
 - transcription job lifecycle and cancellation;
 - professional-analysis lifecycle, migration, rendering, and refresh;
-- speaker roster, rename UI, search, copy, export, notes, and actions.
+- transcript search, copy, export, notes, and actions; speaker roster and
+  rename UI remain for meetings transcribed before diarization was removed.
 
 Timer, live transcript, source-status, and interrupted-share warning updates
 modify narrow DOM regions. This avoids replacing recording controls every
@@ -189,9 +187,9 @@ and validated against source by `npm test`.
    when no mixed track exists, then store the meeting/source metadata.
 
 Final transcription is authoritative: `applyTranscriptionResult()` replaces
-the whole capture-time draft and roster. It never appends pyannote speakers to
-the provisional **Guest**, so post-processing produces one reconciled timeline
-without duplicate rows.
+the whole capture-time draft with the completed, speaker-agnostic transcript.
+There is no roster to append speakers to for a new meeting, so post-processing
+produces one reconciled timeline without duplicate rows.
 
 If companion or display capture fails, microphone capture continues.
 If the user ends sharing during a meeting, the UI marks the meeting source
@@ -253,18 +251,17 @@ The shared engine and API live under `services/transcription/`.
 1. Validate token, metadata, source presence, and per-source size.
 2. Stream multipart uploads into a random OS temporary directory.
 3. Queue the job in a bounded executor (one worker by default).
-4. Lazily load model adapters.
-5. Transcribe the microphone track and assign every word to `local-user`.
-6. Transcribe the meeting track. For mixed-only imports, use mixed as the
-   remote source; a mic-only mixed duplicate is intentionally skipped.
-7. Diarize remote audio and prefer exclusive speaker intervals when available.
-8. Map model labels to `remote-1`, `remote-2`, and so on in first-appearance
-   order.
-9. Assign words to intervals by greatest overlap. Only a 350 ms rounding
-   tolerance is permitted; otherwise use `remote-unknown`.
-10. Collapse adjacent words, merge source segments by shared timestamps, and
-    remove near-identical overlapping cross-source echo.
-11. Return JSON and remove the temporary job directory in `finally`.
+4. Lazily load the model adapter.
+5. When more than one source (microphone/meeting/mixed) was provided, decode
+   each to mono float32 at 16kHz, zero-pad the shorter one(s) to the longest
+   length, sum them sample-wise, and clip to `[-1, 1]` to avoid distortion. A
+   single provided source skips mixing entirely and is transcribed directly
+   from its own file instead, which is both cheaper and higher quality.
+6. Transcribe the resulting audio once with faster-whisper.
+7. Collapse the resulting word stream into segments purely by pause gap (and
+   a maximum segment length) -- there is no speaker-change condition to
+   check, since there is no speaker attribution at all.
+8. Return JSON and remove the temporary job directory in `finally`.
 
 Cancellation sets a cooperative event. Native model work may finish its current
 operation before observing it, but terminal cleanup always runs.
@@ -273,11 +270,11 @@ operation before observing it, but terminal cleanup always runs.
 
 A second, independent path runs alongside the job lifecycle above while a
 system-audio capture is active, so guest speech can appear in the live
-transcript instead of only after **Transcribe and identify speakers**:
+transcript instead of only after **Transcribe**:
 
 1. `SystemAudioCaptureManager` starts a background thread per capture (only
    when a `chunk_transcriber` was injected -- `server.py` wires in
-   `LocalDiarizationEngine.transcribe_chunk`) alongside the existing WASAPI
+   `LocalTranscriptionEngine.transcribe_chunk`) alongside the existing WASAPI
    recorder thread.
 2. Every ~5 seconds, it reads `capture.frame_count` under `capture.lock` as a
    safe lower bound on frames actually written so far, then reads raw PCM
@@ -292,17 +289,17 @@ transcript instead of only after **Transcribe and identify speakers**:
    then runs it through the same lazily-loaded, already-warm faster-whisper
    model the job lifecycle uses -- guarded by a shared inference lock that the
    live path acquires non-blocking (skipping that tick on contention) so a
-   caption tick never queues behind a multi-minute diarization job.
+   caption tick never queues behind a multi-minute transcription job.
 4. Results are served over `GET
    /v1/system-audio/captures/{id}/partial-transcript`, gated by the same
    `require_local_system_audio_access` dependency as its sibling routes.
    `src/app.js` polls it alongside the existing status poll and
    wholesale-replaces the live provisional-**Guest** rows on every response
-   (mirroring how the final diarized transcript already wholesale-replaces
-   every provisional row, rather than tracking incremental cursor/dedup
-   state), then re-sorts the merged live segment list by timestamp, since a
-   guest word from a several-second-delayed poll can carry an earlier
-   timestamp than a microphone segment already on screen.
+   (mirroring how the final transcript already wholesale-replaces every
+   provisional row, rather than tracking incremental cursor/dedup state),
+   then re-sorts the merged live segment list by timestamp, since a guest
+   word from a several-second-delayed poll can carry an earlier timestamp
+   than a microphone segment already on screen.
 
 The whole per-tick body is one unit wrapped in a single broad exception
 handler: any failure (a bad read, a conversion error, a transcription error)
@@ -333,65 +330,21 @@ and result storage.
 
 ### Model adapter
 
-`LocalDiarizationEngine` loads faster-whisper and pyannote lazily. Packaged
-Windows releases resolve both from the offline `models` directory, so customers
-do not need a model token. The trusted release job uses the publisher's secret
-once, records immutable model revisions, and never includes that secret in the
-artifact. `EmptyEngine` exists only for API/security smoke tests and returns an
-empty segment array. It never returns demonstration text.
+`LocalTranscriptionEngine` loads faster-whisper lazily. Packaged Windows
+releases resolve it from the offline `models` directory, so customers do not
+need a model token. `EmptyEngine` exists only for API/security smoke tests
+and returns an empty segment array. It never returns demonstration text.
 
-### Speaker diarization worker and GPU acceleration
-
-A real install always delegates diarization to an isolated
-`NotesBuddySpeakerWorker.exe` subprocess (`NOTESBUDDY_SPEAKER_WORKER`,
-wired by `components.py`'s `configure_component_environment`) rather than
-running pyannote in-process inside `LocalDiarizationEngine._diarize()` --
-that in-process path only exists for dev/test scenarios without a worker
-configured. `NotesBuddyCompanion.spec` explicitly excludes `torch`,
-`torchaudio`, and `pyannote`/`pyannote.audio` from the main companion
-build, confirming this is deliberate rather than incidental.
-
-CPU diarization was confirmed CPU-bound, not GPU-idle by mistake: a real
-~1 hour meeting took roughly an hour to diarize, `nvidia-smi` showed 0% GPU
-utilization throughout, and `torch/version.py` in both the main companion's
-bundle and the worker's own separate bundle read `+cpu` -- neither has any
-CUDA support at all, because `requirements-models.txt` pins `torch>=2.6`
-with no CUDA index, so pip resolves PyPI's default (CPU-only) Windows
-wheel. Two fixes followed from that root cause:
-
-1. **Free, always-on**: neither the worker nor the in-process path
-   configured PyTorch's CPU thread pool at all before this. Shared
-   `notesbuddy_transcription/cpu_threads.py` resolves a thread count (every
-   logical core by default, overridable via
-   `NOTESBUDDY_DIARIZATION_CPU_THREADS`) and applies it -- as
-   `OMP_NUM_THREADS`/`MKL_NUM_THREADS` env defaults before the worker's
-   first `import torch` (env vars only take effect at native thread-pool
-   init, so this must run before that import), and via a direct
-   `torch.set_num_threads()`/`set_num_interop_threads(1)` call for the
-   in-process fallback.
-2. **Opt-in GPU**: a second executable, `NotesBuddySpeakerWorkerGPU.exe`,
-   built from the exact same `speaker_worker.py` entry point but with a
-   CUDA-enabled torch/torchaudio installed in its build venv instead
-   (`.github/workflows/speaker-worker.yml` builds both variants).
-   `speaker_worker.py` detects `torch.cuda.is_available()` at runtime and
-   moves the pipeline to `cuda` when true, so the CPU-only build (whose
-   torch always reports no CUDA) naturally stays on CPU with no separate
-   code path. Packaged as the `speaker-diarization-cuda` component,
-   installed into its own `speaker-gpu` destination -- never the base
-   `speaker` one the CPU worker and the shared pyannote model live in,
-   since component installation is a wholesale directory swap
-   (`components.py`'s `_install_one`), and `analysis-cuda` already hit
-   exactly this bug once by sharing a destination with a component that had
-   a file of its own to preserve. `LocalDiarizationEngine.__init__` prefers
-   `NOTESBUDDY_SPEAKER_WORKER_GPU` over `NOTESBUDDY_SPEAKER_WORKER` when
-   present; the shared model directory is untouched either way.
-
-Confirmed live (2026-09-05) on a real ~24 minute meeting recording: 62s on
-GPU vs. 731s on tuned CPU (11.8x), with identical speaker-turn output on
-both -- real speech fully exercises pyannote's clustering stage, unlike an
-earlier synthetic-audio test that produced zero detected turns, so this
-result settles the open question of whether clustering would stay
-CPU-bound regardless of the neural-net stages moving to GPU. It does not.
+Speaker diarization (a separate pyannote pipeline, an isolated
+`NotesBuddySpeakerWorker.exe`/`NotesBuddySpeakerWorkerGPU.exe` subprocess
+pair, and the CPU-thread-pool tuning and GPU acceleration built around them)
+was removed entirely: real-world testing surfaced repeated, hard-to-fix
+problems -- acoustic leakage misattributing guest speech to the local user, a
+capture-time bug where switching audio output devices mid-recording silently
+broke diarization, and format-compatibility bugs -- and it was judged not to
+be helping enough to keep. See [`CHANGELOG.md`](../CHANGELOG.md) for the
+removal and [`docs/MEETING_AUDIO_DIARIZATION_PLAN.md`](MEETING_AUDIO_DIARIZATION_PLAN.md)
+for the original design, now historical.
 
 ### Local analysis (smart summary)
 
@@ -416,7 +369,7 @@ this separate runtime, when present, over the CPU-only one; the GGUF always
 resolves from the untouched `analysis` directory regardless of which
 runtime is active. `LlamaCppMeetingAnalyzer` passes `-ngl 999` only when the installed
 runtime actually has `ggml-cuda.dll` next to it *and* `engine.local_accelerator("auto")`
--- the exact same CUDA-availability probe `LocalDiarizationEngine` already
+-- the exact same CUDA-availability probe `LocalTranscriptionEngine` already
 uses for speech-to-text, not a second detector -- reports a usable GPU. A
 GPU-flagged run that exits non-zero retries once on CPU rather than failing
 the analysis outright.
@@ -533,7 +486,14 @@ again server-side (409 if not `analysis-pro`) rather than trusting only a
 browser-local tier preference, which could be stale relative to what is
 actually installed.
 
-## Speaker model
+## Speaker model (legacy meetings only)
+
+Diarization is removed. New transcripts from `build_transcript()` are flat
+segments (`id`, `startMs`, `endMs`, `text`, `confidence`) with no speaker
+field at all -- no `speakerId`, no `source`, no "You" vs. everyone-else
+distinction. The model below describes only meetings transcribed before this
+change; their saved records, including any speaker roster and renames, keep
+rendering exactly as they always have.
 
 ```js
 {
@@ -558,10 +518,9 @@ existing local speaker metadata and locally owned follow-ups.
 - Browser recognition is marked as a draft.
 - A completed companion result replaces the draft authoritatively.
 - Empty model results produce an empty transcript.
-- Unknown assignments remain **Unknown speaker**.
 - The browser does not generate insights from keywords or placeholder text.
-- Professional analysis receives the complete finalized speaker transcript,
-  not the provisional live browser draft and not recording audio.
+- Professional analysis receives the complete finalized transcript, not the
+  provisional live browser draft and not recording audio.
 - The model must return structured JSON and cite real transcript segment IDs
   for the summary and every highlight, decision, and action item.
 - Server validation requires lexical support in cited evidence, explicit

@@ -4,7 +4,7 @@ NotesBuddy is a local-first meeting recorder and notes workspace. The browser
 client can capture your microphone and supported meeting audio as synchronized
 tracks, save them in the current browser profile, play each source back, and
 send them to either an optional local companion or a centrally hosted service
-for speech-to-text and speaker diarization.
+for speech-to-text transcription.
 
 > **Project status:** Functional prototype. The source client uses a
 > local-first hybrid mode: it prefers the Windows companion and keeps the
@@ -25,7 +25,8 @@ for speech-to-text and speaker diarization.
   via optional browser speech recognition, and the meeting-audio recording
   itself re-transcribed by the companion every few seconds and shown as
   **Guest**, whether or not headphones are worn -- no inserted sample text
-- Local faster-whisper transcription and pyannote speaker diarization companion
+- Local faster-whisper transcription companion, producing one flat,
+  speaker-agnostic transcript per meeting (no per-speaker distinction)
 - Three selectable local smart-summary quality tiers (Fast, Balanced,
   High quality), each an independently downloadable GGUF model and each
   showing the real model behind it (e.g. "Qwen3 4B Instruct 2507
@@ -50,24 +51,29 @@ for speech-to-text and speaker diarization.
   connection confirmation
 - Hosted anonymous-session API and browser client with per-session job isolation
 - Serverless GPU deployment package with a persistent model cache
-- Automatic **You** attribution for the isolated microphone track
-- Session-local **Speaker 1**, **Speaker 2**, and unknown-speaker labels for
-  meeting audio
-- Word-level cross-channel echo cleanup that preserves local speech while
-  keeping leaked meeting speech under its diarized remote speaker
+- Automatic **You** attribution for isolated microphone speech shown live,
+  during capture, before the final flat transcript replaces it
 - Professional analysis of the complete transcript with a sub-300-word short
   summary, consolidated highlights, confirmed decisions, and structured action
   items
 - Transcript-segment evidence citations plus server validation that rejects
   unsupported decisions, tasks, owners, dates, priorities, and notes
-- Speaker rename, transcript search, copy, and Markdown export
+- Transcript search, copy, and Markdown export
 - Local profile, notes, structured action items, and Markdown export
-- Backward-compatible playback for legacy single-asset meetings
+- Backward-compatible playback for legacy single-asset meetings and for
+  meetings transcribed before speaker diarization was removed (their saved
+  speaker roster and renames keep rendering unchanged)
 - Direct `index.html` launch and a dependency-free static client build
 
-NotesBuddy performs speaker *diarization*: it determines which detected voice
-spoke when. It does not perform voice biometrics and cannot discover a real
-person's name. The user assigns names after transcription.
+NotesBuddy no longer performs speaker diarization. Real-world testing found
+it unreliable -- acoustic leakage misattributing guest speech to the local
+user, a capture-time bug where switching audio output devices mid-recording
+silently broke diarization, and format-compatibility bugs -- so it was
+removed entirely. Every microphone, meeting, and imported audio source is
+mixed into one waveform and transcribed once, with no attempt to tell voices
+apart. See [`CHANGELOG.md`](CHANGELOG.md) for the removal and
+[`docs/MEETING_AUDIO_DIARIZATION_PLAN.md`](docs/MEETING_AUDIO_DIARIZATION_PLAN.md)
+for the original design, now historical.
 
 ## Quick start
 
@@ -103,11 +109,9 @@ fallback temporarily requires a display video track to maintain the share, but
 NotesBuddy never records, stores, or displays that video. Current Chrome or
 Edge on Windows is recommended.
 
-Speaker separation happens after the recording is transcribed. It can group
-distinct voices as **Speaker 1**, **Speaker 2**, and so on, but it cannot learn
-their real names from Teams. Rename those session-local labels after
-transcription. Very short turns, overlapping speech, low volume, and heavily
-compressed meeting audio can still cause two people to be grouped together.
+NotesBuddy no longer separates speakers after the recording is transcribed:
+every provided source is mixed into one waveform and transcribed once, so
+the finished transcript is plain text with no per-speaker grouping at all.
 
 During capture, NotesBuddy shows a live transcript from two independent
 sources. The isolated microphone is transcribed by the browser's own speech
@@ -118,11 +122,10 @@ whether or not headphones are worn, since it reads the actual captured
 recording rather than relying on the other person's voice leaking
 acoustically into the microphone. Before the companion's first live result
 arrives, or without a compatible companion connected, the UI shows **Guest
-speaking** without words. After processing, the saved draft is replaced by the
-synchronized microphone transcript plus pyannote's **Speaker 1**, **Speaker
-2**, and other remote groups.
+speaking** without words. After processing, the saved draft is replaced by
+the completed, flat, speaker-agnostic transcript.
 
-### Local speaker transcription
+### Local transcription
 
 For normal Windows users, install the companion from the repository's latest
 GitHub Release, start it, and reopen NotesBuddy. The website pairs
@@ -140,7 +143,6 @@ cd services\transcription
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-$env:HF_TOKEN = "your-local-hugging-face-token"
 python run.py
 ```
 
@@ -154,16 +156,14 @@ python run.py --show-token
 
 In NotesBuddy, open **Settings**, keep the companion URL at
 `http://127.0.0.1:8765`, paste the pairing token, and choose **Test
-connection**. After a meeting, open **Transcript** and choose **Transcribe and
-identify speakers**.
+connection**. After a meeting, open **Transcript** and choose **Transcribe**.
 
-The first time a paired companion needs its speech, speaker, or smart-summary
+The first time a paired companion needs its speech or smart-summary
 components, NotesBuddy shows a one-time setup screen to choose a speech-quality
 preset and a smart-summary quality tier (Fast, Balanced, or High quality),
-each showing its real download size before installing.
-
-The pyannote community model requires accepting its model terms before the
-first download. See the complete [companion setup and troubleshooting
+each showing its real download size before installing. Every model is a
+public, non-gated download; no Hugging Face account or token is required. See
+the complete [companion setup and troubleshooting
 guide](services/transcription/README.md).
 
 ### Public hosted transcription
@@ -181,7 +181,7 @@ operating limits, and future subscription migration.
 
 | Data | Location |
 | --- | --- |
-| Profile, meeting records, speaker names, transcripts, settings | Browser `localStorage` |
+| Profile, meeting records, transcripts, settings (plus speaker names and rename mappings on meetings transcribed before diarization was removed) | Browser `localStorage` |
 | Microphone, meeting, and mixed audio Blobs | Browser IndexedDB |
 | Active Windows-output capture | Companion temporary WAV; transferred locally and deleted when capture finishes |
 | Automatic desktop pairing token | Page memory only; expires and is revoked on companion restart |
@@ -189,7 +189,7 @@ operating limits, and future subscription migration.
 | Transcription job audio | Temporary local/hosted job directory, deleted after terminal state |
 | Hosted anonymous session | Browser `sessionStorage`, expiring |
 | Professional-analysis request | Completed transcript sent to the configured analysis service; no recording audio in this request |
-| Speech and diarization models | Local or hosted model cache |
+| Speech models | Local or hosted model cache |
 
 Windows-output capture includes everything played through the selected default
 speaker while recording, including notification sounds. Meeting records are not synchronized between people, devices, browsers, or
@@ -247,7 +247,7 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
-- [Meeting-audio implementation plan](docs/MEETING_AUDIO_DIARIZATION_PLAN.md)
+- [Meeting-audio diarization plan (implemented, then removed -- see status note)](docs/MEETING_AUDIO_DIARIZATION_PLAN.md)
 - [Desktop Companion user and release guide](docs/DESKTOP_COMPANION.md)
 - [Desktop Companion architecture and rollout plan](docs/DESKTOP_COMPANION_PLAN.md)
 - [Local transcription companion](services/transcription/README.md)
@@ -265,9 +265,9 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
 - Direct system-output capture requires companion `2026.08.1` or later on
   Windows. The browser-only fallback still requires an explicit share prompt
   and some surface/browser combinations do not expose audio.
-- The small Windows installer downloads the selected speech model, speaker
-  model, compatible NVIDIA pack, and one smart-summary quality tier once.
-  Verified components remain installed across companion application upgrades.
+- The small Windows installer downloads the selected speech model,
+  compatible NVIDIA pack, and one smart-summary quality tier once. Verified
+  components remain installed across companion application upgrades.
 - The desktop companion is Windows-only. There is no macOS or Linux build,
   packaging, or system-audio-capture equivalent; a Mac user can still record
   their own microphone in the browser, but meeting-audio capture and local
@@ -280,29 +280,17 @@ confidential meeting. Its setup is documented in [Testing](docs/TESTING.md).
   users don't have a discrete NVIDIA GPU), installed into its own directory
   independent of whichever quality tier is selected, so switching tiers
   afterward does not affect it.
-- Speaker diarization runs on CPU by default; the bundled PyTorch build (both
-  in the main companion and the isolated `NotesBuddySpeakerWorker.exe`
-  subprocess) has no CUDA support, confirmed live via `nvidia-smi` showing
-  0% GPU utilization during a real long meeting's diarization. It now
-  explicitly configures PyTorch's CPU thread pool (previously left at
-  PyTorch's own default), which costs nothing and roughly halved diarization
-  time on a real recording in testing. An optional **GPU acceleration for
-  speaker recognition** component is available in Settings once a
-  compatible GPU is already accelerating transcription -- confirmed live on
-  a real ~24 minute meeting recording: 11.8x faster than tuned CPU (62s vs.
-  731s), with identical speaker-turn output on both. It's a separate opt-in
-  download (a CUDA-capable PyTorch build runs several GB, unlike the small
-  DLL packs used for the whisper/smart-summary GPU options), installed into
-  its own directory independent of the CPU worker and the shared pyannote
-  model.
 - A running browser page cannot start the local companion automatically.
 - The client has no accounts, encrypted storage, sync, or multi-device data.
 - Anonymous hosted access is a prototype safeguard, not a subscription,
   entitlement, or production abuse-prevention boundary.
 - Professional analysis depends on model availability and must still be
   reviewed against the transcript for high-impact decisions.
-- Overlapping speech and poor audio can reduce diarization accuracy; users
-  should review labels before relying on them.
+- There is no speaker distinction of any kind in a new transcript. A meeting
+  with several people talking produces one plain-text transcript with
+  everyone's speech mixed together in order, not attributed to anyone.
+  Speaker diarization was removed after real-world testing found it
+  unreliable; see the note near the top of this document.
 
 ## License
 

@@ -1,9 +1,20 @@
 # NotesBuddy Desktop Companion
 
 The Windows companion lets the public NotesBuddy website use this computer for
-speech-to-text and speaker diarization. Users install it once; they do not need
-Python, Modal, a Hugging Face account, a model token, or a NotesBuddy pairing
-token.
+speech-to-text. Users install it once; they do not need Python, Modal, a
+Hugging Face account, a model token, or a NotesBuddy pairing token.
+
+**Speaker diarization removed.** Earlier companion versions also identified
+which detected voice spoke when. Real-world testing found repeated,
+hard-to-fix problems with it: acoustic leakage misattributing guest speech
+to the local user, a capture-time bug where switching audio output devices
+mid-recording silently broke diarization, and format-compatibility bugs. It
+was removed entirely; every transcript is now one mixed-audio transcript
+with no speaker distinction at all. The version notes below retain their
+original history, including the diarization features they shipped with at
+the time -- see [`CHANGELOG.md`](../CHANGELOG.md) for the removal itself,
+and [`docs/MEETING_AUDIO_DIARIZATION_PLAN.md`](MEETING_AUDIO_DIARIZATION_PLAN.md)
+for the original design, now historical.
 
 The companion is the local **capture and processing host**. Version `2026.08.1`
 records the default Windows output through WASAPI loopback while a NotesBuddy
@@ -52,6 +63,9 @@ connection the website offers Balanced (`faster-whisper-base`) or Accurate
 NVIDIA pack only on a compatible machine. Components live under
 `%LOCALAPPDATA%\NotesBuddy\components`, are SHA-256 verified, resume after an
 interrupted download, and remain installed across application upgrades.
+(Speaker recognition was removed in a later release -- see the note at the
+top of this document. First connection today installs only speech, and
+optionally a smart-summary tier and the NVIDIA pack.)
 
 Version `2026.08.8` repairs interrupted component downloads that previously
 could fail with HTTP 416. A complete partial archive is verified and installed
@@ -107,7 +121,7 @@ transcript was indistinguishable from a genuine failure with nothing to
 investigate), and live guest captions: the meeting-audio recording is now
 re-transcribed every ~5 seconds while still being captured, so guest speech
 appears in the live transcript during recording instead of only after
-**Transcribe and identify speakers**, working the same way whether or not
+**Transcribe**, working the same way whether or not
 headphones prevent the old mic-leakage-based approach from ever seeing guest
 audio at all. The same release also adds an optional **GPU acceleration for
 smart summary** component: local smart-summary generation previously always
@@ -132,7 +146,9 @@ in place of several unrelated ad hoc glyphs, fixes a false "update
 available" notification for component-only releases, closes a stray
 companion window left open by a manual duplicate launch, and stops the
 live transcript panel from resetting scroll position during an active
-capture.
+capture. (The speaker-recognition GPU acceleration described in this
+paragraph, and diarization itself, were removed in a later release -- see
+the note at the top of this document and [`CHANGELOG.md`](../CHANGELOG.md).)
 
 The Phase 1 build (see `## 2026.09.06` in
 [`CHANGELOG.md`](../CHANGELOG.md)) adds a persistent smart-summary tier
@@ -205,12 +221,11 @@ option can be changed in the control panel or selected during installation.
 The website may use an online fallback when the companion is unavailable.
 Settings discloses which path is currently active.
 
-## Offline models and publisher secret
+## Offline models
 
 Public releases provide independent reusable assets for:
 
 - `Systran/faster-whisper-small`;
-- `pyannote/speaker-diarization-community-1`;
 - three smart-summary quality tiers, each a Q4_K_M GGUF paired with a pinned
   `llama.cpp` Windows runtime: `analysis-tiny` (`Qwen/Qwen2.5-0.5B-Instruct-GGUF`),
   `analysis-standard` (`unsloth/Qwen3-1.7B-GGUF`, recommended default), and
@@ -226,23 +241,15 @@ Public releases provide independent reusable assets for:
   Ships no model weights of its own; a quality tier must already be
   installed. Switching tiers afterward does not affect it, since the two
   live in separate directories.
-- `speaker-diarization-cuda`, an optional CUDA-enabled build of the same
-  speaker worker (`NotesBuddySpeakerWorkerGPU.exe`), installed into its own
-  `speaker-gpu` folder rather than the base component's shared `speaker`
-  one -- for the same wholesale-directory-swap reason as `analysis-cuda`
-  above. Ships no pyannote model of its own; the base `speaker-diarization`
-  component must already be installed for its model to be there. Moves the
-  pipeline to `cuda` automatically at runtime when available.
 
-The publisher—not each customer—accepts the gated model conditions and uses a
-read-only `HF_TOKEN` only when intentionally preparing a new component release.
-Core companion releases reuse the pinned public component manifest and do not
-need the token. Component preparation records immutable model revisions and
-does not write the token to an artifact.
+Every model above is a public, non-gated download; preparing a release needs
+no publisher secret and no `HF_TOKEN`. (Before diarization was removed, a
+gated `pyannote/speaker-diarization-community-1` model required the
+publisher's own read-only token for the trusted release job -- that
+dependency no longer exists. See [`CHANGELOG.md`](../CHANGELOG.md).)
 
 Before public distribution, review
-[`desktop/MODEL_NOTICES.md`](../desktop/MODEL_NOTICES.md). The model preparation
-step deliberately requires `--accept-pyannote-terms`.
+[`desktop/MODEL_NOTICES.md`](../desktop/MODEL_NOTICES.md).
 
 ## Create a release
 
@@ -254,13 +261,11 @@ application, executes the packaged `--self-test`, creates a per-user Inno Setup
 installer, uploads the Actions artifact, and attaches the installer to the
 matching GitHub Release. It does not rebuild unchanged component ZIPs.
 
-Only when model, speaker-worker, or GPU contents intentionally change, configure
-the publisher's gated-model `HF_TOKEN`, run `desktop/prepare_components.py`,
-publish those component ZIPs, and update `desktop/component-manifest.json` with
-their immutable URLs, sizes, and checksums.
-
-The Smart summary components are public and do not need `HF_TOKEN`. Each tier
-can be built independently while retaining existing manifest entries; repeat
+Only when model or GPU contents intentionally change, run
+`desktop/prepare_components.py`, publish those component ZIPs, and update
+`desktop/component-manifest.json` with their immutable URLs, sizes, and
+checksums. No component build needs `HF_TOKEN` any more. Each tier can be
+built independently while retaining existing manifest entries; repeat
 `--component` to build more than one in the same run:
 
 ```powershell
@@ -276,24 +281,6 @@ The builder verifies the pinned model and runtime hashes, packages only
 and records provenance inside the component ZIP. Publish the generated ZIP to
 the matching `companion-v<version>` release before committing the generated
 manifest entry; the release workflow rejects missing or altered public assets.
-
-Run **Speaker worker components** from the Actions tab to build both the CPU
-(`NotesBuddySpeakerWorker`) and GPU (`NotesBuddySpeakerWorkerGPU`) speaker
-worker executables -- neither is built by the core installer workflow above.
-Download both artifacts, then package them:
-
-```powershell
-python desktop/prepare_components.py `
-  --version 2026.09.10 `
-  --component speaker-diarization `
-  --component speaker-diarization-cuda `
-  --speaker-runtime path\to\downloaded\NotesBuddySpeakerWorker `
-  --speaker-runtime-gpu path\to\downloaded\NotesBuddySpeakerWorkerGPU `
-  --accept-pyannote-terms
-```
-
-`speaker-diarization-cuda` ships no model of its own and needs no `HF_TOKEN`;
-it only zips the pre-built GPU worker directory as-is.
 
 ## Local developer build
 
@@ -347,8 +334,7 @@ For a dependency-light package smoke test, omit model preparation and run:
 **Live Guest captions never appear during recording**
 
 - Confirm the website reports companion `2026.09.10` or later. Older
-  companions only produce guest text after **Transcribe and identify
-  speakers**, not live.
+  companions only produce guest text after **Transcribe**, not live.
 - Confirm the Meeting badge reaches **Sound detected** first -- live
   captions transcribe the same captured recording, so they need real audio
   in it. Expect roughly 5-10 seconds of delay after speech starts before the
@@ -357,6 +343,8 @@ For a dependency-light package smoke test, omit model preparation and run:
   current companion and confirmed sound detected, check
   `%LOCALAPPDATA%\NotesBuddy\logs\companion.log`.
 
-Speaker diarization distinguishes detected voices by time. It does not know
-people's real names; users rename **Speaker 1**, **Speaker 2**, and so on after
-processing.
+Speaker diarization is removed (see the note at the top of this document).
+New transcripts carry no speaker distinction at all. Meetings transcribed
+before this change keep the session-local **Speaker 1**, **Speaker 2**, and
+so on they were already given; those labels were never a real identity, and
+users could rename them after processing.

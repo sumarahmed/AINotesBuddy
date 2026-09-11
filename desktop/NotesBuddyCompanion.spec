@@ -25,7 +25,7 @@ datas = [
     ),
 ]
 binaries = []
-hiddenimports = collect_submodules("uvicorn") + ["soundfile"]
+hiddenimports = collect_submodules("uvicorn")
 
 for package in (
     "av",

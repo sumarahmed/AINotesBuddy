@@ -1,10 +1,8 @@
-"""Speech-to-text and diarization engine adapters."""
+"""Speech-to-text engine adapters."""
 
 from __future__ import annotations
 
 import os
-import json
-import subprocess
 import sys
 import threading
 from importlib.util import find_spec
@@ -12,8 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .core import SpeakerTurn, Word, build_transcript
-from .cpu_threads import configure_torch as _configure_torch_cpu_threads
+from .core import Word, build_transcript
 from .diagnostics import log_diagnostic
 
 
@@ -53,8 +50,7 @@ def local_accelerator(requested_device: str = "auto") -> dict[str, object]:
     """Resolve the fastest locally supported inference device.
 
     faster-whisper uses CTranslate2, which performs the dominant speech model
-    workload. Pyannote can remain on CPU when the distributable companion uses
-    CPU PyTorch. Explicit configuration remains authoritative for operators.
+    workload. Explicit configuration remains authoritative for operators.
     """
 
     requested = str(requested_device or "auto").strip().lower() or "auto"
@@ -122,95 +118,6 @@ def module_available(name: str) -> bool:
         return False
 
 
-def ensure_diarization_readable(path: Path) -> Path:
-    """Return a path libsndfile can open, transcoding to WAV if it can't.
-
-    Meeting/system audio is normally a WAV from the companion's own WASAPI
-    loopback capture, but the browser-capture fallback ("share this tab,
-    also share system audio") produces a WebM `MediaRecorder` file instead
-    -- and BOTH diarization paths (`LocalDiarizationEngine._diarize` in
-    this process, and the isolated `NotesBuddySpeakerWorker` executable,
-    built and released completely separately from this package) call
-    `soundfile.read()` directly on the raw file path, which can only open
-    the WAV/FLAC/OGG family. Rather than fix this once per diarization
-    call site -- the isolated worker ships as its own prebuilt executable,
-    not something this package's own fix can reach without a separate
-    release -- normalize the file itself here, once, before either path
-    ever sees it.
-
-    Deliberately does not import `soundfile` itself: this runs in
-    `process()` unconditionally, before it's known whether diarization
-    will even use `soundfile` at all (the external worker bundles its own
-    copy; this process's own `NotesBuddyCompanion.spec` does not, since
-    diarization normally happens entirely in that separate worker process
-    -- confirmed live, "No module named 'soundfile'" the first time this
-    function assumed otherwise). The stdlib `wave` module reads a standard
-    RIFF/WAV header with no extra dependency at all, cheaply enough to skip
-    the decode/re-encode round trip entirely for the common already-WAV
-    case; `faster_whisper` (an unconditional dependency of this process
-    regardless of the diarization backend, since it does the actual
-    speech-to-text) supplies the decoder for anything else.
-    """
-
-    import wave
-
-    try:
-        with wave.open(str(path), "rb"):
-            return path
-    except FileNotFoundError:
-        # Not this function's job to arbitrate -- pass through unchanged
-        # so the real transcribe/diarize call raises its own clear error.
-        return path
-    except (wave.Error, EOFError):
-        pass
-
-    import numpy as np
-    from faster_whisper.audio import decode_audio
-
-    sample_rate = 16000
-    samples = decode_audio(str(path), sampling_rate=sample_rate)
-    pcm16 = (np.clip(samples, -1.0, 1.0) * 32767.0).astype(np.int16)
-    normalized_path = path.with_name(f"{path.stem}.normalized.wav")
-    with wave.open(str(normalized_path), "wb") as writer:
-        writer.setnchannels(1)
-        writer.setsampwidth(2)
-        writer.setframerate(sample_rate)
-        writer.writeframes(pcm16.tobytes())
-    return normalized_path
-
-
-def read_diarization_audio(path: Path) -> tuple[Any, int]:
-    """Load one isolated recording as a ``[channels, samples]`` float32 array.
-
-    ``soundfile`` (libsndfile) only opens the WAV/FLAC/OGG family -- not
-    WebM/Opus, which is exactly what the browser-capture fallback for
-    meeting audio produces (screen-share plus "also share system audio",
-    a `MediaRecorder` output) as opposed to the companion's own WASAPI
-    loopback capture (always WAV). Reported live: diarization failing with
-    "Format not recognised" the first time a real meeting used that
-    fallback for its system-audio track -- soundfile had never seen a
-    WebM file before because only microphone tracks (never diarized) were
-    ever webm previously. Falls back to faster-whisper's own bundled
-    decoder (already a hard dependency of this package, already proven to
-    read WebM) whenever libsndfile can't open the file at all.
-    """
-    import soundfile
-
-    try:
-        samples, sample_rate = soundfile.read(
-            str(path),
-            dtype="float32",
-            always_2d=True,
-        )
-        return samples.T.copy(), int(sample_rate)
-    except soundfile.LibsndfileError:
-        from faster_whisper.audio import decode_audio
-
-        sample_rate = 16000
-        samples = decode_audio(str(path), sampling_rate=sample_rate)
-        return samples.reshape(1, -1), sample_rate
-
-
 class EmptyEngine:
     """Dependency-light API test engine that never invents transcript text."""
 
@@ -241,14 +148,20 @@ class EmptyEngine:
         return {"language": None, "segments": []}
 
 
-class LocalDiarizationEngine:
-    """Lazy faster-whisper + pyannote implementation.
+class LocalTranscriptionEngine:
+    """Lazy faster-whisper implementation.
 
     Models are not loaded until a job actually needs them, allowing the health
     endpoint and browser pairing flow to start quickly.
+
+    Every provided isolated recording (microphone/meeting/mixed) is mixed
+    into a single waveform and transcribed once, producing one flat,
+    speaker-agnostic transcript -- there is no per-speaker attribution or
+    diarization stage. See core.build_transcript for the segment-collapsing
+    rules.
     """
 
-    name = "faster-whisper + pyannote.audio"
+    name = "faster-whisper"
 
     def __init__(
         self,
@@ -256,8 +169,6 @@ class LocalDiarizationEngine:
         whisper_model: str | None = None,
         device: str | None = None,
         compute_type: str | None = None,
-        diarization_model: str | None = None,
-        hugging_face_token: str | None = None,
     ) -> None:
         self.whisper_model_name = (
             whisper_model
@@ -276,29 +187,7 @@ class LocalDiarizationEngine:
         self.compute_type = configured_compute_type or (
             "float16" if self.device.startswith("cuda") else "int8"
         )
-        self.diarization_model_name = (
-            diarization_model
-            or os.getenv("NOTESBUDDY_DIARIZATION_MODEL", "").strip()
-            or bundled_model_reference(
-                "speaker-diarization-community-1",
-                "pyannote/speaker-diarization-community-1",
-            )
-        )
-        self.hugging_face_token = hugging_face_token or os.getenv(
-            "HF_TOKEN",
-            "",
-        )
-        # speaker_worker is a property (below), not resolved here: this
-        # engine is a long-lived singleton for the whole server process
-        # (see server.py's create_app, constructed once at startup), so
-        # resolving it once in __init__ would mean a speaker-diarization-cuda
-        # install after the companion started could never take effect
-        # without a full restart -- confirmed live (2026-09-05), the exact
-        # gap LocalAnalysisRouter._analyzer() already avoided by re-resolving
-        # its own GPU runtime on every call instead of caching it.
-        self._speaker_worker_override: Path | None = None
         self._whisper = None
-        self._diarization = None
         self._load_lock = threading.Lock()
         # Guards every call into the whisper model. faster-whisper is not
         # guaranteed safe for concurrent inference, and once live partial
@@ -308,34 +197,8 @@ class LocalDiarizationEngine:
         # matters, a job can afford to wait. The live-chunk path
         # (transcribe_chunk) acquires it non-blocking and just skips that
         # tick on contention, so a live caption never queues behind a
-        # multi-minute diarization job.
+        # multi-minute transcription job.
         self._inference_lock = threading.Lock()
-
-    @property
-    def speaker_worker(self) -> Path | None:
-        """The isolated diarization subprocess to use, re-resolved from the
-        environment on every access rather than cached -- see __init__'s
-        comment for why. `speaker_worker = ...` (used throughout the test
-        suite to inject a fake worker path) stores an explicit override that
-        takes precedence over environment re-resolution.
-        """
-        if self._speaker_worker_override is not None:
-            return self._speaker_worker_override
-        gpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER_GPU", "").strip()
-        if gpu_worker and Path(gpu_worker).is_file():
-            return Path(gpu_worker)
-        cpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER", "").strip()
-        return Path(cpu_worker) if cpu_worker else None
-
-    @speaker_worker.setter
-    def speaker_worker(self, value: Path | None) -> None:
-        self._speaker_worker_override = value
-
-    @property
-    def _speaker_worker_is_gpu(self) -> bool:
-        gpu_worker = os.getenv("NOTESBUDDY_SPEAKER_WORKER_GPU", "").strip()
-        worker = self.speaker_worker
-        return bool(gpu_worker and worker is not None and str(worker) == str(Path(gpu_worker)))
 
     def _fallback_to_cpu(self, error: BaseException, phase: str) -> None:
         self._whisper = None
@@ -360,28 +223,15 @@ class LocalDiarizationEngine:
                 self.accelerator = refreshed
                 self.device = "cuda"
                 self.compute_type = "float16"
-        speaker_runtime_ready = bool(self.speaker_worker and self.speaker_worker.is_file()) or all(
-            module_available(package) for package in ("pyannote.audio", "torch")
-        )
-        dependencies_ready = module_available("faster_whisper") and speaker_runtime_ready
-        bundled_models_ready = all(
-            Path(model).is_dir()
-            for model in (
-                self.whisper_model_name,
-                self.diarization_model_name,
-            )
-        )
-        downloadable_models_ready = bool(self.hugging_face_token)
-        ready = dependencies_ready and (
-            bundled_models_ready or downloadable_models_ready
-        )
-        source = (
-            "bundled"
-            if bundled_models_ready
-            else "configured-download"
-            if downloadable_models_ready
-            else "missing"
-        )
+        dependencies_ready = module_available("faster_whisper")
+        bundled_models_ready = Path(self.whisper_model_name).is_dir()
+        # Whisper's public models (the non-bundled fallback, e.g. "small")
+        # download from the Hugging Face hub with no token required, unlike
+        # the gated diarization model this engine used to also need --
+        # readiness here depends only on the runtime package being
+        # installed, not on any configured credential.
+        ready = dependencies_ready
+        source = "bundled" if bundled_models_ready else "configured-download"
         return {
             "ready": ready,
             "source": source,
@@ -389,25 +239,12 @@ class LocalDiarizationEngine:
             "computeType": self.compute_type,
             "accelerator": str(self.accelerator.get("name") or "CPU"),
             "gpuAvailable": bool(self.accelerator.get("available")),
-            # A real install always delegates diarization to the isolated
-            # speaker worker subprocess, whose own device is independent of
-            # self.device above (that's whisper's). Report the GPU worker
-            # when it's the one actually configured; only fall back to this
-            # process's own torch/device when no worker is configured at
-            # all (dev/test paths without NOTESBUDDY_SPEAKER_WORKER set).
-            "diarizationDevice": "cuda"
-            if self._speaker_worker_is_gpu
-            else "cuda"
-            if self.speaker_worker is None
-            and self.device.startswith("cuda")
-            and self._torch_cuda_available()
-            else "cpu",
             "status": (
                 "offline models ready"
                 if ready and bundled_models_ready
                 else "model download configured"
                 if ready
-                else "offline models or runtime packages are missing"
+                else "the faster-whisper runtime package is missing"
             ),
         }
 
@@ -443,67 +280,6 @@ class LocalDiarizationEngine:
                     )
         return self._whisper
 
-    def _load_diarization(self):
-        if self._diarization is not None:
-            return self._diarization
-        local_model = Path(self.diarization_model_name).is_dir()
-        if not self.hugging_face_token and not local_model:
-            raise RuntimeError(
-                "HF_TOKEN is required for the pyannote community diarization "
-                "model when it is not bundled with the desktop companion. "
-                "Accept the model terms and configure the token locally."
-            )
-        with self._load_lock:
-            if self._diarization is None:
-                try:
-                    from pyannote.audio import Pipeline
-                except ImportError as error:
-                    raise RuntimeError(
-                        "pyannote.audio is not installed. Install the companion "
-                        "requirements before identifying speakers."
-                    ) from error
-                try:
-                    if local_model:
-                        self._diarization = Pipeline.from_pretrained(
-                            self.diarization_model_name,
-                        )
-                    else:
-                        self._diarization = Pipeline.from_pretrained(
-                            self.diarization_model_name,
-                            token=self.hugging_face_token,
-                        )
-                except TypeError:
-                    # Compatibility with pyannote releases using the previous
-                    # Hugging Face keyword.
-                    if local_model:
-                        raise
-                    self._diarization = Pipeline.from_pretrained(
-                        self.diarization_model_name,
-                        use_auth_token=self.hugging_face_token,
-                    )
-
-                if (
-                    self.device.lower().startswith("cuda")
-                    and self._torch_cuda_available()
-                ):
-                    try:
-                        import torch
-
-                        self._diarization.to(torch.device(self.device))
-                    except (ImportError, RuntimeError, AssertionError):
-                        # The pipeline remains on its supported default device.
-                        pass
-        return self._diarization
-
-    @staticmethod
-    def _torch_cuda_available() -> bool:
-        try:
-            import torch
-
-            return bool(torch.cuda.is_available())
-        except (ImportError, RuntimeError, AssertionError):
-            return False
-
     @staticmethod
     def _probability(word: object) -> float | None:
         value = getattr(word, "probability", None)
@@ -514,12 +290,12 @@ class LocalDiarizationEngine:
 
     def _transcribe(
         self,
-        path: Path,
+        audio: Path | Any,
         *,
         cancel_event: threading.Event,
     ) -> tuple[list[Word], str | None]:
         try:
-            return self._transcribe_once(path, cancel_event=cancel_event)
+            return self._transcribe_once(audio, cancel_event=cancel_event)
         except (RuntimeError, OSError) as error:
             if not (
                 str(self.requested_device).lower() == "auto"
@@ -527,7 +303,7 @@ class LocalDiarizationEngine:
             ):
                 raise
             self._fallback_to_cpu(error, "inference")
-            return self._transcribe_once(path, cancel_event=cancel_event)
+            return self._transcribe_once(audio, cancel_event=cancel_event)
 
     def _words_from_model_segments(
         self,
@@ -579,18 +355,26 @@ class LocalDiarizationEngine:
 
     def _transcribe_once(
         self,
-        path: Path,
+        audio: Path | Any,
         *,
         cancel_event: threading.Event,
     ) -> tuple[list[Word], str | None]:
         model = self._load_whisper()
+        # A Path goes through faster-whisper's own ffmpeg-quality file
+        # decoder (best quality, and the common single-source case avoids
+        # a redundant decode/mix round trip entirely -- see process()).
+        # A decoded ndarray (produced when two or three sources had to be
+        # mixed first) is passed straight through; faster-whisper's numpy
+        # input path assumes it is already at the model's native rate,
+        # which _mixed_audio guarantees by decoding every source at 16kHz.
+        source = str(audio) if isinstance(audio, Path) else audio
         # Held for the full transcribe-and-consume span, not just the
         # transcribe() call: faster-whisper's segment iterator is lazy, so
         # the actual model inference happens while _words_from_model_segments
         # iterates it, not during transcribe() itself.
         with self._inference_lock:
             model_segments, info = model.transcribe(
-                str(path),
+                source,
                 word_timestamps=True,
                 vad_filter=True,
                 beam_size=1,
@@ -664,185 +448,34 @@ class LocalDiarizationEngine:
         ).astype("float32")
 
     @staticmethod
-    def _annotation_from_output(output: object) -> object:
-        """Return the annotation without testing it for truthiness.
+    def _mixed_audio(paths: list[Path]) -> Any:
+        """Decode two or three isolated recordings and sum them into one.
 
-        ``pyannote.audio`` 4 returns a ``DiarizeOutput`` wrapper.  Its
-        annotations can be empty for short or quiet recordings, and an empty
-        ``Annotation`` evaluates to ``False``.  A boolean ``or`` chain would
-        therefore discard both valid empty annotations and try to iterate the
-        non-iterable wrapper itself.
+        Each source is decoded to mono float32 at 16kHz (faster-whisper's
+        native rate) via faster_whisper's own decoder, so every array is
+        already aligned to a shared sample rate before mixing. Shorter
+        arrays are zero-padded to the longest length, summed sample-wise,
+        then clipped to [-1.0, 1.0] -- summing two full-scale waveforms can
+        otherwise exceed that range and distort.
+
+        Only called when there are 2 or 3 provided sources; a single source
+        is transcribed directly from its file path instead (see process()),
+        which is both cheaper and higher quality.
         """
 
-        exclusive = getattr(output, "exclusive_speaker_diarization", None)
-        if exclusive is not None:
-            return exclusive
-        regular = getattr(output, "speaker_diarization", None)
-        if regular is not None:
-            return regular
-        return output
+        import numpy as np
+        from faster_whisper.audio import decode_audio
 
-    def _diarize_with_heartbeat(
-        self,
-        path: Path,
-        *,
-        cancel_event: threading.Event,
-        progress: ProgressCallback,
-    ) -> list[SpeakerTurn]:
-        """Emit synthetic progress while diarization runs.
-
-        Diarization on CPU (the distributable's default, see the companion
-        README) can take much longer than transcription for a long meeting,
-        with no natural progress points inside the blocking pyannote/worker
-        call. Without this, a real run observed the UI stuck at 68% for over
-        twenty minutes, indistinguishable from a hang. This nudges the
-        reported progress upward on a timer so it keeps moving; the real
-        stage value is restored by the 0.9 "aligning speaker timestamps"
-        call once diarization actually finishes.
-        """
-
-        stop = threading.Event()
-
-        def heartbeat() -> None:
-            current = 0.68
-            while not stop.wait(15):
-                current = min(0.89, current + 0.01)
-                progress(round(current, 2), "identifying meeting speakers")
-
-        thread = threading.Thread(target=heartbeat, daemon=True)
-        thread.start()
-        try:
-            return self._diarize(path, cancel_event=cancel_event)
-        finally:
-            stop.set()
-            thread.join(timeout=1)
-
-    def _diarize(
-        self,
-        path: Path,
-        *,
-        cancel_event: threading.Event,
-    ) -> list[SpeakerTurn]:
-        if self.speaker_worker and self.speaker_worker.is_file():
-            return self._diarize_with_worker(path, cancel_event=cancel_event)
-        pipeline = self._load_diarization()
-        try:
-            import soundfile
-            import torch
-        except ImportError as error:
-            raise RuntimeError(
-                "The local audio runtime is incomplete. Reinstall the latest "
-                "NotesBuddy Desktop Companion."
-            ) from error
-        if not self.device.lower().startswith("cuda"):
-            # torch.set_num_threads() is runtime-settable (unlike the
-            # OMP_NUM_THREADS env var the isolated speaker worker uses,
-            # which must be set before torch's first import) -- safe to
-            # call here even though this path shares a process with
-            # whisper, which does its own CPU-thread accounting via
-            # ctranslate2 rather than torch.
-            _configure_torch_cpu_threads(torch)
-        samples, sample_rate = read_diarization_audio(path)
-        waveform = torch.from_numpy(samples)
-        output = pipeline(
-            {
-                "waveform": waveform,
-                "sample_rate": int(sample_rate),
-            }
-        )
-        if cancel_event.is_set():
-            raise EngineCancelled("Transcription cancelled")
-        annotation = self._annotation_from_output(output)
-        turns: list[SpeakerTurn] = []
-
-        if hasattr(annotation, "itertracks"):
-            iterator = annotation.itertracks(yield_label=True)
-            for turn, _track, label in iterator:
-                turns.append(
-                    SpeakerTurn(
-                        start_ms=max(0, round(float(turn.start) * 1000)),
-                        end_ms=max(0, round(float(turn.end) * 1000)),
-                        label=str(label),
-                    )
-                )
-        else:
-            try:
-                iterator = iter(annotation)
-            except TypeError as error:
-                raise RuntimeError(
-                    "The speaker model returned an unsupported diarization "
-                    "result. Reinstall or update NotesBuddy Companion."
-                ) from error
-            for item in iterator:
-                if len(item) == 2:
-                    turn, label = item
-                elif len(item) >= 3:
-                    turn, _track, label = item[:3]
-                else:
-                    continue
-                turns.append(
-                    SpeakerTurn(
-                        start_ms=max(0, round(float(turn.start) * 1000)),
-                        end_ms=max(0, round(float(turn.end) * 1000)),
-                        label=str(label),
-                    )
-                )
-        return turns
-
-    def _diarize_with_worker(
-        self,
-        path: Path,
-        *,
-        cancel_event: threading.Event,
-    ) -> list[SpeakerTurn]:
-        assert self.speaker_worker is not None
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        process = subprocess.Popen(
-            [
-                str(self.speaker_worker),
-                "--audio",
-                str(path),
-                "--model",
-                str(self.diarization_model_name),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            creationflags=creation_flags,
-        )
-        while True:
-            if cancel_event.is_set():
-                process.terminate()
-                try:
-                    process.communicate(timeout=3)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.communicate()
-                raise EngineCancelled("Transcription cancelled")
-            try:
-                # Drain both pipes while the worker runs. Waiting for process
-                # exit before communicate() deadlocks once a long meeting's
-                # speaker-turn JSON fills the Windows pipe buffer.
-                stdout, stderr = process.communicate(timeout=0.2)
-                break
-            except subprocess.TimeoutExpired:
-                continue
-        try:
-            payload = json.loads(stdout or "{}")
-        except ValueError as error:
-            raise RuntimeError("The local speaker worker returned invalid output.") from error
-        if process.returncode != 0 or payload.get("status") != "ok":
-            detail = str(payload.get("error") or stderr or "Speaker recognition failed.").strip()
-            raise RuntimeError(detail[:1000])
-        return [
-            SpeakerTurn(
-                start_ms=max(0, round(float(turn.get("start", 0)) * 1000)),
-                end_ms=max(0, round(float(turn.get("end", 0)) * 1000)),
-                label=str(turn.get("speaker") or "UNKNOWN"),
-            )
-            for turn in payload.get("turns", [])
-            if isinstance(turn, dict)
+        sample_rate = 16000
+        arrays = [
+            decode_audio(str(path), sampling_rate=sample_rate) for path in paths
         ]
+        max_length = max(array.shape[0] for array in arrays)
+        mixed = np.zeros(max_length, dtype=np.float32)
+        for array in arrays:
+            mixed[: array.shape[0]] += array
+        np.clip(mixed, -1.0, 1.0, out=mixed)
+        return mixed
 
     def process(
         self,
@@ -854,13 +487,17 @@ class LocalDiarizationEngine:
         cancel_event: threading.Event,
         progress: ProgressCallback,
     ) -> dict[str, Any]:
-        """Process isolated sources and return browser-contract JSON."""
+        """Mix every provided isolated source and transcribe it once.
+
+        Accepts the same microphone/meeting/mixed upload contract as
+        before, but no longer transcribes them separately or diarizes the
+        remote source -- all provided sources are combined into one
+        waveform (or, when only one is provided, transcribed directly from
+        its own file) and turned into a single flat transcript with no
+        speaker attribution.
+        """
 
         del metadata
-        microphone_words: list[Word] = []
-        meeting_words: list[Word] = []
-        meeting_turns: list[SpeakerTurn] = []
-        languages: list[str] = []
 
         def source_size(path: Path | None) -> int:
             try:
@@ -886,73 +523,43 @@ class LocalDiarizationEngine:
         if cancel_event.is_set():
             raise EngineCancelled("Transcription cancelled")
 
-        if microphone_path:
-            progress(0.08, "transcribing microphone")
-            microphone_words, language = self._transcribe(
-                microphone_path,
-                cancel_event=cancel_event,
-            )
-            if language:
-                languages.append(language)
-            log_diagnostic(
-                f"engine.process microphone transcribed: "
-                f"{len(microphone_words)} words, language={language}"
-            )
+        provided_paths = [
+            path for path in (microphone_path, meeting_path, mixed_path) if path
+        ]
+        if not provided_paths:
+            progress(1.0, "completed")
+            return {"language": None, "segments": []}
 
-        # A mixed-only file is an import with no isolated microphone. When a
-        # microphone track exists without a meeting track, mixed is the same
-        # local source and must not be diarized as a second voice.
-        remote_path = meeting_path or (
-            mixed_path if not microphone_path and not meeting_path else None
-        )
-        if remote_path:
-            # The diarization step below (in-process or the isolated
-            # NotesBuddySpeakerWorker executable, whichever is active)
-            # needs a libsndfile-readable file -- normalize once, up front,
-            # rather than duplicating this per diarization call site. See
-            # ensure_diarization_readable's own docstring for why.
-            remote_path = ensure_diarization_readable(remote_path)
-            progress(0.38, "transcribing meeting audio")
-            meeting_words, language = self._transcribe(
-                remote_path,
-                cancel_event=cancel_event,
-            )
-            if language:
-                languages.append(language)
+        if len(provided_paths) == 1:
+            audio_source: Path | Any = provided_paths[0]
+        else:
+            progress(0.15, "mixing audio sources")
+            audio_source = self._mixed_audio(provided_paths)
             log_diagnostic(
-                f"engine.process meeting audio transcribed: "
-                f"{len(meeting_words)} words, language={language}"
-            )
-            progress(0.68, "identifying meeting speakers")
-            meeting_turns = self._diarize_with_heartbeat(
-                remote_path,
-                cancel_event=cancel_event,
-                progress=progress,
-            )
-            log_diagnostic(
-                f"engine.process diarization produced {len(meeting_turns)} "
-                "speaker turns"
+                f"engine.process mixed {len(provided_paths)} sources into one waveform"
             )
 
         if cancel_event.is_set():
             raise EngineCancelled("Transcription cancelled")
-        progress(0.9, "aligning speaker timestamps")
-        segments = build_transcript(
-            microphone_words=microphone_words,
-            meeting_words=meeting_words,
-            meeting_turns=meeting_turns,
+
+        progress(0.3, "transcribing")
+        words, language = self._transcribe(audio_source, cancel_event=cancel_event)
+        log_diagnostic(
+            f"engine.process transcribed: {len(words)} words, language={language}"
         )
+
+        if cancel_event.is_set():
+            raise EngineCancelled("Transcription cancelled")
+        progress(0.9, "building transcript")
+        segments = build_transcript(words)
         progress(1.0, "completed")
-        language = max(set(languages), key=languages.count) if languages else None
         if not segments:
             log_diagnostic(
                 "engine.process WARNING: produced an empty transcript -- "
-                f"microphone_words={len(microphone_words)} "
-                f"meeting_words={len(meeting_words)} "
-                f"meeting_turns={len(meeting_turns)}. If both word counts are "
-                "0 despite audible speech, faster-whisper's VAD filter likely "
-                "classified the source audio as silence (low gain, wrong "
-                "capture device, or heavy noise reduction)."
+                f"words={len(words)}. If the word count is 0 despite audible "
+                "speech, faster-whisper's VAD filter likely classified the "
+                "source audio as silence (low gain, wrong capture device, or "
+                "heavy noise reduction)."
             )
         else:
             log_diagnostic(f"engine.process completed: {len(segments)} segments")
@@ -967,4 +574,4 @@ def engine_from_environment():
         raise RuntimeError(
             "NOTESBUDDY_TRANSCRIPTION_ENGINE must be 'local' or 'empty'."
         )
-    return LocalDiarizationEngine()
+    return LocalTranscriptionEngine()

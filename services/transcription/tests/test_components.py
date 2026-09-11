@@ -55,9 +55,6 @@ class ComponentManagerTests(unittest.TestCase):
             "NOTESBUDDY_COMPONENT_DIR",
             "NOTESBUDDY_MODEL_DIR",
             "NOTESBUDDY_GPU_LIB_DIR",
-            "NOTESBUDDY_DIARIZATION_MODEL",
-            "NOTESBUDDY_SPEAKER_WORKER",
-            "NOTESBUDDY_SPEAKER_WORKER_GPU",
             "NOTESBUDDY_ANALYSIS_RUNTIME",
             "NOTESBUDDY_ANALYSIS_MODEL_PATH",
         )
@@ -75,7 +72,6 @@ class ComponentManagerTests(unittest.TestCase):
         manifest = Path(directory) / "manifest.json"
         manifest.write_text(json.dumps({"schemaVersion": 1, "components": {
             "whisper-small": {"name": "Accurate", "version": "1", "category": "speech", "destination": "models/faster-whisper-selected", "bytes": len(payload), "sha256": checksum or hashlib.sha256(payload).hexdigest(), "url": "https://example.invalid/model.zip"},
-            "speaker-diarization": {"name": "Speakers", "version": "1", "category": "speaker", "destination": "models/speaker-diarization-community-1", "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(), "url": "https://example.invalid/speaker.zip"},
             "analysis-tiny": {"name": "Smart summary", "version": "1", "category": "analysis", "destination": "analysis", "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(), "url": "https://example.invalid/analysis.zip"},
         }}), encoding="utf-8")
         return ComponentManager(root=root, manifest_path=manifest, opener=lambda *_args, **_kwargs: FakeResponse(payload))
@@ -319,10 +315,6 @@ class ComponentManagerTests(unittest.TestCase):
             self.assertEqual(
                 Path(os.environ["NOTESBUDDY_ANALYSIS_MODEL_PATH"]),
                 root / "analysis",
-            )
-            self.assertEqual(
-                Path(os.environ["NOTESBUDDY_SPEAKER_WORKER_GPU"]),
-                root / "speaker-gpu/NotesBuddySpeakerWorkerGPU.exe",
             )
             self.assertNotIn("Program Files", str(root))
 

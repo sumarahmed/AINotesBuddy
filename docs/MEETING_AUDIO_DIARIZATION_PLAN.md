@@ -1,6 +1,23 @@
 # Meeting audio and speaker diarization plan
 
-Status: implemented and verified
+## Status
+
+Diarization was implemented and shipped, then **removed entirely on
+2026-09-11** -- see [`CHANGELOG.md`](../CHANGELOG.md) for the removal
+itself. Real-world testing surfaced repeated, hard-to-fix problems: acoustic
+leakage misattributing guest speech to the local user, a capture-time bug
+where switching audio output devices mid-recording silently broke
+diarization, and format-compatibility bugs. It was judged not to be helping
+enough to keep. Every transcript is now one mixed-audio transcript with no
+speaker distinction at all -- not even "You" vs. everyone else in the final
+result.
+
+This file is retained as historical record and context for a decision that
+was tried and reversed. Everything below, including the "implemented and
+verified" update log, describes the feature as it existed before removal,
+not the current system. See [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) and
+[`docs/PRIVACY.md`](PRIVACY.md) for the current mixed-audio transcription
+design.
 
 Update for `2026.09.10`: live **Guest** text during recording no longer
 depends on the microphone accidentally overhearing the other side's audio.

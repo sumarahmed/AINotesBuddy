@@ -6,10 +6,6 @@
   const LONG_RECORDING_SECONDS = 8 * 60;
   const MINIMUM_TRANSCRIPTION_TIMEOUT_MS = 30 * 60 * 1000;
   const MAXIMUM_TRANSCRIPTION_TIMEOUT_MS = 6 * 60 * 60 * 1000;
-  // Matches MEETING_ACTIVITY_HANGOVER_MS in app.js -- the gap that already
-  // decides when one meeting-activity span ends and a new one begins, reused
-  // here so a live guest word's grouping into a row lines up with that.
-  const LIVE_GUEST_WORD_GAP_MS = 900;
 
   function createId(prefix) {
     const uniquePart =
@@ -158,65 +154,6 @@
       : `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
 
-  // The companion's partial-transcript poll returns a flat, absolute-timed
-  // word list for its trailing window every ~5s, not a prior grouping into
-  // utterances -- group nearby words back into utterance-shaped rows here.
-  function groupWordsIntoUtterances(words) {
-    const segments = [];
-    let current = null;
-    for (const word of words) {
-      if (
-        current &&
-        word.startMs - current.endMs <= LIVE_GUEST_WORD_GAP_MS
-      ) {
-        current.endMs = word.endMs;
-        current.text = `${current.text} ${word.text}`.trim();
-      } else {
-        current = { startMs: word.startMs, endMs: word.endMs, text: word.text };
-        segments.push(current);
-      }
-    }
-    return segments;
-  }
-
-  // Wholesale-replaces the live provisional-guest rows on every poll, rather
-  // than incrementally appending, mirroring how the final diarized
-  // transcript wholesale-replaces every provisional row once processing
-  // completes (applyTranscriptionResult below) -- no cursor/dedup state to
-  // keep in sync, at the cost of the last word or two occasionally revising
-  // on the next tick.
-  function applyPartialGuestSegments(existingSegments, words) {
-    const incoming = (Array.isArray(words) ? words : [])
-      .map((word) => ({
-        startMs: Math.max(0, Number(word?.startMs) || 0),
-        endMs: Math.max(0, Number(word?.endMs) || 0),
-        text: String(word?.text || "").trim(),
-      }))
-      .filter((word) => word.text)
-      .sort((a, b) => a.startMs - b.startMs);
-    const retained = (
-      Array.isArray(existingSegments) ? existingSegments : []
-    ).filter(
-      (segment) =>
-        !(segment.speakerId === "remote-guest" && segment.provisional),
-    );
-    const fresh = groupWordsIntoUtterances(incoming).map((segment) => ({
-      id: createId("speech"),
-      speakerId: "remote-guest",
-      speaker: "Guest",
-      initials: "G",
-      color: "violet",
-      timestamp: formatTimestamp(segment.startMs),
-      startMs: segment.startMs,
-      endMs: segment.endMs,
-      source: "meeting",
-      text: segment.text,
-      isDraft: true,
-      provisional: true,
-    }));
-    return [...retained, ...fresh].sort((a, b) => a.startMs - b.startMs);
-  }
-
   function slug(value) {
     return (
       cleanName(value, "speaker")
@@ -327,8 +264,26 @@
       ? meeting.transcript
       : [];
 
+    // A segment carries real speaker identity only when it has a speakerId
+    // (the pre-flat-format multi-speaker shape) or a legacy display name (the
+    // even older single-name shape) or an explicit source. A segment with
+    // none of those is the new flat, speaker-agnostic backend shape -- leave
+    // it untouched rather than inventing a per-index identity for it (that
+    // would silently recreate the distinction the product removed).
     for (const segment of meeting.transcript) {
+      segment.startMs = Number.isFinite(segment.startMs)
+        ? Math.max(0, segment.startMs)
+        : parseTimestamp(segment.timestamp);
+      segment.endMs = Number.isFinite(segment.endMs)
+        ? Math.max(segment.startMs, segment.endMs)
+        : segment.startMs;
+      segment.timestamp = segment.timestamp || formatTimestamp(segment.startMs);
+
       const legacyName = cleanName(segment.speaker, "");
+      const hasSpeakerSignal =
+        Boolean(segment.speakerId) || Boolean(legacyName) || Boolean(segment.source);
+      if (!hasSpeakerSignal) continue;
+
       const isLocal =
         segment.speakerId === "local-user" ||
         segment.source === "microphone" ||
@@ -347,13 +302,6 @@
       segment.speakerId = speakerId;
       segment.source =
         segment.source || (speakerId === "local-user" ? "microphone" : "mixed");
-      segment.startMs = Number.isFinite(segment.startMs)
-        ? Math.max(0, segment.startMs)
-        : parseTimestamp(segment.timestamp);
-      segment.endMs = Number.isFinite(segment.endMs)
-        ? Math.max(segment.startMs, segment.endMs)
-        : segment.startMs;
-      segment.timestamp = segment.timestamp || formatTimestamp(segment.startMs);
 
       if (!existing.has(speakerId)) {
         const displayName =
@@ -387,41 +335,50 @@
       segment.color = speaker.color;
     }
 
-    if (
-      meeting.recordingAssets.microphone &&
-      !existing.has("local-user")
-    ) {
-      existing.set("local-user", {
-        id: "local-user",
-        displayName: profileName,
-        source: "microphone",
-        color: "teal",
-        isLocalUser: true,
-      });
-    }
+    // existing.size stays at its initial value (from meeting.speakers passed
+    // in) when nothing in the transcript carried real speaker signal -- that
+    // is exactly a brand-new, speaker-agnostic meeting, and meeting.speakers
+    // must stay empty rather than getting a fabricated "You" purely because
+    // a microphone asset happens to exist.
+    if (existing.size > 0) {
+      if (
+        meeting.recordingAssets.microphone &&
+        !existing.has("local-user")
+      ) {
+        existing.set("local-user", {
+          id: "local-user",
+          displayName: profileName,
+          source: "microphone",
+          color: "teal",
+          isLocalUser: true,
+        });
+      }
 
-    meeting.speakers = Array.from(existing.values()).map((speaker) => ({
-      id: speaker.id,
-      displayName:
-        speaker.id === "local-user"
-          ? profileName
-          : cleanName(speaker.displayName, "Unknown speaker"),
-      source:
-        speaker.id === "local-user"
-          ? "microphone"
-          : speaker.source || "meeting",
-      color:
-        speaker.id === "local-user"
-          ? "teal"
-          : speaker.color ||
-            SPEAKER_COLORS[
-              Math.max(
-                0,
-                Array.from(existing.keys()).indexOf(speaker.id) - 1,
-              ) % SPEAKER_COLORS.length
-            ],
-      isLocalUser: speaker.id === "local-user",
-    }));
+      meeting.speakers = Array.from(existing.values()).map((speaker) => ({
+        id: speaker.id,
+        displayName:
+          speaker.id === "local-user"
+            ? profileName
+            : cleanName(speaker.displayName, "Unknown speaker"),
+        source:
+          speaker.id === "local-user"
+            ? "microphone"
+            : speaker.source || "meeting",
+        color:
+          speaker.id === "local-user"
+            ? "teal"
+            : speaker.color ||
+              SPEAKER_COLORS[
+                Math.max(
+                  0,
+                  Array.from(existing.keys()).indexOf(speaker.id) - 1,
+                ) % SPEAKER_COLORS.length
+              ],
+        isLocalUser: speaker.id === "local-user",
+      }));
+    } else {
+      meeting.speakers = [];
+    }
     return meeting;
   }
 
@@ -496,15 +453,41 @@
     return sorted.filter((_, index) => !removed.has(index));
   }
 
+  // The backend now returns one of two shapes per segment:
+  //   OLD: { id, source, speakerId, speakerLabel, startMs, endMs, text, confidence }
+  //   NEW (flat, speaker-agnostic): { id, startMs, endMs, text, confidence }
+  // A non-empty segment.speakerId is the OLD-format signal -- when present,
+  // this keeps deriving speaker/color/initials exactly as before. When
+  // absent, this returns the plain flat shape with no speaker distinction of
+  // any kind, and deliberately does not synthesize a per-index id (e.g.
+  // "speaker-0"/"speaker-1") -- every new-format segment must come out
+  // identical regardless of its position in the array.
   function normaliseResultSegment(segment, index, profile) {
+    const startMs = Math.max(0, Number(segment.startMs) || 0);
+    const endMs = Math.max(startMs, Number(segment.endMs) || startMs);
+    const hasSpeakerId =
+      typeof segment?.speakerId === "string" && segment.speakerId.trim() !== "";
+
+    if (!hasSpeakerId) {
+      return {
+        id: cleanName(segment.id, "") || createId("speech"),
+        startMs,
+        endMs,
+        timestamp: formatTimestamp(startMs),
+        text: cleanTranscriptText(segment.text),
+        confidence: Number.isFinite(Number(segment.confidence))
+          ? Number(segment.confidence)
+          : null,
+        isDraft: false,
+      };
+    }
+
     const source =
       segment.source === "microphone" ? "microphone" : "meeting";
     const speakerId =
       source === "microphone"
         ? "local-user"
         : cleanName(segment.speakerId, `remote-${index + 1}`);
-    const startMs = Math.max(0, Number(segment.startMs) || 0);
-    const endMs = Math.max(startMs, Number(segment.endMs) || startMs);
     const displayName =
       speakerId === "local-user"
         ? "You"
@@ -539,60 +522,68 @@
       .map((segment, index) => normaliseResultSegment(segment, index, profile))
       .filter((segment) => segment.text);
     const segments = deduplicateEchoSegments(normalized);
-    const existingSpeakers = new Map(
-      (meeting.speakers || []).map((speaker) => [speaker.id, speaker]),
-    );
-    const remoteIds = [];
-    for (const segment of segments) {
-      if (
-        segment.speakerId !== "local-user" &&
-        !remoteIds.includes(segment.speakerId)
-      ) {
-        remoteIds.push(segment.speakerId);
+    // hasSpeakerData is false only when every segment came back in the new
+    // flat, speaker-agnostic shape (no segment carries a speakerId) -- in
+    // that case meeting.speakers must stay empty rather than fabricating a
+    // "You" entry purely because a microphone asset exists.
+    const hasSpeakerData = segments.some((segment) => segment.speakerId);
+    let speakers = [];
+    if (hasSpeakerData) {
+      const existingSpeakers = new Map(
+        (meeting.speakers || []).map((speaker) => [speaker.id, speaker]),
+      );
+      const remoteIds = [];
+      for (const segment of segments) {
+        if (
+          segment.speakerId &&
+          segment.speakerId !== "local-user" &&
+          !remoteIds.includes(segment.speakerId)
+        ) {
+          remoteIds.push(segment.speakerId);
+        }
       }
-    }
-    const speakers = [];
-    if (
-      segments.some((segment) => segment.speakerId === "local-user") ||
-      meeting.recordingAssets?.microphone
-    ) {
-      speakers.push({
-        id: "local-user",
-        displayName: cleanName(profile?.name, "You"),
-        source: "microphone",
-        color: "teal",
-        isLocalUser: true,
+      if (
+        segments.some((segment) => segment.speakerId === "local-user") ||
+        meeting.recordingAssets?.microphone
+      ) {
+        speakers.push({
+          id: "local-user",
+          displayName: cleanName(profile?.name, "You"),
+          source: "microphone",
+          color: "teal",
+          isLocalUser: true,
+        });
+      }
+      remoteIds.forEach((speakerId, index) => {
+        const existing = existingSpeakers.get(speakerId);
+        const suggestedName = segments.find(
+          (segment) => segment.speakerId === speakerId,
+        )?.speaker;
+        speakers.push({
+          id: speakerId,
+          displayName: cleanName(
+            existing?.displayName || suggestedName,
+            `Speaker ${index + 1}`,
+          ),
+          source: "meeting",
+          color:
+            existing?.color || SPEAKER_COLORS[index % SPEAKER_COLORS.length],
+          isLocalUser: false,
+        });
       });
-    }
-    remoteIds.forEach((speakerId, index) => {
-      const existing = existingSpeakers.get(speakerId);
-      const suggestedName = segments.find(
-        (segment) => segment.speakerId === speakerId,
-      )?.speaker;
-      speakers.push({
-        id: speakerId,
-        displayName: cleanName(
-          existing?.displayName || suggestedName,
-          `Speaker ${index + 1}`,
-        ),
-        source: "meeting",
-        color:
-          existing?.color || SPEAKER_COLORS[index % SPEAKER_COLORS.length],
-        isLocalUser: false,
-      });
-    });
-    const speakerMap = new Map(speakers.map((speaker) => [speaker.id, speaker]));
-    for (const segment of segments) {
-      const speaker = speakerMap.get(segment.speakerId);
-      segment.speaker =
-        segment.speakerId === "local-user"
-          ? "You"
-          : speaker?.displayName || "Unknown speaker";
-      segment.initials =
-        segment.speakerId === "local-user"
-          ? profile?.initials || "U"
-          : initialsForName(segment.speaker);
-      segment.color = speaker?.color || segment.color;
+      const speakerMap = new Map(speakers.map((speaker) => [speaker.id, speaker]));
+      for (const segment of segments) {
+        const speaker = speakerMap.get(segment.speakerId);
+        segment.speaker =
+          segment.speakerId === "local-user"
+            ? "You"
+            : speaker?.displayName || "Unknown speaker";
+        segment.initials =
+          segment.speakerId === "local-user"
+            ? profile?.initials || "U"
+            : initialsForName(segment.speaker);
+        segment.color = speaker?.color || segment.color;
+      }
     }
     meeting.transcript = segments;
     meeting.speakers = speakers;
@@ -1455,7 +1446,6 @@
     LONG_RECORDING_SECONDS,
     CompanionConnector,
     TranscriptionClient,
-    applyPartialGuestSegments,
     applyTranscriptionResult,
     cleanName,
     cleanTranscriptText,

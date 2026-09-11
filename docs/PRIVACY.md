@@ -1,11 +1,19 @@
 # Privacy and data handling
 
 NotesBuddy keeps meeting records and original recordings in the browser profile
-that created them. Optional speaker transcription runs either in a paired
-service on the same computer or in a centrally hosted service selected by the
-deployment owner. This document describes the prototype's data paths; browser,
+that created them. Optional transcription runs either in a paired service on
+the same computer or in a centrally hosted service selected by the deployment
+owner. This document describes the prototype's data paths; browser,
 operating-system, hosting, and model-provider behavior remains outside the
 application's control.
+
+Transcripts no longer carry any speaker identity: a meeting produces one
+mixed-audio transcript with no per-speaker label, voice-print, or grouping of
+any kind, for new transcriptions. This is a genuine privacy improvement over
+the previous diarized transcript, which grouped and displayed distinct
+detected voices even though it never inferred a real name. See [Speaker
+labels (legacy meetings only)](#speaker-labels-legacy-meetings-only) below
+for what remains true only of meetings transcribed before this change.
 
 ## Data inventory
 
@@ -34,7 +42,7 @@ application's control.
 | Teams audio/microphone activity flags | Companion process memory | Current detection poll only; no audio content is read or stored |
 | Local smart-summary diagnostic log (may include short generated-summary excerpts) | `%LOCALAPPDATA%\NotesBuddy\logs\companion.log` | Until the user deletes the file |
 | Ask-tab question, answer, and cited evidence segment IDs | Browser `localStorage`, saved with the meeting record (`meeting.qa`) | Until meeting/site data is deleted |
-| Speech, diarization, and smart-summary models | Local or hosted model cache | Until the owner removes the cache |
+| Speech and smart-summary models | Local or hosted model cache | Until the owner removes the cache |
 | Hugging Face model token | Source-development environment, host secret manager, or trusted release job | Owner controlled; never included in installer |
 | Downloaded audio or Markdown | User-selected filesystem location | User/device controlled |
 
@@ -104,8 +112,8 @@ Windows-output track and cannot itself produce Guest words. While capture is
 active, NotesBuddy also keeps in-memory timestamp spans for detected
 Windows/shared-output activity, which still drives the **Guest speaking**
 placeholder shown before any live guest words arrive. Final local/hosted
-transcription replaces every provisional row with synchronized source and
-pyannote speaker results.
+transcription replaces every provisional row with the completed, flat,
+speaker-agnostic transcript.
 
 With a compatible companion connected, live **Guest** text comes from a
 second, independent source instead: the companion re-transcribes a trailing
@@ -129,7 +137,7 @@ meeting metadata, recordings, transcripts, pairing tokens, or model tokens.
 GitHub may process network and request metadata under its own policies. An
 update must be downloaded and installed by the user.
 
-When the user chooses **Transcribe and identify speakers**, the browser reads
+When the user chooses **Transcribe**, the browser reads
 the meeting's stored audio Blobs and posts them to
 `http://127.0.0.1:8765`. This leaves the browser origin but stays on the same
 computer's loopback interface.
@@ -192,8 +200,8 @@ stores it in `sessionStorage`. It sends that token with transcription job
 requests. The service associates each job with a one-way token digest and
 returns `404` rather than disclosing another session's job.
 
-Hosted processing changes the privacy boundary: selecting **Transcribe and
-identify speakers** uploads the saved source audio from IndexedDB to the
+Hosted processing changes the privacy boundary: selecting **Transcribe**
+uploads the saved source audio from IndexedDB to the
 deployment owner's compute provider. Audio is encrypted in transit by HTTPS but
 is available in plaintext to the model process while being decoded. Job files
 are placed in a random temporary directory and removed in `finally` after
@@ -219,8 +227,8 @@ is a public prototype boundary only.
 ## Professional meeting analysis
 
 Professional analysis is a separate request from audio transcription. It runs
-only after the browser has a completed, non-draft speaker transcript. The
-browser sends the meeting title plus timestamped speaker text and stable segment
+only after the browser has a completed, non-draft transcript. The browser
+sends the meeting title plus timestamped transcript text and stable segment
 IDs to `POST /v1/analyses`; it does not include microphone, meeting, or mixed
 recording Blobs in this request.
 
@@ -269,7 +277,7 @@ plain analysis request would otherwise use.
 ## Conversational Q&A over a transcript
 
 The **Ask** tab sends the same data a professional analysis request already
-sends -- the meeting title plus timestamped speaker text and stable segment
+sends -- the meeting title plus timestamped transcript text and stable segment
 IDs, never microphone, meeting, or mixed recording Blobs -- to a new
 local-only `POST /v1/qa`, one request per question asked. It shares the exact
 same local-only boundary as the analysis prompt override above: it is never
@@ -290,31 +298,34 @@ analysis.
 
 ## Model access and caches
 
-The pyannote community model requires gated initial access. For public Windows
-releases, the publisher supplies a read-only token to the trusted release job,
-which downloads immutable model revisions and packages the weights offline.
-Customers do not provide a token. The build token is never written to the
-executable or installer. Source developers and hosted operators may instead
-provide their own process/secret-manager token.
+The bundled faster-whisper speech model is a public, non-gated download; the
+trusted release job needs no publisher secret to prepare it. (Before
+diarization was removed, the pyannote community model required a publisher
+read-only token for the trusted release job to download and package it
+offline -- that gated-model dependency no longer exists.)
 
-Speech, diarization, smart-summary, and hosted analysis models are cached
-locally or in a host-mounted model-cache volume. The smart-summary model is
-one of three independently downloadable quality tiers a user selects in the
-companion setup screen; installing a different tier replaces the previous one
-rather than keeping multiple installed at once. Model cache files contain
-model weights, not meeting audio. Their size and deletion method are
-controlled by the model libraries/provider.
+Speech, smart-summary, and hosted analysis models are cached locally or in a
+host-mounted model-cache volume. The smart-summary model is one of three
+independently downloadable quality tiers a user selects in the companion
+setup screen; installing a different tier replaces the previous one rather
+than keeping multiple installed at once. Model cache files contain model
+weights, not meeting audio. Their size and deletion method are controlled by
+the model libraries/provider.
 
-## Speaker labels
+## Speaker labels (legacy meetings only)
 
-Diarization assigns session-local IDs based on timing, not biometric identity:
+New transcripts carry no speaker labels, voice-print, or grouping of any
+kind -- see the note at the top of this document. This section describes
+only meetings transcribed before diarization was removed; their saved
+records keep the session-local IDs they were given at the time, assigned by
+timing, not biometric identity:
 
-- `local-user` is shown as **You** because it comes from the isolated microphone;
-- `remote-1`, `remote-2`, and so on are detected meeting voices;
+- `local-user` is shown as **You** because it came from the isolated microphone;
+- `remote-1`, `remote-2`, and so on were detected meeting voices;
 - `remote-unknown` is shown as **Unknown speaker**.
 
-NotesBuddy does not infer real names. User-supplied rename mappings stay with the
-local meeting record.
+NotesBuddy never inferred real names. User-supplied rename mappings on those
+legacy meetings stay with the local meeting record.
 
 ## Deleting data
 

@@ -128,14 +128,13 @@ LLAMA_CPP_CUDART_ARCHIVE_URL = (
     f"{LLAMA_CPP_RELEASE}/{LLAMA_CPP_CUDART_ARCHIVE}"
 )
 MODELS = (
-    ("whisper-base", "Systran/faster-whisper-base", False, "models/faster-whisper-selected", "speech", "Balanced speech model"),
-    ("whisper-small", "Systran/faster-whisper-small", False, "models/faster-whisper-selected", "speech", "Accurate speech model"),
-    ("speaker-diarization", "pyannote/speaker-diarization-community-1", True, "speaker", "speaker", "Speaker recognition runtime and model"),
+    ("whisper-base", "Systran/faster-whisper-base", "models/faster-whisper-selected", "speech", "Balanced speech model"),
+    ("whisper-small", "Systran/faster-whisper-small", "models/faster-whisper-selected", "speech", "Accurate speech model"),
 )
 COMPONENT_IDS = (
     tuple(item[0] for item in MODELS)
     + tuple(ANALYSIS_TIERS_BY_ID)
-    + ("nvidia-cuda12", "analysis-cuda", "speaker-diarization-cuda")
+    + ("nvidia-cuda12", "analysis-cuda")
 )
 
 
@@ -415,57 +414,6 @@ def _prepare_analysis_cuda_component(work: Path, output: Path, version: str) -> 
     )
 
 
-def _prepare_speaker_cuda_component(
-    output: Path, version: str, speaker_runtime_gpu: Path
-) -> tuple[str, dict]:
-    """CUDA-capable speaker worker, opt-in and separate from the CPU one.
-
-    Confirmed live (2026-09-05) on a real ~24 minute meeting recording:
-    diarization ran 11.8x faster on GPU than on CPU with the thread-tuning
-    fix, with identical speaker-turn output on both -- pyannote's clustering
-    stage does not stay CPU-bound the way it might have.
-
-    Ships no pyannote model of its own -- speaker_worker.py resolves
-    NOTESBUDDY_DIARIZATION_MODEL the same way regardless of which worker
-    binary runs, and that always points at the shared "speaker" destination
-    the base speaker-diarization component installs. Deliberately uses its
-    own destination ("speaker-gpu"), NOT that shared one: component
-    installation is a wholesale directory swap (components.py's
-    _install_one), and analysis-cuda already hit exactly this bug once by
-    sharing a destination with a component that has a model file of its own
-    to preserve. LocalDiarizationEngine prefers this separate worker, when
-    present, over the CPU-only one; the shared model directory is
-    untouched either way.
-
-    speaker_runtime_gpu is a pre-built PyInstaller dist directory (same
-    speaker_worker.py entry point as the CPU build, built from a venv with
-    a CUDA-enabled torch/torchaudio instead) -- this function only packages
-    it, the same way the CPU speaker-diarization component's runtime is
-    supplied pre-built via --speaker-runtime in main() below.
-
-    Uses ZIP_LZMA, not the default Deflate: a CUDA-enabled torch build's
-    DLLs compress poorly with Deflate, and the Deflate archive came out at
-    2.58 GiB -- over GitHub's real 2 GiB per-asset limit, confirmed live by
-    an actual failed upload attempt, not assumed from the limit alone.
-    ZIP_LZMA remains readable by Python's standard library, matching the
-    nvidia-cuda12 component's own precedent for the identical problem.
-    """
-
-    component_id = "speaker-diarization-cuda"
-    if not speaker_runtime_gpu.is_dir():
-        raise RuntimeError("The packaged GPU speaker worker runtime is missing.")
-    archive = output / f"NotesBuddy-{component_id}-{version}.zip"
-    _zip_directory(speaker_runtime_gpu, archive, compression=zipfile.ZIP_LZMA)
-    return _asset(
-        component_id,
-        "GPU acceleration for speaker recognition",
-        version,
-        "speaker-gpu",
-        "speaker",
-        archive,
-    )
-
-
 def _existing_components(manifest_path: Path) -> dict[str, dict]:
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -484,8 +432,6 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parent / "components-release")
     parser.add_argument("--gpu-libs", type=Path, default=Path(__file__).resolve().parent / "gpu-libs")
-    parser.add_argument("--speaker-runtime", type=Path, default=Path(__file__).resolve().parent / "out-speaker" / "dist" / "NotesBuddySpeakerWorker")
-    parser.add_argument("--speaker-runtime-gpu", type=Path, default=Path(__file__).resolve().parent / "out-speaker-gpu" / "dist" / "NotesBuddySpeakerWorkerGPU")
     parser.add_argument("--manifest", type=Path, default=Path(__file__).resolve().parent / "component-manifest.json")
     parser.add_argument(
         "--component",
@@ -493,14 +439,8 @@ def main() -> int:
         choices=COMPONENT_IDS,
         help="Build only this component; repeat to build several. Unselected manifest entries are retained.",
     )
-    parser.add_argument("--accept-pyannote-terms", action="store_true")
     arguments = parser.parse_args()
     selected = set(arguments.component or COMPONENT_IDS)
-    if "speaker-diarization" in selected and not arguments.accept_pyannote_terms:
-        raise RuntimeError("Review MODEL_NOTICES.md and explicitly accept the pyannote distribution terms.")
-    token = os.getenv("HF_TOKEN", "").strip()
-    if "speaker-diarization" in selected and not token:
-        raise RuntimeError("HF_TOKEN is required for the gated speaker model build.")
     output = arguments.output.resolve()
     shutil.rmtree(output, ignore_errors=True)
     output.mkdir(parents=True)
@@ -511,21 +451,16 @@ def main() -> int:
         if arguments.component
         else {}
     )
-    api = HfApi(token=token)
-    for component_id, repository, gated, destination, category, name in MODELS:
+    api = HfApi()
+    for component_id, repository, destination, category, name in MODELS:
         if component_id not in selected:
             continue
-        revision = api.model_info(repository, token=token if gated else None).sha
+        revision = api.model_info(repository).sha
         if not revision:
             raise RuntimeError(f"Could not pin {repository}.")
         source = work / component_id
-        model_destination = source / "model" if component_id == "speaker-diarization" else source
-        snapshot_download(repo_id=repository, revision=revision, token=token if gated else None, local_dir=model_destination)
-        shutil.rmtree(model_destination / ".cache", ignore_errors=True)
-        if component_id == "speaker-diarization":
-            if not arguments.speaker_runtime.is_dir():
-                raise RuntimeError("The packaged speaker worker runtime is missing.")
-            shutil.copytree(arguments.speaker_runtime, source, dirs_exist_ok=True)
+        snapshot_download(repo_id=repository, revision=revision, local_dir=source)
+        shutil.rmtree(source / ".cache", ignore_errors=True)
         archive = output / f"NotesBuddy-{component_id}-{arguments.version}.zip"
         _zip_directory(source, archive)
         key, value = _asset(component_id, name, arguments.version, destination, category, archive)
@@ -565,11 +500,6 @@ def main() -> int:
         components[key] = value
     if "analysis-cuda" in selected:
         key, value = _prepare_analysis_cuda_component(work, output, arguments.version)
-        components[key] = value
-    if "speaker-diarization-cuda" in selected:
-        key, value = _prepare_speaker_cuda_component(
-            output, arguments.version, arguments.speaker_runtime_gpu
-        )
         components[key] = value
     manifest = {"schemaVersion": 1, "releaseVersion": arguments.version, "components": components}
     arguments.manifest.parent.mkdir(parents=True, exist_ok=True)

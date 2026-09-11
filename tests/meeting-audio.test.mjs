@@ -102,7 +102,7 @@ test("routes long hybrid recordings to hosted acceleration without changing shor
   );
 });
 
-test("allows long local recordings enough time to finish speaker processing", () => {
+test("allows long local recordings enough time to finish transcription", () => {
   const timeout = MeetingAudio.transcriptionTimeoutMs({
     durationSeconds: 47 * 60 + 15,
     mode: "local",
@@ -318,163 +318,64 @@ test("prefers companion Windows output when microphone and meeting tracks are se
   );
 });
 
-test("live guest words are grouped into one row when close together and split on a longer pause", () => {
-  const result = MeetingAudio.applyPartialGuestSegments(
-    [],
-    [
-      { startMs: 0, endMs: 300, text: "hello" },
-      { startMs: 400, endMs: 700, text: "there" },
-      { startMs: 3000, endMs: 3300, text: "again" },
-    ],
-  );
-  assert.equal(result.length, 2);
-  assert.equal(result[0].text, "hello there");
-  assert.equal(result[0].speakerId, "remote-guest");
-  assert.equal(result[0].provisional, true);
-  assert.equal(result[1].text, "again");
-});
-
-test("live guest transcription replaces provisional rows on every poll instead of duplicating them", () => {
-  const micSegment = {
-    id: "speech-mic-1",
-    speakerId: "local-user",
-    speaker: "You",
-    startMs: 500,
-    endMs: 1200,
-    text: "hello there",
-    isDraft: true,
-    provisional: false,
-  };
-  const firstPoll = MeetingAudio.applyPartialGuestSegments(
-    [micSegment],
-    [{ startMs: 2000, endMs: 2400, text: "hi" }],
-  );
-  assert.equal(firstPoll.length, 2);
-  const firstGuestRow = firstPoll.find(
-    (segment) => segment.speakerId === "remote-guest",
-  );
-  assert.equal(firstGuestRow.text, "hi");
-
-  const secondPoll = MeetingAudio.applyPartialGuestSegments(firstPoll, [
-    { startMs: 2000, endMs: 2400, text: "hi" },
-    { startMs: 2450, endMs: 2900, text: "there" },
-  ]);
-  const guestRows = secondPoll.filter(
-    (segment) => segment.speakerId === "remote-guest",
-  );
-  assert.equal(
-    guestRows.length,
-    1,
-    "the revised word list replaces the prior row instead of adding a second one",
-  );
-  assert.equal(guestRows[0].text, "hi there");
-  assert.equal(
-    secondPoll.filter((segment) => segment.id === micSegment.id).length,
-    1,
-    "the unrelated mic segment is left untouched",
-  );
-});
-
-test("live guest rows are time-sorted alongside mic rows even when they arrive out of order", () => {
-  const laterMicSegment = {
-    id: "speech-mic-late",
-    speakerId: "local-user",
-    speaker: "You",
-    startMs: 5000,
-    endMs: 5500,
-    text: "later mic word",
-    isDraft: true,
-    provisional: false,
-  };
-  const result = MeetingAudio.applyPartialGuestSegments(
-    [laterMicSegment],
-    [{ startMs: 1000, endMs: 1300, text: "earlier guest word" }],
-  );
-  assert.deepEqual(
-    result.map((segment) => segment.text),
-    ["earlier guest word", "later mic word"],
-  );
-});
-
-test("final diarization replaces provisional Guest rows instead of duplicating them", () => {
-  const meeting = {
-    recordingAssets: {
-      microphone: { id: "mic" },
-      meeting: { id: "remote" },
-    },
-    speakers: [
-      { id: "local-user", displayName: "Alex Morgan" },
-      { id: "remote-guest", displayName: "Guest" },
-    ],
-    transcript: [
-      {
-        id: "draft-local",
-        speakerId: "local-user",
-        source: "microphone",
-        text: "I will open the agenda.",
-        isDraft: true,
-      },
-      {
-        id: "draft-guest",
-        speakerId: "remote-guest",
-        source: "meeting",
-        text: "Can you share the report?",
-        isDraft: true,
-        provisional: true,
-      },
-    ],
-  };
+test("new flat backend segments (no speakerId) normalise with no speaker distinction and no per-index fabrication", () => {
+  const meeting = { recordingAssets: {}, speakers: [], transcript: [] };
 
   MeetingAudio.applyTranscriptionResult(
     meeting,
     {
       segments: [
         {
-          id: "final-local",
-          source: "microphone",
+          id: "seg-1",
           startMs: 0,
-          endMs: 1200,
-          text: "I will open the agenda.",
+          endMs: 1000,
+          text: "First speaker-agnostic line.",
+          confidence: 0.91,
         },
         {
-          id: "final-remote-one",
-          source: "meeting",
-          speakerId: "remote-1",
-          startMs: 1500,
-          endMs: 2600,
-          text: "Can you share the report?",
-        },
-        {
-          id: "final-remote-two",
-          source: "meeting",
-          speakerId: "remote-2",
-          startMs: 3000,
-          endMs: 3900,
-          text: "I can send it today.",
+          id: "seg-2",
+          startMs: 1200,
+          endMs: 2000,
+          text: "Second speaker-agnostic line.",
+          confidence: 0.84,
         },
       ],
     },
     profile,
   );
 
-  assert.deepEqual(
-    meeting.transcript.map((segment) => segment.id),
-    ["final-local", "final-remote-one", "final-remote-two"],
-  );
-  assert.deepEqual(
-    meeting.transcript.map((segment) => segment.speakerId),
-    ["local-user", "remote-1", "remote-2"],
-  );
-  assert.equal(
-    meeting.transcript.some(
-      (segment) => segment.isDraft || segment.provisional,
-    ),
-    false,
-  );
-  assert.equal(
-    meeting.speakers.some((speaker) => speaker.id === "remote-guest"),
-    false,
-  );
+  assert.equal(meeting.transcript.length, 2);
+  assert.deepEqual(meeting.speakers, []);
+  assert.deepEqual(meeting.participants, []);
+  for (const segment of meeting.transcript) {
+    assert.equal(segment.speakerId, undefined);
+    assert.equal(segment.speaker, undefined);
+    assert.equal(segment.initials, undefined);
+    assert.equal(segment.color, undefined);
+  }
+  // Two different segments at two different indexes must come out with an
+  // identical (speaker-less) set of keys -- not a "speaker-0"/"speaker-1"
+  // per-index pattern.
+  const [first, second] = meeting.transcript;
+  assert.deepEqual(Object.keys(first).sort(), Object.keys(second).sort());
+});
+
+test("ensureMeetingSpeakers never fabricates a speaker for a new speaker-agnostic transcript, even with a microphone asset", () => {
+  const meeting = {
+    recordingAssets: { microphone: { id: "mic" } },
+    transcript: [
+      { id: "seg-1", startMs: 0, endMs: 1000, text: "Hello everyone." },
+      { id: "seg-2", startMs: 1200, endMs: 2000, text: "Let's get started." },
+    ],
+  };
+
+  MeetingAudio.ensureMeetingSpeakers(meeting, profile);
+
+  assert.deepEqual(meeting.speakers, []);
+  for (const segment of meeting.transcript) {
+    assert.equal(segment.speakerId, undefined);
+    assert.equal(segment.speaker, undefined);
+  }
 });
 
 test("keeps complete transcript text instead of applying name length limits", () => {

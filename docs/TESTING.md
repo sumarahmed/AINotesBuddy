@@ -25,14 +25,15 @@ The JavaScript tests cover:
 - legacy `audioId` migration;
 - source preference and asset selection;
 - complete transcript text beyond 80 characters;
-- cross-source echo de-duplication;
 - live guest-caption words grouped into utterance-shaped rows on a gap
   threshold, wholesale-replacing (never duplicating) the provisional
   **Guest** segment group on every poll, and re-sorted by timestamp when a
   guest row arrives with an earlier timestamp than a microphone row already
   on screen;
-- **You**, detected, renamed, and unknown speaker labels;
-- rename propagation to participants;
+- flat, speaker-agnostic transcript segments (no `speakerId`/`source` field)
+  for new transcriptions; **You**, detected, renamed, and unknown speaker
+  labels, and rename propagation to participants, continue to be exercised
+  only for meetings transcribed before diarization was removed;
 - parsing GitHub's real release API response into the installer version and
   download URL, and returning null (not throwing) for a release with no
   matching installer asset or otherwise malformed input;
@@ -70,13 +71,21 @@ python -m unittest discover -s tests -v
 
 The Python suite covers:
 
-- greatest-overlap word/speaker assignment;
-- stable first-appearance remote IDs;
-- unknown-speaker tolerance;
-- speaker-boundary segment collapse;
-- microphone **You** attribution;
-- cross-source clock merge and echo removal;
-- silence returning no fabricated segments;
+- collapsing a single mixed-audio word stream into segments purely by pause
+  gap and maximum segment length, with no speaker-change condition (there is
+  no speaker attribution): adjacent-word collapse, splitting on a pause gap,
+  not splitting within the gap threshold, splitting after the maximum word
+  count, out-of-order words sorted by start time, blank words ignored,
+  missing confidence yielding `None`, unique segment IDs, and silence
+  returning no fabricated segments;
+- mixing two or three provided sources (microphone/meeting/mixed) into one
+  waveform: zero-padding the shorter source(s) and summing sample-wise,
+  clipping a sum that exceeds full scale, and mixing three sources together;
+- a single provided source (including a meeting-only capture or a mixed-only
+  import) transcribing directly from its own file path instead of being
+  mixed, and no sources at all returning an empty result without calling the
+  model;
+- `configuration_status()` reporting no diarization-related fields;
 - pairing-token rejection;
 - bounded/expiring browser pairings and exact-origin issuance;
 - safe discovery and hosted/manual-CLI route separation;
@@ -92,13 +101,14 @@ The Python suite covers:
   capture, and stopping promptly on capture stop/cancel;
 - the partial-transcript API route, gated the same way as its sibling
   system-audio routes;
-- bundled offline-model path selection without a per-user model token;
+- bundled offline-model path selection, requiring no model token at all now
+  that the gated diarization model is gone;
 - allowed/denied CORS origins and private-network preflight;
 - multipart source upload and asynchronous job polling;
 - invalid metadata rejection;
 - cancellation signaling and temporary-audio deletion.
-- production adapter parsing of fake faster-whisper/pyannote outputs;
-- mixed-only diarization and mic-only duplicate-mixed suppression;
+- production adapter parsing of fake faster-whisper output, and an empty
+  transcription returning no fabricated segments;
 - local smart-summary generation, chunking, and deterministic cross-chunk
   merge, mocking the `llama-cli` subprocess;
 - widened-budget retry after a truncated JSON response, and a reinforced
@@ -181,10 +191,10 @@ The workflow verifies:
   deferral;
 - hybrid settings without URL/token fields and a Windows download action;
 - visible online fallback when companion discovery fails;
-- **You** plus two remote speakers in a completed result;
+- a completed result as one flat, speaker-agnostic transcript;
 - untruncated transcript text;
-- speaker rename, name search, and Markdown export;
-- transcript/speaker layout without horizontal overflow at 390 px and 320 px;
+- transcript search, copy, and Markdown export;
+- transcript layout without horizontal overflow at 390 px and 320 px;
 - no uncaught page or console errors.
 
 ## Verified Windows browser matrix
@@ -231,31 +241,40 @@ Use headphones to prevent acoustic feedback and a non-confidential source tab.
   acoustic leakage is possible without headphones.
 - Delete the meeting and confirm every source asset disappears.
 
-### Speaker transcription
+### Mixed-audio transcription
+
+Diarization is removed. There is nothing to distinguish "which voice spoke
+when" any more -- every recording produces one flat, speaker-agnostic
+transcript, regardless of how many audio sources fed it. This section
+replaces the old per-speaker transcription regression.
 
 - Install a model-inclusive Windows release and confirm automatic local
   connection without entering a model or pairing token.
 - Quit/restart the companion and confirm the page re-pairs.
 - Deny then allow the browser local-network prompt and confirm the online
   fallback remains clear.
-- Transcribe one local plus one remote speaker.
-- Transcribe one local plus two or three alternating remote speakers.
+- Record with two audio sources active (microphone plus meeting audio, both
+  with real speech) and confirm both voices appear as ordinary text in one
+  flat transcript, with no speaker label, badge, or grouping anywhere in the
+  result.
+- Transcribe a mixed-only import and a meeting-only capture and confirm each
+  transcribes directly (no mixing needed for a single source) with the same
+  flat segment shape (`id`, `startMs`, `endMs`, `text`, `confidence`).
 - Test silence/background noise and confirm no placeholder text.
-- Test a remote voice faintly echoed into the microphone.
-- Check approximate timestamp ranges and stable IDs within that job.
-- Rename each remote speaker and verify search, copy, and exported Markdown.
-- Confirm microphone speech is **You**.
-- Confirm uncertain unassigned words are **Unknown speaker**, not a guessed name.
-- With headphones worn (no acoustic leakage into the microphone possible),
-  confirm live **Guest** words still appear during recording within roughly
-  5-10 seconds of the other person speaking -- this is the scenario that
-  previously never worked, since the old mechanism depended entirely on
-  leakage. Confirm they still appear the same way without headphones.
+- Check approximate timestamp ranges for segments within that job.
+- Confirm search, copy, and exported Markdown work against the flat
+  transcript text.
+- With headphones worn, confirm live **Guest** words still appear during
+  recording within roughly 5-10 seconds of the other person speaking, and
+  that they still appear the same way without headphones -- this live-caption
+  mechanism is unrelated to diarization and is unaffected by its removal.
 - Cancel a long job and confirm no `notesbuddy-job-*` temporary directory
   remains after the worker reaches terminal state.
+- Open a meeting saved before diarization was removed and confirm it still
+  renders its original speaker labels, roster, and renames unchanged.
 
 Model output varies by language, overlap, noise, model version, and hardware.
-Set timing/speaker-count tolerances rather than asserting exact wording.
+Set timing tolerances rather than asserting exact wording.
 
 ## Profile and integrity
 
@@ -266,8 +285,8 @@ Set timing/speaker-count tolerances rather than asserting exact wording.
 - Import WAV/MP3 and transcribe it as a mixed-only remote recording.
 - Refresh analysis with no completed transcript; confirm no content is
   fabricated and the control stays disabled.
-- Confirm an analysis request contains the complete timestamped speaker
-  transcript and no audio Blob.
+- Confirm an analysis request contains the complete timestamped transcript
+  and no audio Blob.
 - Confirm every summary/list item cites at least one real transcript segment.
 - Confirm fabricated evidence IDs and unsupported highlights/actions are
   rejected.
@@ -288,7 +307,7 @@ Set timing/speaker-count tolerances rather than asserting exact wording.
 - Make meeting output active, confirm **Guest speaking**, and verify returned
   live words are labeled **Guest / draft**.
 - Process that meeting and confirm the provisional `remote-guest` row is
-  replaced by pyannote `remote-1`, `remote-2`, and so on rather than retained or
+  replaced by the completed flat transcript text rather than retained or
   duplicated.
 
 ## Responsive and accessibility checks
@@ -298,7 +317,7 @@ At 390 x 844 and 320 px wide:
 - no horizontal overflow;
 - capture source controls remain reachable;
 - recording dock remains visible;
-- transcription and speaker panels stack correctly;
+- transcription panel stacks correctly;
 - source switcher is usable;
 - Settings remains scrollable during recording;
 - focus outlines, labels, and keyboard actions remain functional;
@@ -322,14 +341,13 @@ Include:
 The trusted release workflow must:
 
 1. run all Python service tests;
-2. prepare both offline model directories and a revision manifest;
+2. prepare the offline model directory and a revision manifest;
 3. build the PyInstaller one-directory application;
 4. run `NotesBuddyCompanion.exe --self-test`;
 5. compile the Inno Setup installer;
 6. install it as a non-administrator test user;
 7. start from the Start menu and Windows sign-in entry;
-8. pair from the deployed HTTPS site and complete a real two-speaker
-   transcription;
+8. pair from the deployed HTTPS site and complete a real transcription;
 9. install at least one smart-summary tier and confirm a real professional
    analysis completes locally (not routed to the hosted fallback);
 10. confirm `GET /v1/companion`'s `version` field actually matches the tag

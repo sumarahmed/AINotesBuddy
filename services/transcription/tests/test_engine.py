@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tempfile
 import threading
@@ -16,11 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notesbuddy_transcription import engine as engine_module
 from notesbuddy_transcription.engine import (
-    LocalDiarizationEngine,
+    LocalTranscriptionEngine,
     activate_optional_gpu_runtime,
-    ensure_diarization_readable,
     local_accelerator,
-    read_diarization_audio,
 )
 
 # engine.process() logs to the real companion log file
@@ -49,70 +46,30 @@ def tearDownModule() -> None:
 
 
 class FakeWhisper:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
+    """A fake faster-whisper model keyed by whatever `transcribe()` receives.
 
-    def transcribe(self, path, *, word_timestamps, vad_filter, beam_size):
-        self.calls.append(Path(path).name)
+    A `str` source (a real file path, as used for the single-source case)
+    is keyed by that string. A decoded ndarray (the mixed-audio case) is
+    keyed by the fixed string "mixed" -- tests register expected words per
+    key via `words_by_key` and can inspect `raw_calls` for the exact object
+    (path string or ndarray) passed to `transcribe()`.
+    """
+
+    def __init__(self, words_by_key: dict[str, list] | None = None) -> None:
+        self.words_by_key = words_by_key if words_by_key is not None else {}
+        self.calls: list[str] = []
+        self.raw_calls: list = []
+
+    def transcribe(self, source, *, word_timestamps, vad_filter, beam_size):
+        self.raw_calls.append(source)
         self.last_options = (word_timestamps, vad_filter, beam_size)
-        if "microphone" in str(path):
-            words = [
-                SimpleNamespace(
-                    start=0.0,
-                    end=0.3,
-                    word="I",
-                    probability=0.98,
-                ),
-                SimpleNamespace(
-                    start=0.31,
-                    end=0.7,
-                    word="agree.",
-                    probability=0.96,
-                ),
-                SimpleNamespace(
-                    start=1.05,
-                    end=1.35,
-                    word="Remote",
-                    probability=0.9,
-                ),
-                SimpleNamespace(
-                    start=1.36,
-                    end=1.72,
-                    word="one.",
-                    probability=0.89,
-                ),
-            ]
-        else:
-            words = [
-                SimpleNamespace(
-                    start=1.0,
-                    end=1.3,
-                    word="Remote",
-                    probability=0.94,
-                ),
-                SimpleNamespace(
-                    start=1.31,
-                    end=1.7,
-                    word="one.",
-                    probability=0.92,
-                ),
-                SimpleNamespace(
-                    start=2.0,
-                    end=2.3,
-                    word="Remote",
-                    probability=0.93,
-                ),
-                SimpleNamespace(
-                    start=2.31,
-                    end=2.7,
-                    word="two.",
-                    probability=0.91,
-                ),
-            ]
+        key = source if isinstance(source, str) else "mixed"
+        self.calls.append(key)
+        words = self.words_by_key.get(key, [])
         segments = [
             SimpleNamespace(
-                start=words[0].start,
-                end=words[-1].end,
+                start=words[0].start if words else 0.0,
+                end=words[-1].end if words else 0.0,
                 text=" ".join(word.word for word in words),
                 words=words,
             )
@@ -180,7 +137,7 @@ class BundledModelConfigurationTests(unittest.TestCase):
                 if device == "cuda":
                     raise RuntimeError("CUDA runtime unavailable")
 
-        engine = LocalDiarizationEngine(device="cpu")
+        engine = LocalTranscriptionEngine(device="cpu")
         engine.requested_device = "auto"
         engine.device = "cuda"
         engine.compute_type = "float16"
@@ -207,7 +164,7 @@ class BundledModelConfigurationTests(unittest.TestCase):
                     raise RuntimeError("cublas64_12.dll is not found")
                 return [], SimpleNamespace(language="en")
 
-        engine = LocalDiarizationEngine(device="cpu")
+        engine = LocalTranscriptionEngine(device="cpu")
         engine.requested_device = "auto"
         engine.device = "cuda"
         engine.compute_type = "float16"
@@ -234,32 +191,22 @@ class BundledModelConfigurationTests(unittest.TestCase):
         self.assertEqual(engine.device, "cpu")
         self.assertIn("inference failed", engine.accelerator["name"])
 
-    def test_bundled_models_are_preferred_without_a_user_token(self) -> None:
+    def test_bundled_whisper_model_is_preferred(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             model_root = Path(directory)
             whisper = model_root / "faster-whisper-selected"
-            diarization = model_root / "speaker-diarization-community-1"
             whisper.mkdir()
-            diarization.mkdir()
             with patch.dict(
                 "os.environ",
-                {
-                    "NOTESBUDDY_MODEL_DIR": str(model_root),
-                    "HF_TOKEN": "",
-                },
+                {"NOTESBUDDY_MODEL_DIR": str(model_root)},
                 clear=False,
             ):
-                engine = LocalDiarizationEngine()
+                engine = LocalTranscriptionEngine()
 
             self.assertEqual(
                 Path(engine.whisper_model_name).resolve(),
                 whisper.resolve(),
             )
-            self.assertEqual(
-                Path(engine.diarization_model_name).resolve(),
-                diarization.resolve(),
-            )
-            self.assertEqual(engine.hugging_face_token, "")
             with patch(
                 "notesbuddy_transcription.engine.module_available",
                 return_value=True,
@@ -268,478 +215,132 @@ class BundledModelConfigurationTests(unittest.TestCase):
             self.assertTrue(status["ready"])
             self.assertEqual(status["source"], "bundled")
 
-    def test_prefers_the_separate_gpu_speaker_worker_when_installed(self) -> None:
-        # speaker-diarization-cuda installs into its own directory, never
-        # the shared "speaker" one the CPU worker and pyannote model share
-        # -- mirrors analysis-cuda's own separate-destination fix for the
-        # same reason: a wholesale directory-swap install would otherwise
-        # delete the shared model the moment the GPU worker is installed.
-        #
-        # speaker_worker is re-resolved from the environment on every
-        # access (not cached at construction) -- this engine is a
-        # long-lived singleton for the whole server process, so caching it
-        # in __init__ would mean an install after the companion started
-        # could never take effect without a restart. Confirmed live
-        # (2026-09-05): installing speaker-diarization-cuda through the
-        # real companion API while it was already running did not change
-        # diarizationDevice until this was fixed. The assertion must
-        # therefore stay inside the patched-environment scope, matching
-        # real usage (env vars set once at process startup and left
-        # standing) rather than construct-then-inspect-after-reverting.
-        with tempfile.TemporaryDirectory() as directory:
-            cpu_worker = Path(directory) / "cpu" / "NotesBuddySpeakerWorker.exe"
-            gpu_worker = Path(directory) / "gpu" / "NotesBuddySpeakerWorkerGPU.exe"
-            cpu_worker.parent.mkdir()
-            gpu_worker.parent.mkdir()
-            cpu_worker.touch()
-            gpu_worker.touch()
-            with patch.dict("os.environ", {
-                "NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker),
-                "NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker),
-            }):
-                engine = LocalDiarizationEngine(device="cpu")
-                self.assertEqual(engine.speaker_worker, gpu_worker)
-
-    def test_falls_back_to_the_cpu_speaker_worker_without_a_gpu_install(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            cpu_worker = Path(directory) / "cpu" / "NotesBuddySpeakerWorker.exe"
-            cpu_worker.parent.mkdir()
-            cpu_worker.touch()
-            with patch.dict("os.environ", {
-                "NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker),
-                "NOTESBUDDY_SPEAKER_WORKER_GPU": str(
-                    Path(directory) / "gpu" / "NotesBuddySpeakerWorkerGPU.exe"
-                ),
-            }):
-                engine = LocalDiarizationEngine(device="cpu")
-                self.assertEqual(engine.speaker_worker, cpu_worker)
-
-    def test_speaker_worker_install_after_construction_is_picked_up_without_restart(
-        self,
-    ) -> None:
-        # The scenario that motivated the property redesign: an engine
-        # constructed before the GPU component was installed must still
-        # pick it up on the very next diarization call.
-        with tempfile.TemporaryDirectory() as directory:
-            cpu_worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
-            cpu_worker.touch()
-            with patch.dict(
-                "os.environ", {"NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker)}
-            ):
-                engine = LocalDiarizationEngine(device="cpu")
-                self.assertEqual(engine.speaker_worker, cpu_worker)
-
-                gpu_worker = Path(directory) / "NotesBuddySpeakerWorkerGPU.exe"
-                gpu_worker.touch()
-                with patch.dict(
-                    "os.environ", {"NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker)}
-                ):
-                    self.assertEqual(engine.speaker_worker, gpu_worker)
-
-    def test_reports_gpu_diarization_device_when_gpu_worker_is_configured(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            gpu_worker = Path(directory) / "NotesBuddySpeakerWorkerGPU.exe"
-            gpu_worker.touch()
-            with patch.dict(
-                "os.environ", {"NOTESBUDDY_SPEAKER_WORKER_GPU": str(gpu_worker)}
-            ):
-                engine = LocalDiarizationEngine(device="cpu")
-                status = engine.configuration_status()
-                self.assertEqual(status["diarizationDevice"], "cuda")
-
-    def test_reports_cpu_diarization_device_when_only_cpu_worker_is_configured(
-        self,
-    ) -> None:
-        # Whisper's own device (self.device) is a separate concern from the
-        # isolated speaker worker's -- a CPU-only worker must report "cpu"
-        # here even when whisper itself is running on a GPU.
-        with tempfile.TemporaryDirectory() as directory:
-            cpu_worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
-            cpu_worker.touch()
-            with patch.dict(
-                "os.environ", {"NOTESBUDDY_SPEAKER_WORKER": str(cpu_worker)}
-            ):
-                engine = LocalDiarizationEngine(device="cuda")
+    def test_configuration_status_has_no_diarization_fields(self) -> None:
+        engine = LocalTranscriptionEngine(device="cpu")
+        with patch(
+            "notesbuddy_transcription.engine.module_available",
+            return_value=True,
+        ):
             status = engine.configuration_status()
-            self.assertEqual(status["diarizationDevice"], "cpu")
+        self.assertNotIn("diarizationDevice", status)
+        self.assertNotIn("diarizationGpuAvailable", status)
 
-    def test_reusable_speaker_worker_returns_local_turns(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
-            worker.touch()
-            engine = LocalDiarizationEngine(device="cpu")
-            engine.speaker_worker = worker
 
-            class Process:
-                returncode = 0
+class MixedAudioTests(unittest.TestCase):
+    """Direct coverage of `_mixed_audio`'s pad/sum/clip arithmetic."""
 
-                def communicate(self, timeout=None):
-                    del timeout
-                    return ('{"status":"ok","turns":[{"start":1.25,"end":2.5,"speaker":"VOICE_1"}]}', "")
-
-            with patch("notesbuddy_transcription.engine.subprocess.Popen", return_value=Process()):
-                turns = engine._diarize_with_worker(Path("meeting.wav"), cancel_event=threading.Event())
-            self.assertEqual([(turn.start_ms, turn.end_ms, turn.label) for turn in turns], [(1250, 2500, "VOICE_1")])
-
-    def test_speaker_worker_drains_large_output_without_pipe_deadlock(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            worker = Path(directory) / "NotesBuddySpeakerWorker.exe"
-            worker.touch()
-            engine = LocalDiarizationEngine(device="cpu")
-            engine.speaker_worker = worker
-            turn_count = 5_000
-            child_code = (
-                "import json,sys; "
-                f"n={turn_count}; "
-                "turns=[{'start':i,'end':i+0.5,'speaker':f'VOICE_{i%2}'} for i in range(n)]; "
-                "sys.stdout.write(json.dumps({'status':'ok','turns':turns}))"
+    def test_pads_the_shorter_source_and_sums_sample_wise(self) -> None:
+        decoded = {
+            "a.wav": np.array([0.2, 0.2, 0.2], dtype=np.float32),
+            "b.wav": np.array([0.3, 0.3], dtype=np.float32),
+        }
+        fake_audio_module = SimpleNamespace(
+            decode_audio=lambda path, sampling_rate=16000: decoded[str(path)]
+        )
+        with patch.dict("sys.modules", {"faster_whisper.audio": fake_audio_module}):
+            mixed = LocalTranscriptionEngine._mixed_audio(
+                [Path("a.wav"), Path("b.wav")]
             )
-            real_popen = subprocess.Popen
+        np.testing.assert_allclose(
+            mixed, np.array([0.5, 0.5, 0.2], dtype=np.float32), atol=1e-6
+        )
 
-            def start_large_worker(_command, **options):
-                return real_popen([sys.executable, "-c", child_code], **options)
+    def test_clips_a_sum_that_exceeds_full_scale(self) -> None:
+        decoded = {
+            "a.wav": np.array([1.0, -1.0], dtype=np.float32),
+            "b.wav": np.array([1.0, -1.0], dtype=np.float32),
+        }
+        fake_audio_module = SimpleNamespace(
+            decode_audio=lambda path, sampling_rate=16000: decoded[str(path)]
+        )
+        with patch.dict("sys.modules", {"faster_whisper.audio": fake_audio_module}):
+            mixed = LocalTranscriptionEngine._mixed_audio(
+                [Path("a.wav"), Path("b.wav")]
+            )
+        np.testing.assert_allclose(
+            mixed, np.array([1.0, -1.0], dtype=np.float32), atol=1e-6
+        )
 
-            with patch(
-                "notesbuddy_transcription.engine.subprocess.Popen",
-                side_effect=start_large_worker,
-            ):
-                turns = engine._diarize_with_worker(
-                    Path("meeting.wav"),
-                    cancel_event=threading.Event(),
-                )
-
-            self.assertEqual(len(turns), turn_count)
-            self.assertEqual(turns[-1].label, "VOICE_1")
-
-
-class FakeTurn:
-    def __init__(self, start: float, end: float) -> None:
-        self.start = start
-        self.end = end
-
-
-class FakeAnnotation:
-    def itertracks(self, *, yield_label):
-        assert yield_label is True
-        yield FakeTurn(0.9, 1.8), "track-a", "VOICE_B"
-        yield FakeTurn(1.9, 2.8), "track-b", "VOICE_A"
-
-
-class FakeEmptyAnnotation:
-    def __bool__(self):
-        return False
-
-    def itertracks(self, *, yield_label):
-        assert yield_label is True
-        return iter(())
-
-
-class FakeDiarizationPipeline:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    def __call__(self, audio):
-        self.calls.append(audio["waveform"]["source"])
-        assert audio["sample_rate"] == 16000
-        return SimpleNamespace(
-            exclusive_speaker_diarization=FakeAnnotation(),
+    def test_mixes_three_sources(self) -> None:
+        decoded = {
+            "a.wav": np.array([0.1, 0.1, 0.1], dtype=np.float32),
+            "b.wav": np.array([0.1, 0.1], dtype=np.float32),
+            "c.wav": np.array([0.1], dtype=np.float32),
+        }
+        fake_audio_module = SimpleNamespace(
+            decode_audio=lambda path, sampling_rate=16000: decoded[str(path)]
+        )
+        with patch.dict("sys.modules", {"faster_whisper.audio": fake_audio_module}):
+            mixed = LocalTranscriptionEngine._mixed_audio(
+                [Path("a.wav"), Path("b.wav"), Path("c.wav")]
+            )
+        np.testing.assert_allclose(
+            mixed, np.array([0.3, 0.2, 0.1], dtype=np.float32), atol=1e-6
         )
 
 
-class ReadDiarizationAudioTests(unittest.TestCase):
-    """Covers a real bug: diarization failing on browser-captured WebM
-    system audio ("share this tab, also share system audio", as opposed to
-    the companion's own WASAPI-loopback WAV capture) with libsndfile's
-    "Format not recognised" -- soundfile can only open the WAV/FLAC/OGG
-    family, never WebM/Opus, and this path had never been exercised with a
-    WebM meeting track before because only microphone tracks (never
-    diarized) were ever WebM previously."""
+class ProcessTests(unittest.TestCase):
+    """Covers process()'s new contract: mix every provided source into one
+    waveform (skipping the mixing arithmetic entirely for a single source)
+    and transcribe once into a flat, speaker-agnostic transcript."""
 
-    def test_reads_a_libsndfile_supported_file_directly(self) -> None:
-        class FakeLibsndfileError(Exception):
-            pass
+    def setUp(self) -> None:
+        self.words_by_key: dict[str, list] = {}
+        self.whisper = FakeWhisper(self.words_by_key)
+        self.engine = LocalTranscriptionEngine()
+        self.engine._whisper = self.whisper
 
-        fake_soundfile = SimpleNamespace(
-            LibsndfileError=FakeLibsndfileError,
-            read=lambda path, **_options: (
-                np.zeros((4, 2), dtype=np.float32),
-                48000,
-            ),
-        )
-        with patch.dict("sys.modules", {"soundfile": fake_soundfile}):
-            samples, sample_rate = read_diarization_audio(Path("meeting.wav"))
-        # (frames, channels) from soundfile is transposed to (channels, frames).
-        self.assertEqual(samples.shape, (2, 4))
-        self.assertEqual(sample_rate, 48000)
-
-    def test_falls_back_to_faster_whisper_decode_when_libsndfile_cannot_open_it(
+    def test_no_sources_returns_an_empty_result_without_calling_the_model(
         self,
     ) -> None:
-        class FakeLibsndfileError(Exception):
-            pass
-
-        def _raise_format_not_recognised(path, **_options):
-            raise FakeLibsndfileError(f"Error opening '{path}': Format not recognised.")
-
-        fake_soundfile = SimpleNamespace(
-            LibsndfileError=FakeLibsndfileError,
-            read=_raise_format_not_recognised,
-        )
-        decode_calls: list[tuple[str, int]] = []
-
-        def fake_decode_audio(path, sampling_rate=16000):
-            decode_calls.append((path, sampling_rate))
-            return np.ones(8, dtype=np.float32)
-
-        fake_faster_whisper_audio = SimpleNamespace(decode_audio=fake_decode_audio)
-        with patch.dict(
-            "sys.modules",
-            {
-                "soundfile": fake_soundfile,
-                "faster_whisper.audio": fake_faster_whisper_audio,
-            },
-        ):
-            samples, sample_rate = read_diarization_audio(Path("meeting.webm"))
-        self.assertEqual(decode_calls, [("meeting.webm", 16000)])
-        # Mono faster-whisper output reshaped to a single-channel [1, N] array.
-        self.assertEqual(samples.shape, (1, 8))
-        self.assertEqual(sample_rate, 16000)
-
-
-class EnsureDiarizationReadableTests(unittest.TestCase):
-    """`ensure_diarization_readable` normalizes a file up front, in
-    `LocalDiarizationEngine.process()`, before either diarization path (the
-    in-process one or the isolated `NotesBuddySpeakerWorker` executable --
-    a separately built and released binary this package's own fix cannot
-    reach) ever sees it.
-
-    Deliberately exercises the real stdlib `wave` module rather than
-    mocking it (unlike `ReadDiarizationAudioTests` above, which mocks
-    `soundfile`): this function must not import `soundfile` at all, since
-    `NotesBuddyCompanion.spec` does not bundle it in the main companion
-    process -- diarization normally happens entirely in the separate
-    worker process instead. Reported live: "No module named 'soundfile'"
-    the first version of this function assumed otherwise.
-    """
-
-    def test_an_already_readable_wav_file_is_returned_unchanged(self) -> None:
-        import wave
-
-        with tempfile.TemporaryDirectory() as directory:
-            wav_path = Path(directory) / "meeting.wav"
-            with wave.open(str(wav_path), "wb") as writer:
-                writer.setnchannels(1)
-                writer.setsampwidth(2)
-                writer.setframerate(16000)
-                writer.writeframes(b"\x00\x00" * 100)
-
-            result = ensure_diarization_readable(wav_path)
-
-        self.assertEqual(result, wav_path)
-
-    def test_a_non_wav_file_is_transcoded_to_a_normalized_wav(self) -> None:
-        decode_calls: list[tuple[str, int]] = []
-
-        def fake_decode_audio(path, sampling_rate=16000):
-            decode_calls.append((path, sampling_rate))
-            return np.array([0.0, 0.5, -0.5, 1.0], dtype=np.float32)
-
-        fake_faster_whisper_audio = SimpleNamespace(decode_audio=fake_decode_audio)
-        with tempfile.TemporaryDirectory() as directory:
-            webm_path = Path(directory) / "meeting.webm"
-            # Not a real WebM container -- ensure_diarization_readable only
-            # needs to see that `wave.open` rejects it; decode_audio itself
-            # is faked above rather than actually invoked on this content.
-            webm_path.write_bytes(b"not a real webm file")
-
-            with patch.dict(
-                "sys.modules", {"faster_whisper.audio": fake_faster_whisper_audio}
-            ):
-                result = ensure_diarization_readable(webm_path)
-
-            self.assertEqual(result, Path(directory) / "meeting.normalized.wav")
-            self.assertEqual(decode_calls, [(str(webm_path), 16000)])
-            self.assertTrue(result.is_file())
-
-            import wave
-
-            with wave.open(str(result), "rb") as reader:
-                self.assertEqual(reader.getnchannels(), 1)
-                self.assertEqual(reader.getframerate(), 16000)
-                self.assertEqual(reader.getsampwidth(), 2)
-                self.assertEqual(reader.getnframes(), 4)
-
-
-class LocalEngineAdapterTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.whisper = FakeWhisper()
-        self.diarization = FakeDiarizationPipeline()
-        self.engine = LocalDiarizationEngine(hugging_face_token="test-token")
-        self.engine._whisper = self.whisper
-        self.engine._diarization = self.diarization
-
-    def _process(self, **kwargs):
-        fake_soundfile = SimpleNamespace(
-            read=lambda path, **_options: (
-                SimpleNamespace(
-                    T=SimpleNamespace(
-                        copy=lambda: SimpleNamespace(source=Path(path).name)
-                    )
-                ),
-                16000,
-            )
-        )
-        fake_torch = SimpleNamespace(
-            from_numpy=lambda samples: {"source": samples.source},
-            # This fixture's engine.device resolves via local_accelerator()
-            # against whatever hardware actually runs the test -- CPU-only
-            # CI runners take the CPU-thread-tuning branch here that a
-            # GPU-equipped dev machine skips, so both must be present
-            # regardless of which branch a given machine happens to take.
-            set_num_threads=lambda _n: None,
-            set_num_interop_threads=lambda _n: None,
-        )
-        with patch.dict(
-            "sys.modules",
-            {
-                "soundfile": fake_soundfile,
-                "torch": fake_torch,
-            },
-        ):
-            return self.engine.process(**kwargs)
-
-    def test_dual_source_result_marks_you_and_orders_remote_ids(self) -> None:
         progress = []
-        result = self._process(
-            microphone_path=Path("microphone.webm"),
-            meeting_path=Path("meeting.webm"),
+        result = self.engine.process(
+            microphone_path=None,
+            meeting_path=None,
             mixed_path=None,
             metadata={},
             cancel_event=threading.Event(),
             progress=lambda value, stage: progress.append((value, stage)),
         )
 
-        self.assertEqual(result["language"], "en")
-        self.assertEqual(
-            [segment["speakerId"] for segment in result["segments"]],
-            ["local-user", "remote-1", "remote-2"],
-        )
-        self.assertEqual(
-            [segment["text"] for segment in result["segments"]],
-            ["I agree.", "Remote one.", "Remote two."],
-        )
-        self.assertEqual(self.diarization.calls, ["meeting.webm"])
+        self.assertEqual(result, {"language": None, "segments": []})
+        self.assertEqual(self.whisper.calls, [])
         self.assertEqual(progress[-1], (1.0, "completed"))
 
-    def test_mixed_only_import_is_diarized_as_meeting_audio(self) -> None:
-        result = self._process(
-            microphone_path=None,
-            meeting_path=None,
-            mixed_path=Path("mixed.webm"),
-            metadata={},
-            cancel_event=threading.Event(),
-            progress=lambda _value, _stage: None,
-        )
-
-        self.assertTrue(
-            all(segment["source"] == "meeting" for segment in result["segments"])
-        )
-        self.assertEqual(self.diarization.calls, ["mixed.webm"])
-
-    def test_mic_only_capture_does_not_diarize_duplicate_mixed_track(self) -> None:
-        result = self._process(
+    def test_a_single_source_transcribes_directly_from_its_path(self) -> None:
+        self.words_by_key["microphone.webm"] = [
+            SimpleNamespace(start=0.0, end=0.3, word="I", probability=0.98),
+            SimpleNamespace(start=0.31, end=0.7, word="agree.", probability=0.96),
+        ]
+        progress = []
+        result = self.engine.process(
             microphone_path=Path("microphone.webm"),
             meeting_path=None,
-            mixed_path=Path("mixed.webm"),
+            mixed_path=None,
             metadata={},
             cancel_event=threading.Event(),
-            progress=lambda _value, _stage: None,
+            progress=lambda value, stage: progress.append((value, stage)),
         )
 
+        # No mixing performed for a single source -- transcribed straight
+        # from the file path (better quality, and the common case).
         self.assertEqual(self.whisper.calls, ["microphone.webm"])
-        self.assertEqual(self.diarization.calls, [])
-        self.assertEqual(
-            [segment["speakerId"] for segment in result["segments"]],
-            ["local-user"],
-        )
+        self.assertEqual(result["language"], "en")
+        self.assertEqual(len(result["segments"]), 1)
+        segment = result["segments"][0]
+        self.assertEqual(segment["text"], "I agree.")
+        self.assertNotIn("speakerId", segment)
+        self.assertNotIn("speakerLabel", segment)
+        self.assertNotIn("source", segment)
+        self.assertNotIn("mixing audio sources", [stage for _value, stage in progress])
+        self.assertEqual(progress[-1], (1.0, "completed"))
 
-    def test_cpu_diarization_configures_torch_thread_counts(self) -> None:
-        self.engine.device = "cpu"
-        thread_calls: list[tuple[str, int]] = []
-        fake_soundfile = SimpleNamespace(
-            read=lambda path, **_options: (
-                SimpleNamespace(
-                    T=SimpleNamespace(
-                        copy=lambda: SimpleNamespace(source=Path(path).name)
-                    )
-                ),
-                16000,
-            )
-        )
-        fake_torch = SimpleNamespace(
-            from_numpy=lambda samples: {"source": samples.source},
-            set_num_threads=lambda n: thread_calls.append(("threads", n)),
-            set_num_interop_threads=lambda n: thread_calls.append(("interop", n)),
-        )
-        with patch.dict(
-            "sys.modules",
-            {"soundfile": fake_soundfile, "torch": fake_torch},
-        ), patch.dict(
-            "os.environ", {"NOTESBUDDY_DIARIZATION_CPU_THREADS": "6"}, clear=False
-        ):
-            self.engine.process(
-                microphone_path=None,
-                meeting_path=Path("meeting.webm"),
-                mixed_path=None,
-                metadata={},
-                cancel_event=threading.Event(),
-                progress=lambda _value, _stage: None,
-            )
-
-        self.assertEqual(thread_calls, [("threads", 6), ("interop", 1)])
-
-    def test_cuda_diarization_leaves_torch_thread_counts_alone(self) -> None:
-        self.engine.device = "cuda"
-
-        def _fail(*_args, **_kwargs):
-            raise AssertionError("CPU thread tuning must not run on a CUDA device")
-
-        fake_soundfile = SimpleNamespace(
-            read=lambda path, **_options: (
-                SimpleNamespace(
-                    T=SimpleNamespace(
-                        copy=lambda: SimpleNamespace(source=Path(path).name)
-                    )
-                ),
-                16000,
-            )
-        )
-        fake_torch = SimpleNamespace(
-            from_numpy=lambda samples: {"source": samples.source},
-            set_num_threads=_fail,
-            set_num_interop_threads=_fail,
-        )
-        with patch.dict(
-            "sys.modules",
-            {"soundfile": fake_soundfile, "torch": fake_torch},
-        ):
-            self.engine.process(
-                microphone_path=None,
-                meeting_path=Path("meeting.webm"),
-                mixed_path=None,
-                metadata={},
-                cancel_event=threading.Event(),
-                progress=lambda _value, _stage: None,
-            )
-
-    def test_empty_pyannote_4_output_preserves_transcription(self) -> None:
-        empty = FakeEmptyAnnotation()
-        self.engine._diarization = lambda _audio: SimpleNamespace(
-            exclusive_speaker_diarization=empty,
-            speaker_diarization=empty,
-        )
-
-        result = self._process(
+    def test_meeting_only_capture_transcribes_directly_too(self) -> None:
+        self.words_by_key["meeting.webm"] = [
+            SimpleNamespace(start=1.0, end=1.3, word="Remote", probability=0.9),
+            SimpleNamespace(start=1.31, end=1.7, word="voice.", probability=0.88),
+        ]
+        result = self.engine.process(
             microphone_path=None,
             meeting_path=Path("meeting.webm"),
             mixed_path=None,
@@ -748,39 +349,120 @@ class LocalEngineAdapterTests(unittest.TestCase):
             progress=lambda _value, _stage: None,
         )
 
+        self.assertEqual(self.whisper.calls, ["meeting.webm"])
         self.assertEqual(
-            [segment["speakerId"] for segment in result["segments"]],
-            ["remote-unknown"],
+            [segment["text"] for segment in result["segments"]], ["Remote voice."]
         )
+
+    def test_mixed_only_import_transcribes_directly_too(self) -> None:
+        self.words_by_key["mixed.webm"] = [
+            SimpleNamespace(start=0.0, end=0.4, word="Imported.", probability=0.9),
+        ]
+        result = self.engine.process(
+            microphone_path=None,
+            meeting_path=None,
+            mixed_path=Path("mixed.webm"),
+            metadata={},
+            cancel_event=threading.Event(),
+            progress=lambda _value, _stage: None,
+        )
+
+        self.assertEqual(self.whisper.calls, ["mixed.webm"])
         self.assertEqual(
-            [segment["text"] for segment in result["segments"]],
-            ["Remote one. Remote two."],
+            [segment["text"] for segment in result["segments"]], ["Imported."]
         )
 
-    def test_regular_annotation_is_used_when_exclusive_is_unavailable(self) -> None:
-        regular = FakeAnnotation()
-        output = SimpleNamespace(
-            exclusive_speaker_diarization=None,
-            speaker_diarization=regular,
+    def test_two_sources_are_mixed_into_one_waveform_and_transcribed_once(
+        self,
+    ) -> None:
+        mic = np.array([0.4, 0.4, 0.4], dtype=np.float32)
+        meeting = np.array([0.1, 0.1], dtype=np.float32)
+        decoded = {"microphone.webm": mic, "meeting.webm": meeting}
+        fake_audio_module = SimpleNamespace(
+            decode_audio=lambda path, sampling_rate=16000: decoded[str(path)]
         )
+        self.words_by_key["mixed"] = [
+            SimpleNamespace(start=0.0, end=0.3, word="Hello", probability=0.9),
+            SimpleNamespace(start=0.4, end=0.8, word="everyone.", probability=0.85),
+        ]
 
-        self.assertIs(self.engine._annotation_from_output(output), regular)
-
-    def test_unsupported_diarization_wrapper_has_actionable_error(self) -> None:
-        self.engine._diarization = lambda _audio: SimpleNamespace()
-
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "unsupported diarization result",
-        ):
-            self._process(
-                microphone_path=None,
+        progress = []
+        with patch.dict("sys.modules", {"faster_whisper.audio": fake_audio_module}):
+            result = self.engine.process(
+                microphone_path=Path("microphone.webm"),
                 meeting_path=Path("meeting.webm"),
                 mixed_path=None,
                 metadata={},
                 cancel_event=threading.Event(),
+                progress=lambda value, stage: progress.append((value, stage)),
+            )
+
+        # Exactly one transcribe() call, against the mixed ndarray, not
+        # against either source path individually.
+        self.assertEqual(self.whisper.calls, ["mixed"])
+        self.assertEqual(len(self.whisper.raw_calls), 1)
+        mixed_array = self.whisper.raw_calls[0]
+        self.assertIsInstance(mixed_array, np.ndarray)
+        np.testing.assert_allclose(
+            mixed_array, np.array([0.5, 0.5, 0.4], dtype=np.float32), atol=1e-6
+        )
+        self.assertEqual(
+            [segment["text"] for segment in result["segments"]],
+            ["Hello everyone."],
+        )
+        for segment in result["segments"]:
+            self.assertNotIn("speakerId", segment)
+            self.assertNotIn("source", segment)
+        self.assertIn("mixing audio sources", [stage for _value, stage in progress])
+
+    def test_three_sources_are_all_mixed_together(self) -> None:
+        decoded = {
+            "microphone.webm": np.array([0.1, 0.1], dtype=np.float32),
+            "meeting.webm": np.array([0.1, 0.1], dtype=np.float32),
+            "mixed.webm": np.array([0.1, 0.1], dtype=np.float32),
+        }
+        fake_audio_module = SimpleNamespace(
+            decode_audio=lambda path, sampling_rate=16000: decoded[str(path)]
+        )
+        self.words_by_key["mixed"] = [
+            SimpleNamespace(start=0.0, end=0.3, word="All", probability=0.9),
+            SimpleNamespace(start=0.4, end=0.6, word="sources.", probability=0.85),
+        ]
+
+        with patch.dict("sys.modules", {"faster_whisper.audio": fake_audio_module}):
+            result = self.engine.process(
+                microphone_path=Path("microphone.webm"),
+                meeting_path=Path("meeting.webm"),
+                mixed_path=Path("mixed.webm"),
+                metadata={},
+                cancel_event=threading.Event(),
                 progress=lambda _value, _stage: None,
             )
+
+        self.assertEqual(self.whisper.calls, ["mixed"])
+        mixed_array = self.whisper.raw_calls[0]
+        np.testing.assert_allclose(
+            mixed_array, np.array([0.3, 0.3], dtype=np.float32), atol=1e-6
+        )
+        self.assertEqual(
+            [segment["text"] for segment in result["segments"]],
+            ["All sources."],
+        )
+
+    def test_empty_transcription_returns_no_fabricated_segments(self) -> None:
+        # No words registered for this key -- FakeWhisper returns a segment
+        # with empty text, which build_transcript must not turn into a
+        # fabricated segment.
+        result = self.engine.process(
+            microphone_path=Path("silence.webm"),
+            meeting_path=None,
+            mixed_path=None,
+            metadata={},
+            cancel_event=threading.Event(),
+            progress=lambda _value, _stage: None,
+        )
+
+        self.assertEqual(result["segments"], [])
 
 
 class FakeChunkWhisper:
@@ -813,7 +495,7 @@ class LiveChunkTranscriptionTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.whisper = FakeChunkWhisper()
-        self.engine = LocalDiarizationEngine(hugging_face_token="test-token")
+        self.engine = LocalTranscriptionEngine()
         self.engine._whisper = self.whisper
 
     def test_transcribes_a_chunk_already_at_the_models_native_rate(self) -> None:

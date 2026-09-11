@@ -8,6 +8,65 @@ remain compatible with semantic-version tooling.
 
 ## Unreleased
 
+### Removed
+
+- **Speaker diarization, entirely.** Real-world testing this session
+  surfaced repeated, hard-to-fix production problems: acoustic leakage
+  misattributing guest speech to the local user, a capture-time bug where
+  switching audio output devices mid-recording silently broke diarization,
+  and separate format-compatibility bugs on top of both. It was judged not
+  to be helping in any cause, so instead of chasing another fix, every
+  transcript is now one flat, mixed-audio transcript with no speaker
+  distinction at all, not even **You** vs. everyone else.
+
+  `notesbuddy_transcription/core.py`'s whole speaker-turn/echo-removal/
+  per-speaker-segment-collapse machinery (`SpeakerTurn`,
+  `assign_words_to_speakers`, `meeting_segments`, `microphone_segments`,
+  echo de-duplication) is replaced by one `build_transcript(words)` that
+  collapses a single word stream into segments purely by pause gap, with no
+  speaker-change condition at all. `engine.py`'s diarizing
+  `LocalDiarizationEngine` is renamed `LocalTranscriptionEngine` and no
+  longer diarizes; `process()` still accepts the same microphone/meeting/
+  mixed upload contract, but now mixes every provided source into one
+  waveform (decoding each to 16kHz mono, zero-padding the shorter one(s),
+  summing sample-wise, clipping to `[-1, 1]` to avoid distortion) and
+  transcribes it once. A single provided source skips mixing entirely and
+  transcribes directly from its own file, which is both cheaper and higher
+  quality, and is the common case for imports and mic-only/meeting-only
+  captures.
+
+  The isolated `NotesBuddySpeakerWorker.exe` (CPU) and
+  `NotesBuddySpeakerWorkerGPU.exe` (GPU) subprocess executables, and their
+  whole separate build pipelines (`desktop/NotesBuddySpeakerWorker.spec`,
+  `desktop/NotesBuddySpeakerWorkerGPU.spec`,
+  `.github/workflows/speaker-worker.yml`,
+  `services/transcription/speaker_worker.py`), are deleted outright: two
+  whole build pipelines and executables gone. The two components they
+  shipped as, `speaker-diarization` (319,157,409 bytes) and
+  `speaker-diarization-cuda` (1,781,070,553 bytes), are removed from
+  `desktop/component-manifest.json` -- together roughly 2.1 GB of
+  speaker-diarization downloads no longer installed or shipped to anyone.
+  Env vars `NOTESBUDDY_DIARIZATION_MODEL`, `NOTESBUDDY_DIARIZATION_CPU_THREADS`,
+  `NOTESBUDDY_SPEAKER_WORKER`, and `NOTESBUDDY_SPEAKER_WORKER_GPU` are gone.
+  `/v1/health` and `/v1/companion` no longer report `diarizationDevice` or
+  `diarizationGpuAvailable`. `pyannote.audio`, `soundfile`, and `torch` are
+  dropped from `requirements-models.txt` (torch was confirmed not needed
+  elsewhere in the packaged desktop companion; the separate hosted Modal
+  deployment installs its own torch independently). New `POST
+  /v1/transcriptions` job results are flat segments `{ id, startMs, endMs,
+  text, confidence }` with no speaker or source field at all.
+
+  Summarization and analysis (all three local quality tiers plus the hosted
+  analyzer), the analysis prompt editor, the conversational Q&A tab, plain
+  speech-to-text transcription, the browser's own live-draft speech
+  recognition, and the entire audio capture/recording architecture are all
+  unaffected: capture was never the problem, only what happened to
+  captured audio for transcription. Meetings saved before this change, with
+  real per-speaker data, keep rendering exactly as before; only new
+  transcriptions are speaker-agnostic. See
+  [`docs/MEETING_AUDIO_DIARIZATION_PLAN.md`](docs/MEETING_AUDIO_DIARIZATION_PLAN.md)
+  for the original design, now marked historical.
+
 ### Fixed
 
 - The in-app warning shown when the companion's Windows meeting-audio

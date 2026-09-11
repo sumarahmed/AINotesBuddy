@@ -4,8 +4,8 @@ The companion processes NotesBuddy recordings on the same computer. It combines:
 
 - Windows WASAPI loopback capture of the default system output;
 - faster-whisper speech-to-text with word timestamps;
-- pyannote `speaker-diarization-community-1` intervals;
-- deterministic timestamp alignment and echo de-duplication.
+- mixing every provided source (microphone/meeting/mixed) into one waveform
+  when more than one is supplied, and transcribing it once.
 
 This guide covers private `127.0.0.1` operation. The same engine also supports
 a centrally hosted anonymous mode where end users install nothing. Deployment
@@ -16,26 +16,35 @@ launcher directly to a LAN or the internet.
 Normal Windows users should install the packaged desktop companion described in
 the [Desktop Companion guide](../../docs/DESKTOP_COMPANION.md). Packaged
 releases contain offline model weights and pair with the public website
-automatically; users do not configure Python, `HF_TOKEN`, a URL, or a pairing
-token. The source instructions below remain for development and manual
-recovery.
+automatically; users do not configure Python, a Hugging Face account, a URL,
+or a pairing token. The source instructions below remain for development and
+manual recovery.
 
-The microphone track is always assigned to `local-user` (**You**). Meeting-only
-voices receive session-local IDs such as `remote-1`; those IDs are not voice
-biometrics and do not identify real people.
+**Speaker diarization removed.** The companion used to also identify which
+detected voice spoke when, assigning the microphone track to `local-user`
+(**You**) and meeting-only voices to session-local IDs such as `remote-1`.
+Real-world testing found this unreliable in production -- acoustic leakage
+misattributing guest speech to the local user, a capture-time bug where
+switching audio output devices mid-recording silently broke diarization, and
+format-compatibility bugs -- so it was removed entirely. Every transcript
+is now one flat, mixed-audio transcript with no speaker field of any kind.
+See [`CHANGELOG.md`](../../CHANGELOG.md) for the removal and
+[`docs/MEETING_AUDIO_DIARIZATION_PLAN.md`](../../docs/MEETING_AUDIO_DIARIZATION_PLAN.md)
+for the original design, now historical.
 
 ## Requirements
 
 - Python 3.11 recommended
-- Windows 10/11, macOS, or Linux supported by PyTorch and the model libraries
-- Several gigabytes of free disk space for the environment and model cache
-- A Hugging Face account/token with access to the pyannote community model
+- Windows 10/11, macOS, or Linux supported by faster-whisper and its model
+  libraries
+- A few gigabytes of free disk space for the environment and model cache
 - CPU processing works; a compatible CUDA setup can be faster
+- No Hugging Face account or token is required -- the bundled speech model is
+  a public, non-gated download
 
-Model projects:
+Model project:
 
 - <https://github.com/SYSTRAN/faster-whisper>
-- <https://github.com/pyannote/pyannote-audio>
 
 ## Windows setup
 
@@ -49,19 +58,11 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Before the first diarization job:
-
-1. Accept the terms for
-   `pyannote/speaker-diarization-community-1` on Hugging Face.
-2. Create a read token.
-3. Set it only in the terminal that runs the companion:
-
-```powershell
-$env:HF_TOKEN = "hf_replace_with_your_token"
-```
-
-Do not paste this model token into NotesBuddy, commit it, or put it in a public
-issue. It is different from the NotesBuddy pairing token.
+No Hugging Face account, token, or gated-model acceptance step is needed --
+the bundled faster-whisper model is a public download. (Before diarization
+was removed, this step required accepting the pyannote community model's
+terms and setting `HF_TOKEN` in the companion's terminal; that requirement
+no longer exists.)
 
 ## Start and pair
 
@@ -122,8 +123,7 @@ authentication still apply to the actual API request.
 ## Model configuration
 
 Defaults automatically use CUDA when CTranslate2 can see the local NVIDIA GPU;
-otherwise faster-whisper uses CPU `int8`. The distributable companion keeps
-pyannote on CPU to avoid bundling the multi-gigabyte CUDA PyTorch runtime:
+otherwise faster-whisper uses CPU `int8`:
 
 ```powershell
 $env:NOTESBUDDY_WHISPER_MODEL = "small"
@@ -132,31 +132,17 @@ Remove-Item Env:NOTESBUDDY_WHISPER_COMPUTE_TYPE -ErrorAction SilentlyContinue
 ```
 
 Example CUDA configuration, only after installing a matching PyTorch/CUDA
-stack:
+stack (CTranslate2, which faster-whisper uses, depends on it):
 
 ```powershell
 $env:NOTESBUDDY_MODEL_DEVICE = "cuda"
 $env:NOTESBUDDY_WHISPER_COMPUTE_TYPE = "float16"
 ```
 
-`requirements-models.txt` pins `torch>=2.6` with no index URL, so a plain
-`pip install -r requirements.txt` resolves the CPU-only wheel from PyPI on
-Windows even when CTranslate2 (used by faster-whisper) already sees the GPU.
-CUDA-detection for pyannote (`self._torch_cuda_available()` in `engine.py`)
-checks `torch.cuda.is_available()` directly, so it silently stays on CPU in
-that case, and a long meeting's diarization pass can then take far longer
-than transcription itself. This is expected for the distributable
-companion (see above), but for local development on a CUDA-capable machine,
-reinstall torch afterward from the matching PyTorch CUDA index, for example:
-
-```powershell
-python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
-```
-
-Pick the `cuXXX` index that matches the installed NVIDIA driver/CUDA toolkit
-from <https://pytorch.org/get-started/locally/>; the version constraint in
-`requirements-models.txt` is satisfied either way, so this does not need a
-`requirements.txt` change, only a one-time local reinstall.
+`requirements-models.txt` now pins only `faster-whisper` -- PyTorch is no
+longer a dependency of this package at all now that diarization is removed,
+so there is no separate CPU/CUDA PyTorch wheel to reinstall for local
+development; CTranslate2 resolves its own GPU support independently.
 
 Do not raise `NOTESBUDDY_MAX_WORKERS` casually. Speech models consume substantial
 RAM/VRAM; the default serial worker prevents concurrent meetings exhausting the
@@ -203,8 +189,13 @@ explicit.
 `POST` accepts multipart fields named `microphone`, `meeting`, `mixed`, and
 `metadata`. At least one audio field is required. New NotesBuddy captures send
 isolated sources plus the mixed playback track; imported files send `mixed`.
+When more than one audio field is provided, every source is decoded, mixed
+into one waveform, and transcribed once; a single provided source is
+transcribed directly from its own file instead.
 
-The completed response includes clock-aligned segments:
+The completed response is a flat, speaker-agnostic list of segments -- there
+is no diarization stage, so there is no `speakerId` or `source` field on a
+segment:
 
 ```json
 {
@@ -214,8 +205,6 @@ The completed response includes clock-aligned segments:
   "segments": [
     {
       "id": "segment-...",
-      "source": "microphone",
-      "speakerId": "local-user",
       "startMs": 0,
       "endMs": 1250,
       "text": "I will send the update.",
@@ -300,11 +289,13 @@ connection/security testing only.
 - Accept any browser prompt allowing local-network access.
 - Confirm the endpoint remains `http://127.0.0.1:8765`, not a LAN address.
 
-**The job fails before diarization**
+**The job fails with a transcription error**
 
-- Confirm `HF_TOKEN` is set in the companion process.
-- Confirm the model terms were accepted by the same Hugging Face account.
+- Confirm the offline `models` directory (or `NOTESBUDDY_WHISPER_MODEL`) points
+  at a valid faster-whisper model.
 - Start with the CPU defaults before changing CUDA options.
+- Check `%LOCALAPPDATA%\NotesBuddy\logs\companion.log` for the per-source word
+  counts and outcome the engine logs for every job.
 
 **Meeting track is missing**
 

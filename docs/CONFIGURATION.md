@@ -20,8 +20,8 @@ Settings are stored under `notesbuddy-settings` for the current browser origin.
 | --- | --- | --- |
 | Meeting audio | On | Capture default Windows output through a compatible companion; otherwise ask for a browser tab/window/screen audio source |
 | Browser live transcript draft | On | Use browser speech recognition for microphone draft text, always attributed to **You**; with a compatible companion connected, the meeting-audio recording is separately re-transcribed every few seconds and shown live as **Guest** |
-| Automatically identify speakers | Off | Start transcription after saving a recording, using the connected companion when available |
-| Create professional meeting analysis | On | After final speaker transcription, send the complete transcript to the configured analysis service and build a grounded summary, highlights, confirmed decisions, and structured actions |
+| Automatically transcribe | Off | Start transcription after saving a recording, using the connected companion when available |
+| Create professional meeting analysis | On | After final transcription, send the complete transcript to the configured analysis service and build a grounded summary, highlights, confirmed decisions, and structured actions |
 | Analysis prompt (advanced) | Built-in default shown from `GET /v1/analyses/prompt` | Editable local-only system prompt threaded to `llama-cli`'s `-sys` argument via `POST /v1/analyses`'s optional `systemPrompt`; re-apply with **Refresh from transcript**. Local-only, never honored by the hosted service |
 | Keep source recordings | On | Save mic, meeting, and mixed Blobs in IndexedDB |
 | Transcription mode | From `src/runtime-config.js` | `hybrid`, `local`, or centrally managed `hosted` |
@@ -59,7 +59,6 @@ streams. It applies to the next capture.
 | Local processing priority | All recording lengths | A connected companion prevents hybrid jobs from being routed online |
 | Analysis model | One of three installable local GGUF tiers (`analysis-tiny`/`analysis-standard`/`analysis-pro`), selected in the companion setup screen | Runs through `llama-cli.exe`; a hosted instruction model can replace it through `NOTESBUDDY_ANALYSIS_MODEL` |
 | Analysis GPU acceleration | Off by default, optional `analysis-cuda` component | Offloads all layers (`-ngl 999`) to a detected CUDA GPU only when the installed runtime actually has `ggml-cuda.dll`; retries once on CPU if a GPU-flagged run fails |
-| Speaker recognition GPU acceleration | Off by default, optional `speaker-diarization-cuda` component | A separate `NotesBuddySpeakerWorkerGPU.exe` built with a CUDA-enabled PyTorch; moves the pyannote pipeline to `cuda` automatically when detected, falling back to CPU otherwise. Confirmed live: 11.8x faster than tuned CPU on a real ~24 minute recording, identical speaker-turn output either way |
 | Analysis schema/prompt version | Schema `1`, prompt `4` | Stored with each completed analysis so future migrations can invalidate obsolete output safely |
 | Conversational Q&A | Local-only `POST /v1/qa`, restricted to the High quality tier (`analysis-pro`) | Enforced client-side (`canAskQuestions()` in `src/app.js`) and server-side (409 otherwise); the installed tier is reported as `analysisTier` on `GET /v1/health` and `GET /v1/companion`, resolved from the loaded model file's own name rather than a client-side preference |
 | Maximum hosted transcript | 180,000 characters | Rejects unexpectedly large anonymous analysis requests |
@@ -76,16 +75,15 @@ streams. It applies to the next capture.
 | Live guest-caption window | Trailing 25 seconds, re-transcribed every 5 seconds | Bounds live-caption cost independent of meeting length; `PARTIAL_TRANSCRIBE_WINDOW_SECONDS`/`PARTIAL_TRANSCRIBE_INTERVAL_SECONDS` in `system_audio.py` |
 | Default meeting title | `Untitled meeting` | User-editable safe placeholder |
 | Source IDs | `microphone`, `meeting`, `mixed` | Stable storage/API contract |
-| Local speaker ID | `local-user` | Stable **You** attribution |
-| Provisional remote ID | `remote-guest` | Capture-time **Guest** hint; removed when final diarization replaces the draft |
-| Remote speaker IDs | `remote-1`, `remote-2`, ... | Session-local, first-appearance ordering |
-| Echo thresholds | 55% time overlap, 82% text similarity | Conservative duplicate suppression in browser/service core |
-| Unknown timing tolerance | 350 ms | Handles timestamp rounding without distant identity guesses |
+| Local speaker ID (capture-time draft and legacy meetings only) | `local-user` | Stable **You** attribution; not part of the final transcript contract, which carries no speaker field at all |
+| Provisional remote ID | `remote-guest` | Capture-time **Guest** hint; removed once the final transcript replaces the draft |
+| Remote speaker IDs (legacy meetings only) | `remote-1`, `remote-2`, ... | Session-local, first-appearance ordering; new transcriptions no longer produce these -- diarization was removed, see [`CHANGELOG.md`](../CHANGELOG.md) |
+| Unknown timing tolerance | 350 ms | Legacy-only: handled timestamp rounding when assigning words to diarization intervals, before diarization was removed |
 | Legacy sample IDs | Four historical IDs | Removes demo records from older builds only |
 
-`Speaker 1` is a generic diarization label, not a hard-coded person. Imported
-mixed audio begins with one generic remote speaker record until transcription
-returns actual session-local speaker groups.
+`Speaker 1` was a generic diarization label, never a hard-coded person. It
+appears only on meetings transcribed before diarization was removed; new
+transcriptions carry no speaker grouping of any kind.
 
 ## Profile and sessions
 
@@ -107,7 +105,6 @@ same NotesBuddy data.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HF_TOKEN` | None | Access to the accepted pyannote community model |
 | `NOTESBUDDY_MODEL_DIR` | Packaged `models` directory when present | Offline model bundle root |
 | `NOTESBUDDY_ALLOWED_ORIGINS` | Direct file, local dev origins, `https://sumarahmed.github.io` | Comma-separated CORS allowlist |
 | `NOTESBUDDY_PAIRING_TOKEN` | Persistent generated token | Optional explicit token override, at least 24 characters |
@@ -115,9 +112,6 @@ same NotesBuddy data.
 | `NOTESBUDDY_WHISPER_MODEL` | `small` | faster-whisper model name/path |
 | `NOTESBUDDY_MODEL_DEVICE` | `auto` | Automatically choose mutually supported CUDA, or use explicit `cpu`/`cuda` |
 | `NOTESBUDDY_WHISPER_COMPUTE_TYPE` | Device-based | `float16` on CUDA and `int8` on CPU unless explicitly set |
-| `NOTESBUDDY_DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | pyannote model ID |
-| `NOTESBUDDY_DIARIZATION_CPU_THREADS` | Every logical core | Overrides the CPU thread count `torch.set_num_threads` uses for diarization (both the isolated speaker worker and the in-process fallback); set lower to leave headroom for other work sharing the machine |
-| `NOTESBUDDY_SPEAKER_WORKER_GPU` | `<component_root>/speaker-gpu/NotesBuddySpeakerWorkerGPU.exe` | Set automatically once the optional `speaker-diarization-cuda` component is installed; preferred over `NOTESBUDDY_SPEAKER_WORKER` when the file exists |
 | `NOTESBUDDY_MAX_WORKERS` | `1` (clamped 1–2) | Concurrent model jobs |
 | `NOTESBUDDY_MAX_JOBS` | `64` (clamped 4–256) | Maximum in-memory active/recent job records |
 | `NOTESBUDDY_JOB_RETENTION_SECONDS` | `3600` (clamped 60–86400) | Recent terminal result retention in process memory |
@@ -148,8 +142,8 @@ values only; use a private process environment or launcher.
 The static client can be served from any HTTPS host. For local/hybrid mode on a
 new host, ship its exact origin in the desktop companion allowlist. For hosted
 mode, add the origin to the hosted API and set its public HTTPS URL in
-`src/runtime-config.js`. Never put a pairing token or `HF_TOKEN` in static host
-variables or client source.
+`src/runtime-config.js`. Never put a pairing token in static host variables or
+client source.
 
 The existing `.openai/hosting.json` project ID and GitHub Pages workflows are
 repository deployment metadata. Hosted model deployment is separate from the
